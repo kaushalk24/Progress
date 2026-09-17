@@ -1,0 +1,14 @@
+{
+  "name": "Progress",
+  "short_name": "Progress",
+  "description": "Track every set, every rep, every kilo - and know when you have stopped progressing.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0a0b",
+  "theme_color": "#0a0a0b",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
