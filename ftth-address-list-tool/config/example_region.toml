@@ -1,0 +1,19 @@
+# Example regional configuration. Copy, rename and edit for each project/region,
+# then select it in the launcher (or pass --config). Only keys set here override
+# config/default_config.toml.
+
+[project]
+# Prefix for output file names: "<prefix>_<OLM>_FTTH_Address List.xlsx"
+name_prefix = "000000_Example City ST"
+
+[address]
+# Regional address conventions applied to the spatial-system usage address.
+# Example: commercial premises carry a "C-" prefix in the spatial system. The
+# reference pack is inconsistent about it (some lists drop it, most keep it), so
+# the default keeps the spatial-system address unchanged. Enable only by decision.
+# rewrites = [ { pattern = '^C-', replace = "" } ]
+rewrites = []
+
+[approvals]
+# Uncomment only after your engineering lead agrees these inference rules are acceptable.
+# accepted_rules = ["FS-CABLE-END"]

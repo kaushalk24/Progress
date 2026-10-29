@@ -1,0 +1,113 @@
+# FTTH address-list generator - default configuration.
+#
+# Copy this file (e.g. config/region_<name>.toml) and pass it with --config
+# to change conventions for a region. Only the keys you set are overridden;
+# everything else falls back to these defaults.
+
+[project]
+# Used in the output file name. Example: "123456_Example City ST"
+name_prefix = ""
+# Output file name pattern. {prefix} = name_prefix, {olm} = OLM name.
+output_filename = "{prefix}_{olm}_FTTH_Address List.xlsx"
+# Added to the file name when any row is unresolved or provisional and not approved.
+draft_suffix = "_DRAFT-REVIEW-REQUIRED"
+
+[template]
+# Optional template workbook. When it exists, its first sheet supplies the
+# header row, column widths and cell styles. Leave empty to use the built-in layout.
+path = "templates/FTTH_Address_List_Template.xlsx"
+# Sheet name pattern for the address list sheet.
+sheet_name = "{olm}"
+# Output columns, in order. Each entry maps a template header to a field key.
+# Field keys: pon_name, pon_port, fiber_no, address, tube_color, fiber_color,
+#             cable_name, tap_name, fiber_splice
+columns = [
+  { header = "PON NAME",       field = "pon_name",     width = 10.66 },
+  { header = "PON PORT",       field = "pon_port",     width = 10.33 },
+  { header = "FIBER #",        field = "fiber_no",     width = 7.55 },
+  { header = "ADDRESS",        field = "address",      width = 34.33 },
+  { header = "COLOR TUBE",     field = "tube_color",   width = 12.55 },
+  { header = "COLOR FIBER",    field = "fiber_color",  width = 13.33 },
+  { header = "CABLE NAME",     field = "cable_name",   width = 46.0 },
+  { header = "Fiber Tap Name", field = "tap_name",     width = 30.0 },
+  { header = "Fiber Splice",   field = "fiber_splice", width = 12.11 },
+]
+# Highlight provisional / unresolved cells on the address-list sheet itself.
+mark_review_cells = true
+# Print setup for the address-list sheet: landscape, one page wide, header row repeated.
+print_fit_width = true
+# Widen columns to fit the longest value (template widths are the minimum).
+autofit_columns = true
+
+[colors]
+# Splice-report colour name -> abbreviation used in the address list.
+# Order = TIA-598 sequence (position 1..12) used to cross-check report colours.
+sequence = ["blue", "orange", "green", "brown", "slate", "white",
+            "red", "black", "yellow", "violet", "rose", "aqua"]
+abbreviations = { blue = "BL", orange = "OR", green = "GR", brown = "BR", slate = "SL", white = "WH", red = "RD", black = "BK", yellow = "YL", violet = "VI", rose = "RO", aqua = "AQ" }
+fibers_per_tube = 12
+
+[network]
+# Enclosure kinds (text before ':' in splice-report Start/End cells).
+olm_kinds = ["OLM Housing"]
+closure_kinds = ["Splice Case"]
+# Kinds that are customer-side terminals (taps / MDU enclosures).
+terminal_kinds = ["MAX10 Enclosure(M Bulk)", "FTTx MDU Enclosure"]
+# Splitter rows in the splice-report segment table, e.g. "PLC COUPLER 64 1 FE0-F1PLC64".
+# Named groups: ratio, index. The device id used in the connection table is the
+# matched text with spaces removed (PLCCOUPLER641).
+splitter_regex = '^(?P<label>PLC COUPLER (?P<ratio>\d+) (?P<index>\d+))\b'
+# Splitter port numbering in the reports: port 1 = common (input), 2..N = outputs.
+splitter_common_port = 1
+# PON PORT = report port number - pon_port_offset
+pon_port_offset = 1
+# PON NAME = splitter index ("index" group). Alternative: "{olm} PON {index}".
+pon_name_format = "{index}"
+# Section (cable) order: "first_pon_port" orders hub cables by the lowest
+# (PON, port) they carry; cables without PON ports follow in report order.
+section_order = "first_pon_port"
+# Include the OLM feeder cable as the first section.
+include_feeder = true
+
+[labels]
+spare = "Spare (dark)"
+splitter_common = "PLC COUPLER {ratio} {index} COM"
+# Usage text rewrites for non-subscriber fibres (regex -> replacement), applied in order.
+usage_rewrites = [
+  { pattern = '^.*-POWER PORT$', replace = "POWER PORT" },
+]
+# States that mean the fibre is not in service at the hub.
+spare_states = ["Spare (dark)", "Broken"]
+# A fibre with no row in the hub report has no splice there and is listed as spare.
+unlisted_hub_fibre_is_spare = true
+# Remnant states whose circuit start/end names the closure where a live fibre was cut.
+break_states = ["Broken"]
+
+[address]
+# Subscriber usage format: "<tap>:<tap port> <address>"
+usage_regex = '^(?P<tap>.+?):(?P<port>\d+) (?P<address>.+)$'
+# Address rewrites applied to the usage address (regex -> replacement).
+# The default keeps the spatial-system address exactly; regional examples:
+#   { pattern = '^C-', replace = "" }   # drop commercial "C-" prefix
+rewrites = []
+# Trim and collapse whitespace in addresses and identifiers.
+normalise_whitespace = true
+
+[fiber_splice]
+# Value used for fibres that end in the hub (transport, splitter common, power port).
+hub_value_for_hub_fibres = true
+# When the trace reaches a closure whose splice report was not supplied:
+#   "provisional" -> use that closure, mark PROVISIONAL (needs report or review)
+#   "unresolved"  -> leave blank, mark UNRESOLVED
+missing_report_policy = "provisional"
+
+[approvals]
+# Rule codes whose PROVISIONAL results your engineering lead has agreed to accept
+# without a per-row review. Accepted values are shown as APPROVED (not CONFIRMED)
+# and remain traceable to the rule. Leave empty to review every provisional value.
+# Candidates: "FS-BREAK-POINT", "FS-CABLE-END", "FS-GUIDE", "COL-MISMATCH"
+accepted_rules = []
+
+[overrides]
+# Default overrides file (CSV). Rows approved here replace or accept generated values.
+path = ""
