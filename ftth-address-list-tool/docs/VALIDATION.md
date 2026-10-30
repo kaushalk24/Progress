@@ -61,15 +61,18 @@ user); nothing else in the drawing changed. Results:
 
   | Reports removed | Without drops | With drops |
   |---|---|---|
-  | 25 % | 91.6 % | 95.6 % |
-  | 50 % | 88.5 % | 96.5 % |
-  | 75 % | 79.6 % | 97.9 % |
+  | 25 % | 91.1 % | 95.7 % |
+  | 50 % | 88.0 % | 96.5 % |
+  | 75 % | 79.5 % | 97.9 % |
 
   Before the search-bound fix found with this test (a reported closure that carries the
   row's circuit on another cable no longer bounds the search), the same draws without drops
   gave 42.7 %, 34.2 % and 26.3 %. The fix changes nothing on the complete packs.
-* Found with the same test: addresses were matched without their direction, so
-  `211 OAK ST` and `211 S OAK ST` shared each other's drops; fixed.
+* Found with the same tests: addresses were matched without their direction, building or
+  commercial prefix, so `211 OAK ST` / `211 S OAK ST`, `1027 ELM ST` / `1027 BLDG 3 ELM ST` and
+  `2130 OAK AVE` / `C-2130 OAK AVE` shared each other's drops (the joint assignment still chose
+  correctly). The most specific address point is now used; every one of the 222 premises of
+  the list then has exactly its own drawn drop, and all 222 agree with the tool and the list.
 
 ## Region A: coverage and accuracy (4 OLMs, 1,384 rows)
 

@@ -48,9 +48,9 @@ DWG filer. The tool reads it directly, with no AutoCAD or converter:
 * The block names, attribute tags, layer names and tolerances are in the `[drawing]`
   section of the configuration, so another export style is a configuration change.
 * Drawn drop lines (FX_DROPS output, layer `RTE_SpatialNet_UGDROP`, from the ped box to a PED
-  block 6.6 ft from the address point) are read when present. In region B every drawn drop
-  agreed with every Fiber Splice value it could be compared with (223 rows), and with the
-  drops the result no longer depends on the fibre-order convention.
+  block 6.6 ft from the address point) are read when present. In region B every one of the
+  222 listed premises has a drawn drop and all 222 agree with the tool's Fiber Splice; with
+  the drops the result no longer depends on the fibre-order convention.
 
 A DXF (AutoCAD `SAVEAS` → *AutoCAD 2018 DXF*, or the free ODA File Converter) is read with
 `ezdxf` and gives the same model. Map 3D object data and SpatialNet database links are not

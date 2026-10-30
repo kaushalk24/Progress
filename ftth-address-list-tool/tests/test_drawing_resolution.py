@@ -337,3 +337,14 @@ def test_address_points_keep_directions_and_placeholders(tmp_path):
     assert [a["xy"] for a in des.address_points("211 OAK ST")] == [(0, 900)]
     assert [a["xy"] for a in des.address_points("211 S OAK ST")] == [(50, 900)]
     assert [a["xy"] for a in des.address_points("12TH AVE AVE")] == [(90, 900)]   # no house number
+
+
+def test_address_points_prefer_same_building_and_commercial_prefix(tmp_path):
+    cfg = load_config()
+    path = write_design(tmp_path / "d.dxf", addresses=[((0, 900), "1027", "ELM"), ((40, 900), "1027", "ELM BLDG 3"),
+                                                       ((80, 900), "2130", "OAK"), ((120, 900), "C-2130", "OAK")])
+    des, _ = load_design(path, cfg)
+    assert [a["xy"] for a in des.address_points("1027 ELM ST")] == [(0, 900)]
+    assert [a["xy"] for a in des.address_points("1027 BLDG 3 ELM ST")] == [(40, 900)]
+    assert [a["xy"] for a in des.address_points("2130 OAK AVE")] == [(80, 900)]
+    assert [a["xy"] for a in des.address_points("C-2130 OAK AVE")] == [(120, 900)]

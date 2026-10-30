@@ -71,6 +71,12 @@ def address_rest(address: str) -> str:
     return re.sub(r"(?:\b(?:UNIT|APT|BLDG|STE)\b|#)\s*[\w-]+", " ", m.group(1)) if m else ""
 
 
+def unit_of(address: str) -> str | None:
+    """Building / unit designator of an address: '1027 BLDG 3 ELM ST' -> 'BLDG 3'."""
+    m = re.search(r"\b(UNIT|APT|BLDG|STE)\s*([\w-]+)", (address or "").upper())
+    return f"{m.group(1)} {m.group(2)}" if m else None
+
+
 def split_label(address: str) -> tuple[str, str]:
     """First word and street core of an address without a numeric house number:
     '12TH AVE AVE' -> ('12TH', ''), 'NA ELM ST' -> ('NA', 'ELM')."""
@@ -193,6 +199,7 @@ class Design:
                         core = split_label(raw)[1]
                     self.addresses.append({"num": num, "tok": tok, "street": core, "raw": raw,
                                            "full": street_full(address_rest(raw)) if num else "",
+                                           "unit": unit_of(raw), "comm": raw.startswith("C-"),
                                            "xy": (ins.x, ins.y), "drawn_drops": []})
             elif ins.block in drop_blocks:
                 self.drops.append((ins.x, ins.y, ins.rot))
@@ -358,14 +365,24 @@ class Design:
             tok, core = split_label(address)
             return [a for a in self.addresses if a["num"] is None and tok and a["tok"] == tok and
                     a["street"] == core]
-        full = street_full(address_rest(address))
-        hits = [a for a in self.addresses if a["num"] == num and a["full"] == full]   # 'S OAK' != 'OAK'
-        if not hits:
-            hits = [a for a in self.addresses if a["num"] == num and a["street"] == core and
-                    not (a["full"] != a["street"] and full != core)]   # both carry directions, and they differ
-        if not hits and core:
-            hits = [a for a in self.addresses if a["num"] == num and streets_match(core, a["street"])]
-        return hits
+        # the most specific point: same street with its direction, same building / unit, same commercial
+        # 'C-' prefix ('1027 BLDG 3 ELM ST' is not '1027 ELM ST'; 'C-2130 OAK AVE' is not '2130 OAK AVE')
+        full, unit, comm = street_full(address_rest(address)), unit_of(address), address.strip().upper().startswith("C-")
+        scored = []
+        for a in self.addresses:
+            if a["num"] != num:
+                continue
+            if a["full"] == full:
+                score = 4
+            elif a["street"] == core and not (a["full"] != a["street"] and full != core):
+                score = 3          # direction on one side only
+            elif streets_match(core, a["street"]):
+                score = 2
+            else:
+                continue
+            scored.append((score + 2 * (a["unit"] == unit) + (a["comm"] == comm), a))
+        best = max((sc for sc, _ in scored), default=None)
+        return [a for sc, a in scored if sc == best]
 
     def drop_support(self, premise: tuple[float, float], enclosure: tuple[float, float]):
         """Best drop symbol on the premise-enclosure line, or None. A drop symbol is drawn part-way along
