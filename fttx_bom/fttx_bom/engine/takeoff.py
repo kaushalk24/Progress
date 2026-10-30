@@ -662,7 +662,8 @@ def build_takeoff(d: Drawing, conv: dict, cls: Classifier, networks: list[str],
     grounding_points(d, conv, cls, tk)
     if cls.nearest_assigned:
         tk.checks.append(Check("objects outside boundaries", "WARN",
-                               f"{len(cls.nearest_assigned)} objects outside every network boundary were assigned to the nearest network (<= {cls.tolerance:g} ft)"))
+                               f"{len(cls.nearest_assigned)} objects outside every network boundary were assigned via the transport corridor "
+                               f"or to the nearest network within {cls.tolerance:g} ft (listed in 'Network Assignment')"))
     if tk.unassigned:
         tk.checks.append(Check("unassigned objects", "WARN", f"{len(tk.unassigned)} objects could not be assigned to a network"))
     return tk

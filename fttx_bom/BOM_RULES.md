@@ -22,12 +22,12 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Commercial | ΣCC (`CX1-COMCNT`) + unused MDUC - MDU units carried by CC blocks. Grant = `FMCOMADD2` outside Non-Grant | 8/8 exact |
 | MDU | Σ`FMMULTIADD` (RESIDENTIAL_COUNT + COMMERCIAL_COUNT), split by location | 8/8 exact |
 | Cross-check | ΣHC + ΣCC + ΣMDUC must equal the address list; the address list wins and a warning is raised | NMK exact; DMI 223 vs 222 (duplicate "2023 60TH" block) |
-| MAX10 / MAX5 peds | Count of `CX1-MAX10` / `CX1-MAX5` | Network totals exact; split 9/16 cells exact |
-| Vault `CBV-HGIB2436` | Count of `CX1-VAULT` | Totals exact; 7/8 cells |
+| MAX10 / MAX5 peds | Count of `CX1-MAX10` / `CX1-MAX5` | Network totals 8/8 exact; cells MAX10 6/8, MAX5 0/8 (off by 2-8 peds near Non-Grant edges) |
+| Vault `CBV-HGIB2436` | Count of `CX1-VAULT` | Totals 4/4; cells 6/8 (one R05 vault) |
 | Bonding jumper, ped kit, ped trays | Template formulas: (MAX10 + MAX5) x 2 / x 1 / x 1 | Recalculated 1706 / 853 / 853 |
-| Fiber cable FCnnn | Σ `fiberinfo.dwg` TOTAL (= FTG route + SLK slack, equals the splice-report "Cable Design Length"), plus cables found only in splice reports (100 ft OLM->xx001G tails) | 15/17 network totals exact; 2 are reference errors (see below) |
-| Cable Grant/Non-Grant | Route each segment through the cable polylines (graph shortest path from A to B splice), split at splices and structures, classify each span by majority area, then apportion TOTAL by span length | 11/16 exact cell pairs (R03 FC048 exact) |
-| FOSC 450A-D | Splice reports `Enclosure Type`, area by splice location | Totals exact; 1 cell differs (NMK-05131 is 23 ft from an edge) |
+| Fiber cable FCnnn | Σ `fiberinfo.dwg` TOTAL (= FTG route + SLK slack, equals the splice-report "Cable Design Length"), plus cables found only in splice reports (100 ft OLM->xx001G tails) | Network totals 17/20 exact (FC024 R04/R05 and FC048 R04 are reference errors - see below) |
+| Cable Grant/Non-Grant | Route each segment through the cable polylines (graph shortest path from A to B splice), split at splices and structures, classify each span by majority area, then apportion TOTAL by span length | Cells: FC072/FC144 8/8, FC048 6/8, FC096 4/8, FC024 0/8 (all within a few spans; R03 FC048 exact) |
+| FOSC 450A-D | Splice reports `Enclosure Type`, area by splice location | Totals 4/4; 450B cells 6/8 (NMK-05131 is 23 ft from an edge), 450D 8/8 |
 | Splitter 1x32 / 1x64 | Ratio from splice-report `PLC COUPLER` rows (fallback: address list). Network = ROUNDUP(passings/ratio). Grant = ROUNDUP(grant/ratio); Non-Grant = rest | 8/8 exact; matches report coupler count and address-list PONs |
 | XGS SFP+ | ROUNDUP(column passings / ratio) per column | 8/8 exact (gives 18 SFP for 15 PONs; flagged) |
 | MDU enclosure | 1 per `FMMULTIADD` building | exact |
