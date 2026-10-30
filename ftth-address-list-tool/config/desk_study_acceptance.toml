@@ -13,6 +13,7 @@ accepted_rules = [
   "FS-CABLE-END",     # fibre reaches the end of its cable at a closure without report
   "FS-BREAK-POINT",   # a cut piece downstream names the closure where the fibre left the cable
   "FS-TAP-CABLE",     # fibre put on the tap's own cable
+  "FS-DROP",          # closure from a drawn drop line: premise -> drop -> ped -> closure (checked drops only)
   "FS-DRAWING",       # closure located from the design drawing (pigtail, drop symbol, fibre order)
   "FS-SEG-ALIAS",     # same span numbered differently in two report revisions
   "FS-USAGE-VARIANT", # usage text differs between report revisions on the same circuit

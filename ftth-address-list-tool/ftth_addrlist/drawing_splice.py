@@ -45,8 +45,9 @@ class Demand:
     entry: tuple[str, int] | None = None  # (cable, fibre number) the fibre was last seen on
     prior: str | None = None              # closure derived from the reports, if any
     passed: set[str] = field(default_factory=set)   # closures the fibre is known to pass (trace route)
-    premises: list[tuple[float, float]] = field(default_factory=list)
-    candidates: dict[str, tuple[float, str, tuple | None]] = field(default_factory=dict)  # closure -> (cost, kind, drop)
+    points: list[dict] = field(default_factory=list)          # address points of the tap's premises
+    drawn: dict = field(default_factory=dict)                 # closure -> ('drop'|'alternative', drawn drop)
+    candidates: dict[str, tuple[float, str, object]] = field(default_factory=dict)  # closure -> (cost, kind, drop)
 
 
 # ------------------------------------------------------------------------------- assignment
@@ -181,6 +182,7 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
 
     claimed: dict[str, str] = {}
     demands: dict[tuple, Demand] = {}
+    checks: list[tuple] = []          # rows whose closure comes from the reports alone: cross-check with drawn drops
     for res in results:
         for r in res.rows:
             tap = r.value("tap_name")
@@ -190,6 +192,7 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
             te = r.trace_end
             if (te["stop"] == "terminal" or fs.code == "FS-TAP-CABLE") and fs.value:
                 claimed.setdefault(fs.value, tap)
+                checks.append((res, r))
                 continue
             if fs.code == "FS-UNKNOWN" or fs.code in ("FS-CABLE-END", "FS-BREAK-POINT") or \
                     (fs.status in (PROVISIONAL, APPROVED) and fs.value and te["stop"] != "terminal"):
@@ -216,25 +219,45 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
         direction, far, near = learn_fiber_order(results)
         learned = (far, near)
 
+    # closures whose reports carry a circuit: the fibre passes there (on whatever cable), so such a
+    # closure does not bound the search for that circuit
+    carries: dict[str, set] = collections.defaultdict(set)
+    for name, rep in net.reports.items():
+        for conn in rep.connections:
+            if conn.usage and conn.usage != "No Desc" and (conn.state or "") not in cfg["labels"]["spare_states"]:
+                carries[conn.usage].add(name)
+
+    def premise_points(rows, tap):
+        pts = []
+        for r in rows:
+            pts += design.address_points(str(r.value("address") or ""))
+        m = tap_re.match(tap or "")
+        if m:
+            pts += design.address_points(m.group("address"))
+        return list({id(p): p for p in pts}.values())
+
     # candidates and their fit
     for dm in demands.values():
-        for r in dm.rows:
-            dm.premises += [p["xy"] for p in design.address_points(str(r.value("address") or ""))]
-        m = tap_re.match(dm.tap)
-        if m:
-            dm.premises += [p["xy"] for p in design.address_points(m.group("address"))]
-        reach = design.region(dm.starts, have | dm.passed)
+        dm.points = premise_points(dm.rows, dm.tap)
+        dm.drawn = design.drawn_drop_closures(dm.points)
+        premises = [p["xy"] for p in dm.points]
+        passable = set().union(*(carries.get(r.trace_end.get("usage"), set()) for r in dm.rows)) - dm.passed
+        reach = design.region(dm.starts, (have - passable) | dm.passed)
         for c in reach:
             enc = design.enclosure_of.get(c)
             if enc is None or claimed.get(c, dm.tap) != dm.tap:
                 continue
             if c in have and c != dm.prior:
                 continue   # the fibre left this closure on a cable (its report shows it); not the tap splice
-            fits = [x for x in (design.drop_support(a, enc["xy"]) for a in dm.premises) if x is not None]
-            if fits:
+            fits = [x for x in (design.drop_support(a, enc["xy"]) for a in premises) if x is not None]
+            if c in dm.drawn:          # a drawn drop line from the premise to the ped of this closure
+                how_drawn, drop = dm.drawn[c]
+                cost = -d["drawn_drop_bonus"] * (1.0 if how_drawn == "drop" else 0.5)
+                kind = "drawn" if how_drawn == "drop" else "drawn_alt"
+            elif fits:
                 cost, kind, drop = min(fits)[0], "drop", min(fits)[1]
-            elif dm.premises:
-                cost = d["no_drop_base"] + min(math.dist(a, enc["xy"]) for a in dm.premises) / 20
+            elif premises:
+                cost = d["no_drop_base"] + min(math.dist(a, enc["xy"]) for a in premises) / 20
                 kind, drop = "premise", None
             else:
                 cost, kind, drop = d["no_premise_cost"], "none", None
@@ -296,10 +319,25 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
         assigned.update(assign(comp, closures, cost, d["unassigned_cost"], penalty, d["order_weight"]))
 
     # apply
-    n_new = n_agree = n_disagree = n_none = n_branch = 0
+    n_new = n_agree = n_disagree = n_none = n_branch = n_drawn_new = n_drawn_agree = n_drawn_conflict = 0
     for key, dm in demands.items():
         c = assigned.get(key)
         res_issues = next(res.issues for res in results if res.olm == dm.olm)
+        if dm.drawn and not any(x in dm.candidates and dm.candidates[x][1].startswith("drawn") for x in dm.drawn):
+            why = []
+            for x in sorted(dm.drawn):
+                if claimed.get(x, dm.tap) != dm.tap:
+                    why.append(f"{x} is the confirmed closure of tap {claimed[x]}")
+                elif x not in design.enclosure_of:
+                    why.append(f"{x} has no tap enclosure")
+                else:
+                    why.append(f"{x} cannot be reached from {dm.x0} without passing a closure that has a report")
+            for r in dm.rows:
+                _issue(r, res_issues, Issue("WARNING", "DRAWN_DROP_UNREACHABLE", f"{r.cable} fibre {r.fiber} "
+                                            f"({r.value('address')}): the drawn drop of this premise goes to the ped "
+                                            f"of {', '.join(sorted(dm.drawn))}, but " + "; ".join(why) +
+                                            " - check the drop or the splice reports", r.olm, r.cable, r.fiber,
+                                            design.source))
         for r in dm.rows:
             fs = r.fields["fiber_splice"]
             ev_base = [f"drawing {design.source}"]
@@ -318,25 +356,36 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
             enc = design.enclosure_of[c]
             evid = ev_base + [f"closure {c} at ({design.closures[c][0]:.0f}, {design.closures[c][1]:.0f}); "
                               f"tap enclosure joined by pigtail at ({enc['xy'][0]:.0f}, {enc['xy'][1]:.0f})"]
-            if drop is not None:
+            if kind.startswith("drawn"):
+                evid.append(f"drawn drop line {drop['address']} -> ped at ({drop['ped'][0]:.0f}, {drop['ped'][1]:.0f}), "
+                            f"{drop['length']:.0f} ft; ped {drop['ped_dist']:.0f} ft from {drop['closure']}")
+            elif drop is not None:
                 evid.append(f"drop symbol at ({drop[0]:.0f}, {drop[1]:.0f}) on the line premise - enclosure")
-            how = {"drop": "a drop symbol on the line from the premise to its tap enclosure points to the premise",
-                   "premise": "premise found in the drawing, no drop symbol fits; nearest free enclosure in the "
-                              "reachable network",
-                   "none": "premise not found in the drawing; chosen by elimination and the fibre-order convention"
-                   }[kind]
+            if kind == "drawn":
+                how = "a drawn drop line runs from the premise to the ped next to this closure"
+            elif kind == "drawn_alt":
+                how = (f"the drawn drop's ped is almost as close to {c} as to {drop['closure']}; decided with the "
+                       f"other taps and the fibre order")
+            else:
+                how = {"drop": "a drop symbol on the line from the premise to its tap enclosure points to the premise",
+                       "premise": "premise found in the drawing, no drop symbol fits; nearest free enclosure in the "
+                                  "reachable network",
+                       "none": "premise not found in the drawing; chosen by elimination and the fibre-order "
+                               "convention"}[kind]
+            code = "FS-DROP" if kind.startswith("drawn") else "FS-DRAWING"
             others = sorted((v[0], x) for x, v in dm.candidates.items() if x != c)
             if fs.code == "FS-UNKNOWN":
                 n_new += 1
+                n_drawn_new += code == "FS-DROP"
                 note = (f"splice report for {c} not supplied - tap splice not seen in a report; "
                         f"{len(dm.candidates)} candidate closure(s) reachable from {dm.x0}"
                         + (f"; next best {others[0][1]}" if others else ""))
                 new = FieldValue(c, PROVISIONAL, f"closure located from the design drawing: the fibre continues "
                                  f"past {dm.x0} without reports; in {c} {how}",
-                                 evid + fs.evidence, note, code="FS-DRAWING")
-                if "FS-DRAWING" in accepted:
+                                 evid + fs.evidence, note, code=code)
+                if code in accepted:
                     new.status = APPROVED
-                    new.note += "; rule FS-DRAWING accepted by approvals policy"
+                    new.note += f"; rule {code} accepted by approvals policy"
                 r.fields["fiber_splice"] = new
                 r.needs_reports = [c] + [x for x in r.needs_reports if x != c and not x.startswith("(")]
                 r.issues = [i for i in r.issues if i.code != "SPLICE_CLOSURE_UNKNOWN"]
@@ -348,8 +397,27 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
                                             design.source))
             elif fs.value == c:
                 n_agree += 1
+                n_drawn_agree += code == "FS-DROP"
                 fs.note = (fs.note + "; " if fs.note else "") + f"corroborated by the design drawing ({how})"
                 fs.evidence += evid
+            elif kind == "drawn" and d.get("drawn_drop_over_report_inference", True):
+                # a checked drawn drop names the premise's closure, reachable from where the reports lost the
+                # fibre: the cable-end / break-point inference only said where the fibre was last known
+                n_branch += 1
+                n_drawn_new += 1
+                new = FieldValue(c, PROVISIONAL, f"drawn drop line from the premise to the ped next to {c}, reachable "
+                                 f"from the report-derived closure {fs.value} ({fs.code}: {fs.rule})",
+                                 evid + fs.evidence, f"splice report for {c} not supplied; report-derived value was "
+                                 f"{fs.value}", code="FS-DROP")
+                if "FS-DROP" in accepted:
+                    new.status = APPROVED
+                    new.note += "; rule FS-DROP accepted by approvals policy"
+                r.fields["fiber_splice"] = new
+                r.needs_reports = [c] + [x for x in r.needs_reports if x != c]
+                _issue(r, res_issues, Issue("WARNING", "FIBER_SPLICE_FROM_DRAWING",
+                                            f"{r.cable} fibre {r.fiber} ({r.value('address')}): Fiber Splice {c} from "
+                                            f"the drawn drop instead of the report-derived {fs.value}",
+                                            r.olm, r.cable, r.fiber, design.source))
             elif fs.value not in design.enclosure_of and fs.value in design.closures:
                 # the report-derived closure has no tap enclosure: the fibre goes on along a branch cable
                 n_branch += 1
@@ -357,10 +425,10 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
                                  f"has no tap enclosure in the drawing, so the fibre continues on a branch cable; "
                                  f"in {c} {how}", evid + fs.evidence,
                                  f"splice reports for {fs.value} and {c} not supplied; "
-                                 f"{len(dm.candidates)} candidate closure(s) beyond {fs.value}", code="FS-DRAWING")
-                if "FS-DRAWING" in accepted:
+                                 f"{len(dm.candidates)} candidate closure(s) beyond {fs.value}", code=code)
+                if code in accepted:
                     new.status = APPROVED
-                    new.note += "; rule FS-DRAWING accepted by approvals policy"
+                    new.note += f"; rule {code} accepted by approvals policy"
                 r.fields["fiber_splice"] = new
                 r.needs_reports = [c] + [x for x in r.needs_reports if x != c]
                 _issue(r, res_issues, Issue("WARNING", "FIBER_SPLICE_FROM_DRAWING",
@@ -373,17 +441,42 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
                 fs.note = (fs.note + "; " if fs.note else "") + msg
                 _issue(r, res_issues, Issue("WARNING", "DRAWING_DISAGREES", f"{r.cable} fibre {r.fiber} "
                                             f"({r.value('address')}): {msg}", r.olm, r.cable, r.fiber, design.source))
+    for res, r in checks:
+        drawn = design.drawn_drop_closures(premise_points([r], r.value("tap_name")))
+        fs = r.fields["fiber_splice"]
+        if not drawn:
+            continue
+        if fs.value in drawn:
+            n_drawn_agree += 1
+            dr = drawn[fs.value][1]
+            fs.note = (fs.note + "; " if fs.note else "") + "corroborated by the drawn drop line"
+            fs.evidence.append(f"drawing {design.source}: drawn drop line {dr['address']} -> ped "
+                               f"{dr['ped_dist']:.0f} ft from {dr['closure']}")
+        else:
+            n_drawn_conflict += 1
+            msg = (f"the drawn drop of this premise goes to the ped of {', '.join(sorted(drawn))}, not {fs.value} "
+                   f"named by the splice reports")
+            if fs.status == "CONFIRMED":
+                fs.status = PROVISIONAL
+            fs.note = (fs.note + "; " if fs.note else "") + msg
+            _issue(r, res.issues, Issue("WARNING", "DRAWN_DROP_DISAGREES", f"{r.cable} fibre {r.fiber} "
+                                        f"({r.value('address')}): {msg} - check the drop or the reports",
+                                        r.olm, r.cable, r.fiber, design.source))
     order_txt = {"lower_farther": "lower fibre numbers farther along the route",
                  "lower_nearer": "lower fibre numbers nearer along the route",
                  "none": "not used"}[direction]
     if learned is not None:
         order_txt += f" (learned from {learned[0] + learned[1]} traced pairs: {learned[0]} lower-farther, " \
                      f"{learned[1]} lower-nearer)"
+    drawn_txt = (f" Drawn drop lines: {len(design.drawn_drops)}; {n_drawn_new} located value(s) taken from them "
+                 f"(FS-DROP), {n_drawn_agree} other value(s) corroborated, {n_drawn_conflict} contradicted."
+                 if design.drawn_drops else "")
     return [Issue("INFO", "DRAWING_FIBER_SPLICE",
-                  f"Drawing {design.source}: Fiber Splice located for {n_new} row(s) (PROVISIONAL, FS-DRAWING); "
-                  f"{n_agree} report-derived value(s) corroborated, {n_branch} replaced (report-derived closure has "
-                  f"no tap enclosure), {n_disagree} disagree, {n_none} without a candidate. "
-                  f"Fibre order: {order_txt}.")]
+                  f"Drawing {design.source}: Fiber Splice located for {n_new} row(s) (PROVISIONAL, FS-DRAWING / "
+                  f"FS-DROP); "
+                  f"{n_agree} report-derived value(s) corroborated, {n_branch} replaced (drawn drop, or the "
+                  f"report-derived closure has no tap enclosure), {n_disagree} disagree, {n_none} without a candidate. "
+                  f"Fibre order: {order_txt}.{drawn_txt}")]
 
 
 def _issue(row: OutputRow, res_issues: list, issue: Issue):
@@ -420,7 +513,7 @@ def address_hints(results, design) -> None:
                 if not core or enc is None:
                     continue
                 near = sorted((math.dist(a["xy"], enc["xy"]), a["raw"]) for a in design.addresses
-                              if a["street"] == core and (a["num"], a["street"]) not in served)
+                              if a["num"] and a["street"] == core and (a["num"], a["street"]) not in served)
                 near = [(dist, raw) for dist, raw in near if dist <= design.cfg.get("address_hint_radius", 1500.0)]
                 if near:
                     fv.note = (fv.note + "; " if fv.note else "") + "check whether this premise is the unserved " \

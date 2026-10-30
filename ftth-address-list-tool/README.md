@@ -30,6 +30,8 @@ APPROVED and there are no errors. Otherwise it is written as
      format) or a `.dxf`. Where the closure reports stop before the tap splice, the drawn
      network (closures, tap enclosures and pigtails, cables, address points, drop symbols)
      locates the Fiber Splice closure (PROVISIONAL, rule `FS-DRAWING`, evidence recorded).
+     If the drop routine (FX_DROPS) has been run and checked, its drop lines tie each
+     premise to its ped and closure directly (rule `FS-DROP`) and check every other value.
    * Optional: regional config, approved overrides CSV, completed workbooks to compare against.
    * **Scan** lists the OLMs found; leave *OLM* blank to generate all of them.
 4. Click **Generate address list(s)**.

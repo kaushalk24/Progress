@@ -50,6 +50,8 @@ ACTIONS = {
     "FIBER_SPLICE_FROM_DRAWING": "Closure located from the design drawing; confirm with that closure's splice "
                                  "report, or accept FS-DRAWING in the approvals policy",
     "DRAWING_DISAGREES": "Report-derived closure and drawing differ; check the closure report or the drawing",
+    "DRAWN_DROP_DISAGREES": "Drawn drop and splice reports name different closures; check the drop or the reports",
+    "DRAWN_DROP_UNREACHABLE": "Drawn drop points to a closure the fibre cannot reach; check the drop or the reports",
     "DRAWING_NO_CANDIDATE": "No unclaimed tap enclosure reachable in the drawing; supply the splice reports",
     "DOWNSTREAM_PREMISE_DIFFERS": "Hub and downstream reports name different premises on one circuit; correct "
                                   "the spatial system and re-export",

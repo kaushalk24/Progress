@@ -44,10 +44,10 @@ class Polyline:
 
 
 def street_core(street: str) -> str:
-    """Street name without leading/trailing directions and the street type: 'S COLUMBIA ST' -> 'COLUMBIA'."""
+    """Street name without leading/trailing directions and the street type: 'S OAK ST' -> 'OAK'."""
     toks = []
     for t in re.split(r"[\s,]+", (street or "").upper()):
-        if t and (not toks or toks[-1] != t):       # 'HIGHWAY G76 G76' -> 'HIGHWAY G76'
+        if t and (not toks or toks[-1] != t):       # 'HIGHWAY X9 X9' -> 'HIGHWAY X9'
             toks.append(t)
     while toks and toks[0] in DIRECTIONS:
         toks = toks[1:]
@@ -56,8 +56,30 @@ def street_core(street: str) -> str:
     return " ".join(toks)
 
 
+def street_full(street: str) -> str:
+    """Street name without the street type but with its directions: 'S OAK ST' -> 'S OAK'."""
+    toks = []
+    for t in re.split(r"[\s,]+", (street or "").upper()):
+        if t and (not toks or toks[-1] != t):
+            toks.append(t)
+    return " ".join(t for i, t in enumerate(toks) if i == 0 or t not in STREET_TYPES)
+
+
+def address_rest(address: str) -> str:
+    """Street part of an address after the house number, units removed."""
+    m = re.match(r"^\s*(?:C-|VAC\s+)?\d+\s+(.*)$", (address or "").upper())
+    return re.sub(r"(?:\b(?:UNIT|APT|BLDG|STE)\b|#)\s*[\w-]+", " ", m.group(1)) if m else ""
+
+
+def split_label(address: str) -> tuple[str, str]:
+    """First word and street core of an address without a numeric house number:
+    '12TH AVE AVE' -> ('12TH', ''), 'NA ELM ST' -> ('NA', 'ELM')."""
+    words = re.sub(r"^\s*(?:C-|VAC\s+)", "", (address or "").upper()).split()
+    return (words[0] if words else ""), street_core(" ".join(words[1:]))
+
+
 def split_address(address: str) -> tuple[str | None, str | None]:
-    """'C-2309 78TH AVE UNIT 2' -> ('2309', '78TH'). Addresses without a numeric house number -> (None, None)."""
+    """'C-2309 12TH AVE UNIT 2' -> ('2309', '12TH'). Addresses without a numeric house number -> (None, None)."""
     m = re.match(r"^\s*(?:C-|VAC\s+)?(\d+)\s+(.*)$", (address or "").upper())
     if not m:
         return None, None
@@ -151,8 +173,10 @@ class Design:
         self.enclosures: list[dict] = []
         self.addresses: list[dict] = []
         self.drops: list[tuple[float, float, float]] = []
+        self.peds: list[tuple[float, float]] = []
         closure_blocks, encl_blocks = set(d["closure_blocks"]), set(d["enclosure_blocks"])
         addr_blocks, drop_blocks = set(d["address_blocks"]), set(d["drop_blocks"])
+        ped_blocks = set(d.get("ped_blocks", []))
         for ins in inserts:
             if ins.block in closure_blocks:
                 name = ins.attribs.get(d["closure_name_tag"].upper(), "").strip()
@@ -162,17 +186,75 @@ class Design:
                 self.enclosures.append({"xy": (ins.x, ins.y), "closure": None, "link": None})
             elif ins.block in addr_blocks:
                 raw = address_text(ins.attribs, d)
-                num, core = split_address(raw or "")
-                if num:
-                    self.addresses.append({"num": num, "street": core, "raw": raw, "xy": (ins.x, ins.y)})
+                if raw:
+                    num, core = split_address(raw)
+                    tok = None if num else split_label(raw)[0]
+                    if not num:
+                        core = split_label(raw)[1]
+                    self.addresses.append({"num": num, "tok": tok, "street": core, "raw": raw,
+                                           "full": street_full(address_rest(raw)) if num else "",
+                                           "xy": (ins.x, ins.y), "drawn_drops": []})
             elif ins.block in drop_blocks:
                 self.drops.append((ins.x, ins.y, ins.rot))
+            elif ins.block in ped_blocks:
+                self.peds.append((ins.x, ins.y))
         self._link_enclosures(lines)
         self.enclosure_of: dict[str, dict] = {}
         for e in self.enclosures:
             if e["closure"] is not None:
                 self.enclosure_of.setdefault(e["closure"], e)
         self._build_graph(lines)
+        self.drawn_drops: list[dict] = []
+        self._read_drawn_drops(lines)
+
+    # -------------------------------------------------------------- drawn drop lines
+    def _read_drawn_drops(self, lines: list[Polyline]):
+        """Drop lines drawn from a ped (tap pedestal) to a premise, e.g. by the FX_DROPS routine.
+        Each is tied to the address point at its house end and to the closure nearest its ped."""
+        layers = set(self.cfg.get("drop_line_layers", []))
+        if not layers:
+            return
+        snap = float(self.cfg.get("drop_end_snap", 15.0))
+        far = float(self.cfg.get("ped_closure_max", 100.0))
+        cl = list(self.closures.items())
+        unattached = 0
+        for ln in lines:
+            if ln.layer not in layers or len(ln.points) < 2 or not self.peds or not cl:
+                continue
+            ends = (ln.points[0], ln.points[-1])
+            pd = [min(math.dist(e, p) for p in self.peds) for e in ends]
+            i = 0 if pd[0] <= pd[1] else 1
+            ped_end, house_end = ends[i], ends[1 - i]
+            ped = min(self.peds, key=lambda p: math.dist(p, ped_end))
+            addr = min(self.addresses, key=lambda a: math.dist(a["xy"], house_end), default=None)
+            if pd[i] > snap or addr is None or math.dist(addr["xy"], house_end) > snap:
+                unattached += 1
+                continue
+            near = sorted((math.dist(ped, xy), n) for n, xy in cl)[:2]
+            if near[0][0] > far:
+                unattached += 1
+                continue
+            alt = near[1] if len(near) > 1 and near[1][0] < 1.25 * near[0][0] else None
+            drop = {"address": addr["raw"], "house": house_end, "ped": ped, "closure": near[0][1],
+                    "ped_dist": near[0][0], "alternative": alt[1] if alt else None,
+                    "length": sum(math.dist(a, b) for a, b in zip(ln.points, ln.points[1:]))}
+            addr["drawn_drops"].append(drop)
+            self.drawn_drops.append(drop)
+        if unattached:
+            self.issues.append(Issue("INFO", "DRAWING_DROP_UNATTACHED",
+                                     f"{unattached} drawn drop line(s) in {self.source} do not join a ped to an "
+                                     f"address point; they are not used"))
+
+    def drawn_drop_closures(self, points: list[dict]) -> dict[str, tuple[str, dict]]:
+        """Closures named by the drawn drops of these address points: closure -> ('drop' | 'alternative', drop).
+        'alternative' = a second closure almost as close to the ped (the drop does not decide between them)."""
+        out: dict[str, tuple[str, dict]] = {}
+        for p in points:
+            for dr in p.get("drawn_drops", []):
+                out[dr["closure"]] = ("drop", dr)
+                if dr["alternative"] and dr["alternative"] not in out:
+                    out[dr["alternative"]] = ("alternative", dr)
+        return out
 
     # -------------------------------------------------------------- enclosures
     def _link_enclosures(self, lines: list[Polyline]):
@@ -272,9 +354,15 @@ class Design:
     # -------------------------------------------------------------- premises and drops
     def address_points(self, address: str) -> list[dict]:
         num, core = split_address(address)
-        if not num:
-            return []
-        hits = [a for a in self.addresses if a["num"] == num and a["street"] == core]
+        if not num:     # no house number: the same placeholder text, e.g. '12TH AVE AVE' ~ '12TH' + 'AVE'
+            tok, core = split_label(address)
+            return [a for a in self.addresses if a["num"] is None and tok and a["tok"] == tok and
+                    a["street"] == core]
+        full = street_full(address_rest(address))
+        hits = [a for a in self.addresses if a["num"] == num and a["full"] == full]   # 'S OAK' != 'OAK'
+        if not hits:
+            hits = [a for a in self.addresses if a["num"] == num and a["street"] == core and
+                    not (a["full"] != a["street"] and full != core)]   # both carry directions, and they differ
         if not hits and core:
             hits = [a for a in self.addresses if a["num"] == num and streets_match(core, a["street"])]
         return hits
@@ -339,8 +427,8 @@ def load_design(path: str | Path, cfg: dict) -> tuple[Design | None, list[Issue]
     linked = sum(1 for e in des.enclosures if e["closure"])
     issues.append(Issue("INFO", "DRAWING_MODEL",
                         f"{path.name} ({meta['method']}): {len(des.closures)} closures, {linked} tap enclosures with "
-                        f"pigtail, {len(des.addresses)} address points, {len(des.drops)} drop symbols",
-                        source=path.name))
+                        f"pigtail, {len(des.addresses)} address points, {len(des.drops)} drop symbols, "
+                        f"{len(des.drawn_drops)} drawn drop lines", source=path.name))
     if not des.closures or not linked:
         issues.append(Issue("WARNING", "DRAWING_MODEL_EMPTY",
                             f"{path.name}: no closure or tap-enclosure symbols found with the configured block names "

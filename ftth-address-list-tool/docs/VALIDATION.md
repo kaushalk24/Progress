@@ -45,6 +45,32 @@ Region B after the fixes, with the drawing: **every field 316/316 except Fiber T
 314/316 (the manual typo); Fiber Splice 316/316**; 0 UNRESOLVED rows. All 68 `FS-DRAWING`
 values equal the manual list; the drawing corroborated all 128 other report-derived values.
 
+### Region B with drawn drop lines
+
+The user ran the FX_DROPS routine on the region B drawing (222 drop lines, checked by the
+user); nothing else in the drawing changed. Results:
+
+* Every drawn drop agrees with the completed list and with the tool's value for every
+  premise it serves: 68 rows located from drops (`FS-DROP`, previously `FS-DRAWING`), and
+  155 report-derived or confirmed values corroborated; 0 contradictions.
+* Values are unchanged (316/316 Fiber Splice), but they no longer depend on the fibre-order
+  convention: with the convention switched off, Fiber Splice is 234/234 with drops and
+  227/234 without.
+* Stress test – downstream splice reports removed at random (5 draws each, hub report
+  kept), Fiber Splice agreement with the completed list:
+
+  | Reports removed | Without drops | With drops |
+  |---|---|---|
+  | 25 % | 91.6 % | 95.6 % |
+  | 50 % | 88.5 % | 96.5 % |
+  | 75 % | 79.6 % | 97.9 % |
+
+  Before the search-bound fix found with this test (a reported closure that carries the
+  row's circuit on another cable no longer bounds the search), the same draws without drops
+  gave 42.7 %, 34.2 % and 26.3 %. The fix changes nothing on the complete packs.
+* Found with the same test: addresses were matched without their direction, so
+  `211 OAK ST` and `211 S OAK ST` shared each other's drops; fixed.
+
 ## Region A: coverage and accuracy (4 OLMs, 1,384 rows)
 
 Row matching on OLM + cable + fibre: **1,384 / 1,384 rows matched both ways**, no
@@ -136,7 +162,9 @@ report, duplicate address and reused PON port, tap conflict, incomplete connecti
 conflicting circuit downstream, segment renumbering between reports, invalid config,
 overrides (set, accept, stale, unapproved), never-overwrite, DRAFT vs FINAL naming,
 leading zeros kept as text, DXF cross-check and address coverage, unsupported/missing/
-corrupt drawings; cut piece with the same usage text, same-circuit premise variant,
+corrupt drawings; drawn drop lines (decide without markers, beat a cable-end inference,
+contradict a confirmed value, unreachable), reported closure carrying the circuit does not
+bound the search, direction-aware and number-less address matching; cut piece with the same usage text, same-circuit premise variant,
 transport convention, tap's own cable, address quality flags; DWG bit codes and handle
 map; design model, drawing resolution (fill, corroborate, branch beyond a closure without
 enclosure, no candidate, rule policy, end-to-end); assignment vs brute force, fibre-order

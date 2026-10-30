@@ -5,4 +5,4 @@ row-level status (confirmed / provisional / unresolved), traceability and an
 exception report.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"

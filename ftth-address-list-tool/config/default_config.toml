@@ -96,7 +96,7 @@ rewrites = []
 normalise_whitespace = true
 # Address quality check (flags only, the address is never changed): text removed before the
 # house number (commercial / vacant prefixes), and the house-number pattern. An address whose
-# first word is not a house number (e.g. '78TH AVE AVE') is PROVISIONAL (ADDR-NO-NUMBER).
+# first word is not a house number (e.g. '12TH AVE AVE') is PROVISIONAL (ADDR-NO-NUMBER).
 number_prefix_regex = '^(?:C-|VAC )'
 house_number_regex = '\d+[A-Z]?(?:-\d+)?'
 
@@ -141,6 +141,17 @@ drop_position = [0.2, 0.7]
 drop_typical_position = 0.42
 drop_max_offset = 30.0
 drop_max_angle = 35.0
+# Drop lines drawn from a ped (tap pedestal) to each premise, e.g. by the FX_DROPS routine (FXAUTO,
+# checked with FXMISSING). When present, a drawn drop decides the closure (rule FS-DROP): premise ->
+# drop line -> ped -> nearest closure. Values from the reports are cross-checked against them.
+drop_line_layers = ["RTE_SpatialNet_UGDROP"]
+ped_blocks = ["CX1-MAX5", "CX1-MAX10", "CX1-PED4"]
+drop_end_snap = 15.0        # drop end to ped centre / to the address point (the PED sits 6.6 from it)
+ped_closure_max = 100.0     # a ped belongs to the nearest closure within this distance
+drawn_drop_bonus = 500.0    # ranking: a drawn drop outweighs every other drawing evidence
+# A drawn drop reachable from a cable-end / break-point closure replaces that inference (the reports
+# only show where the fibre was last seen). Set false to keep the report-derived value and warn.
+drawn_drop_over_report_inference = true
 # Addresses without a house number: name unserved address points on the same street within this
 # distance of the tap enclosure, as a review hint (the address itself is never changed).
 address_hint_radius = 1500.0
@@ -164,7 +175,7 @@ tap_regex = '[A-Z]{2,5}-R\d*-(?:C-)?\d+ [A-Z0-9 .-]+'
 # Rule codes whose PROVISIONAL results your engineering lead has agreed to accept
 # without a per-row review. Accepted values are shown as APPROVED (not CONFIRMED)
 # and remain traceable to the rule. Leave empty to review every provisional value.
-# Candidates: "FS-BREAK-POINT", "FS-CABLE-END", "FS-TAP-CABLE", "FS-DRAWING", "FS-GUIDE", "COL-MISMATCH"
+# Candidates: "FS-BREAK-POINT", "FS-CABLE-END", "FS-TAP-CABLE", "FS-DROP", "FS-DRAWING", "FS-GUIDE", "COL-MISMATCH"
 accepted_rules = []
 
 [overrides]

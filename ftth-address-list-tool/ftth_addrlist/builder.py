@@ -313,7 +313,7 @@ class Builder:
         row.trace = [tr.path_text()]
         row.route = tr.route
         row.trace_end = {"stop": tr.stop, "at": tr.stop_location.name if tr.stop_location is not None else None,
-                         "last_closure": tr.last_closure, "step": tr.step,
+                         "last_closure": tr.last_closure, "step": tr.step, "usage": conn.usage,
                          "cable": tr.last_fiber.cable if tr.last_fiber else None,
                          "fiber": tr.last_fiber.fiber if tr.last_fiber else None}
         trace_term = tr.stop_location if tr.stop == "terminal" else None

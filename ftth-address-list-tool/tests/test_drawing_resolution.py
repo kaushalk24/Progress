@@ -39,14 +39,16 @@ DEFAULT_TAPS = {"TST-00002": ((300, -20), (300, -150), 100), "TST-00003": ((600,
                 "TST-00010": ((1200, -20), (1200, -150), 200), "TST-00020": ((620, 300), (750, 300), 400)}
 
 
-def write_design(path, taps=None, extra_closures=None, branches=((600, 0), (600, 300)), more_branches=()):
-    """taps: closure -> (enclosure xy, premise xy, house number)."""
+def write_design(path, taps=None, extra_closures=None, branches=((600, 0), (600, 300)), more_branches=(),
+                 drawn=(), markers=True, addresses=()):
+    """taps: closure -> (enclosure xy, premise xy, house number); drawn: (ped xy, premise xy) drop lines
+    as drawn by FX_DROPS (ped box edge -> PED 6.6 ft from the address point); addresses: (xy, number, street)."""
     taps = DEFAULT_TAPS if taps is None else taps
     closures = {**CLOSURES, **(extra_closures or {})}
     doc = ezdxf.new()
     msp = doc.modelspace()
     for name, attrs in (("MC_SPLICE.dwg", ["NAME"]), ("CX1_MDU_ENCLOSURE", ["NAME"]),
-                        ("FMRESADD2", ["STREET_NUMBER", "STREET_NAME"]), ("CX1-DROP", [])):
+                        ("FMRESADD2", ["STREET_NUMBER", "STREET_NAME"]), ("CX1-DROP", []), ("CX1-MAX10", [])):
         blk = doc.blocks.new(name)
         for i, tag in enumerate(attrs):
             blk.add_attdef(tag, (0, i))
@@ -61,7 +63,17 @@ def write_design(path, taps=None, extra_closures=None, branches=((600, 0), (600,
         msp.add_blockref("FMRESADD2", premise).add_auto_attribs({"STREET_NUMBER": str(num), "STREET_NAME": "MAIN"})
         drop = (premise[0] + 0.42 * (enc[0] - premise[0]), premise[1] + 0.42 * (enc[1] - premise[1]))
         rot = math.degrees(math.atan2(premise[1] - enc[1], premise[0] - enc[0]))   # points to the premise
-        msp.add_blockref("CX1-DROP", drop, dxfattribs={"layer": "RTE_UGDROP", "rotation": rot})
+        if markers:
+            msp.add_blockref("CX1-DROP", drop, dxfattribs={"layer": "RTE_UGDROP", "rotation": rot})
+    for xy, num, street in addresses:
+        msp.add_blockref("FMRESADD2", xy).add_auto_attribs({"STREET_NUMBER": num, "STREET_NAME": street})
+    for ped, premise in drawn:
+        msp.add_blockref("CX1-MAX10", ped, dxfattribs={"layer": "RTE_UGPOLES"})
+        ux, uy = premise[0] - ped[0], premise[1] - ped[1]
+        n = math.hypot(ux, uy)
+        start = (ped[0] + 6 * ux / n, ped[1] + 6 * uy / n)
+        end = (premise[0] - 6.6 * ux / n, premise[1] - 6.6 * uy / n)
+        msp.add_lwpolyline([start, end], dxfattribs={"layer": "RTE_SpatialNet_UGDROP"})
     doc.saveas(path)
     return path
 
@@ -121,10 +133,10 @@ def test_handle_map():
 
 # ------------------------------------------------------------------ design model
 def test_address_normalisation():
-    assert split_address("C-2309 78TH AVE") == ("2309", "78TH")
-    assert split_address("481 BLDG 2 VIRGINIA ST") == ("481", "VIRGINIA")
-    assert split_address("78TH AVE AVE") == (None, None)
-    assert street_core("HIGHWAY G76 G76") == "HIGHWAY G76" and street_core("S COLUMBIA ST") == "COLUMBIA"
+    assert split_address("C-2309 12TH AVE") == ("2309", "12TH")
+    assert split_address("481 BLDG 2 ELM ST") == ("481", "ELM")
+    assert split_address("12TH AVE AVE") == (None, None)
+    assert street_core("HIGHWAY X9 X9") == "HIGHWAY X9" and street_core("S OAK ST") == "OAK"
 
 
 def test_design_model_from_dxf(tmp_path):
@@ -248,3 +260,80 @@ def test_learn_fiber_order():
     direction, farther, nearer = learn_fiber_order([_Res(rows)])
     assert direction == "lower_farther" and farther == 66 and nearer == 0
     assert learn_fiber_order([_Res(rows[:3])])[0] == "none"                    # too few pairs to decide
+
+
+# ------------------------------------------------------------------ drawn drop lines (FX_DROPS)
+def test_drawn_drop_decides_without_drop_markers(tmp_path):
+    # no drop markers at all; the drawn drop of 400 MAIN ST runs to a ped next to TST-00020
+    cfg = load_config()
+    path = write_design(tmp_path / "d.dxf", markers=False, drawn=[((640, 330), (750, 300))])
+    net, res = built(build_network(tmp_path / "r"), cfg)
+    des, issues = load_design(path, cfg)
+    assert len(des.drawn_drops) == 1 and des.drawn_drops[0]["closure"] == "TST-00020"
+    summary = resolve_from_drawing([res], net, des, cfg)
+    fs = row(res, CAB, 6).fields["fiber_splice"]
+    assert fs.value == "TST-00020" and fs.code == "FS-DROP" and fs.status == PROVISIONAL
+    assert any("drawn drop line" in e for e in fs.evidence)
+    assert "1 located value(s) taken from them" in summary[0].message
+
+
+def test_drawn_drop_beats_cable_end_inference(tmp_path):
+    # fibre 4 (200 MAIN ST) is inferred at the cable end TST-00010; the checked drop goes to a branch closure
+    cfg = load_config()
+    taps = dict(DEFAULT_TAPS)
+    taps["TST-00040"] = ((1220, 300), (1350, 300), 201)
+    path = write_design(tmp_path / "d.dxf", taps, {"TST-00040": (1200, 300)},
+                        more_branches=([(1200, 0), (1200, 300)],), drawn=[((1240, 330), (1200, -150))])
+    net, res = built(build_network(tmp_path / "r"), cfg)
+    des, _ = load_design(path, cfg)
+    resolve_from_drawing([res], net, des, cfg)
+    fs = row(res, CAB, 4).fields["fiber_splice"]
+    assert fs.value == "TST-00040" and fs.code == "FS-DROP" and "TST-00010" in fs.note
+    cfg["drawing"]["drawn_drop_over_report_inference"] = False
+    net, res = built(build_network(tmp_path / "r2"), cfg)
+    resolve_from_drawing([res], net, des, cfg)
+    assert row(res, CAB, 4).value("fiber_splice") == "TST-00010"
+    assert any(i.code == "DRAWING_DISAGREES" for i in row(res, CAB, 4).issues)
+
+
+def test_drawn_drop_contradicting_reports_is_flagged(tmp_path):
+    # 100 MAIN ST is confirmed at TST-00002 by the reports; a drawn drop says TST-00003
+    cfg = load_config()
+    path = write_design(tmp_path / "d.dxf", drawn=[((630, -40), (300, -150))])
+    net, res = built(build_network(tmp_path / "r"), cfg)
+    des, _ = load_design(path, cfg)
+    resolve_from_drawing([res], net, des, cfg)
+    r = row(res, CAB, 3)
+    assert r.value("fiber_splice") == "TST-00002" and r.fields["fiber_splice"].status == PROVISIONAL
+    assert any(i.code == "DRAWN_DROP_DISAGREES" for i in r.issues)
+
+
+def test_reported_closure_carrying_the_circuit_does_not_bound_the_search(tmp_path):
+    # fibre 6 is lost at TST-00003; on the branch, TST-00020 has a report showing the same circuit on another
+    # cable, and the tap is one closure further (TST-00021)
+    cfg = load_config()
+    br1, br2 = "TST-00003 TO TST-00021 FC012", "TST-00020 TO TST-00021 FC012"
+    d = build_network(tmp_path / "r")
+    from fixtures import cable_side, usage, write_report
+    write_report(d / "TST-00020.xlsx", "TST-00020", [
+        (f"{br1}: Seg1", 12, "Splice Case: TST-00003", "Splice Case: TST-00020", "Underground"),
+        (f"{br2}: Seg1", 12, "Splice Case: TST-00020", "Splice Case: TST-00021", "Underground")],
+        [{"a": cable_side(f"{br1}: Seg1", 1), "b": cable_side(f"{br2}: Seg1", 1), "usage": usage(400),
+          "start": f"Splice Case: {HUB}", "end": "MAX10 Enclosure(M Bulk): TST-R-400 MAIN ST"}])
+    taps = {k: v for k, v in DEFAULT_TAPS.items() if k != "TST-00020"}
+    taps["TST-00021"] = ((620, 600), (750, 600), 400)
+    path = write_design(tmp_path / "d.dxf", taps, {"TST-00021": (600, 600)}, branches=((600, 0), (600, 300), (600, 600)))
+    net, res = built(d, cfg)
+    des, _ = load_design(path, cfg)
+    resolve_from_drawing([res], net, des, cfg)
+    assert row(res, CAB, 6).value("fiber_splice") == "TST-00021"
+
+
+def test_address_points_keep_directions_and_placeholders(tmp_path):
+    cfg = load_config()
+    path = write_design(tmp_path / "d.dxf", addresses=[((0, 900), "211", "OAK"), ((50, 900), "211", "S OAK"),
+                                                       ((90, 900), "12TH", "AVE")])
+    des, _ = load_design(path, cfg)
+    assert [a["xy"] for a in des.address_points("211 OAK ST")] == [(0, 900)]
+    assert [a["xy"] for a in des.address_points("211 S OAK ST")] == [(50, 900)]
+    assert [a["xy"] for a in des.address_points("12TH AVE AVE")] == [(90, 900)]   # no house number

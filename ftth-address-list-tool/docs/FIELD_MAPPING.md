@@ -33,7 +33,7 @@ numbers, colours only, no circuit data; any value whose path uses one is PROVISI
 | **PON NAME** | Splitter number, integer as text (`"1"`) | Hub connection of the fibre goes to splitter output port; splitter index from equipment label `PLC COUPLER <ratio> <index>` (`PON-NAME`). Format via `pon_name_format`. | CONFIRMED; blank for non-PON fibres | derived (direct) |
 | **PON PORT** | Splitter output 1…64, integer | Report port − 1 (port 1 is the common input) (`PON-PORT`, `pon_port_offset`). | CONFIRMED; UNRESOLVED if port > splitter size or reused | derived |
 | **FIBER #** | Absolute fibre number in the hub cable | Section enumeration; equals the `(abs)` of `TT.FF(abs)` (`FIB-NO`). | CONFIRMED | direct |
-| **ADDRESS** | Premise address, or a label for non-subscriber fibres | Subscriber: text after `<tap>:<port> ` in the hub record's Usage (`ADDR-USAGE`); MDU units are part of that text. Labels: transport/spare usage text as recorded (`ADDR-LABEL`), `*-POWER PORT` → `POWER PORT`, splitter common → `PLC COUPLER <ratio> <index> COM` (`ADDR-SPLITTER-COM`), state `Spare (dark)`/`Broken` or no hub splice → `Spare (dark)` (`ADDR-SPARE`). Optional regional rewrites (`address.rewrites`). The value is never corrected by the tool. | PROVISIONAL when the same address is on several fibres (`ADDR-DUPLICATE`), the address part looks like a tap id (`ADDR-SUSPECT`), the PON usage is not `<tap>:<port> <address>` (`ADDR-NONSTANDARD`), the address has no house number (`ADDR-NO-NUMBER`, e.g. `78TH AVE AVE`: a numbered street, no house number) or downstream records of the same circuit name another premise (`ADDR-VARIANT`, e.g. hub `625 MAIN ST`, downstream `652 MAIN ST`; the drawing note says which has an address point); UNRESOLVED when a PON port has no usage (`ADDR-MISSING`). Repeated words (`AVE AVE`) give an `ADDRESS_REPEATED_WORD` warning only | direct |
+| **ADDRESS** | Premise address, or a label for non-subscriber fibres | Subscriber: text after `<tap>:<port> ` in the hub record's Usage (`ADDR-USAGE`); MDU units are part of that text. Labels: transport/spare usage text as recorded (`ADDR-LABEL`), `*-POWER PORT` → `POWER PORT`, splitter common → `PLC COUPLER <ratio> <index> COM` (`ADDR-SPLITTER-COM`), state `Spare (dark)`/`Broken` or no hub splice → `Spare (dark)` (`ADDR-SPARE`). Optional regional rewrites (`address.rewrites`). The value is never corrected by the tool. | PROVISIONAL when the same address is on several fibres (`ADDR-DUPLICATE`), the address part looks like a tap id (`ADDR-SUSPECT`), the PON usage is not `<tap>:<port> <address>` (`ADDR-NONSTANDARD`), the address has no house number (`ADDR-NO-NUMBER`, e.g. `12TH AVE AVE`: a numbered street, no house number) or downstream records of the same circuit name another premise (`ADDR-VARIANT`, e.g. hub `625 MAIN ST`, downstream `652 MAIN ST`; the drawing note says which has an address point); UNRESOLVED when a PON port has no usage (`ADDR-MISSING`). Repeated words (`AVE AVE`) give an `ADDRESS_REPEATED_WORD` warning only | direct |
 | **COLOR TUBE / COLOR FIBER** | 2-letter TIA-598 code (BL OR GR BR SL WH RD BK YL VI RO AQ) | Report `Group 2` / `Fiber` colour of the hub-cable side, abbreviated (`COL-REPORT`); unspliced fibres: from fibre number (`COL-STANDARD`). Cross-checked against the colour-code position. | PROVISIONAL on mismatch with the position (`COL-MISMATCH`) | direct |
 | **CABLE NAME** | `<FROM> TO <TO> FCnnn` | Cable part of `<CABLE>: SegN` (`CABLE`). | CONFIRMED | direct |
 | **Fiber Tap Name** | Terminal enclosure (tap / MDU) serving the fibre | Evidence ranking: enclosure reached by the fibre trace (`TAP-TRACE`) > circuit Start/End enclosure of kind MAX10/MDU (`TAP-CIRCUIT`) > tap prefix of the Usage text (`TAP-USAGE`). For power ports the terminal enclosure. | PROVISIONAL when sources disagree (`TAP-CONFLICT`) or downstream records of the same circuit name another tap (`TAP-VARIANT`); UNRESOLVED if none | direct/derived |
@@ -61,7 +61,8 @@ circuit start/end. Only when the circuit fields do not decide is the usage text 
 | `FS-BREAK-POINT` | Trace stops at a closure without report; the next downstream record of the same fibre is a cut piece whose circuit Start/End names closure *Y* (between the stop and the record) – the fibre leaves the cable at *Y* | *Y* | PROVISIONAL (could be a branch splice, not the tap splice) |
 | `FS-CABLE-END` | Trace stops at the closure where the cable ends (`… TO <X> FCnnn`) and *X* has no report | *X* | PROVISIONAL |
 | `FS-TAP-CABLE` | The fibre is put, in closure *A*, on a cable named to the row's own tap (`<A> TO <tap> FCnnn`) whose far end is not recorded | *A* | PROVISIONAL |
-| `FS-DRAWING` | Reports stop before the tap splice; closure located from the design drawing (see below) | closure | PROVISIONAL |
+| `FS-DROP` | Reports stop before the tap splice; a **drawn drop line** runs from the premise to the ped next to the closure (see below) | closure | PROVISIONAL |
+| `FS-DRAWING` | Reports stop before the tap splice; closure located from the design drawing without a drawn drop (see below) | closure | PROVISIONAL |
 | `FS-UNKNOWN` | Fibre continues past a closure without report, nothing further identifies the splice and no drawing (or no drawing candidate) | blank | UNRESOLVED (candidates listed) |
 | `FS-GUIDE` | Path uses a hand-made splice guide | as traced | PROVISIONAL |
 | `FS-SEG-ALIAS` | Two reports number the same span differently (matched by cable + both end closures) | as traced | PROVISIONAL |
@@ -76,13 +77,20 @@ before the tap splice. All evidence is drawn objects (block names and tags in `[
 
 1. **Reachable closures** – from the trace stop (or from the report-derived closure, for
    break points) along drawn fibre-cable polylines, never back along the traced route and
-   never through a closure that has a report (that report would show the fibre).
+   never through a closure whose report does not carry the row's circuit (that report would
+   show the fibre). A closure whose report does carry the circuit, on any cable, is passed.
 2. **Candidates** – reachable closures whose tap enclosure (`CX1_MDU_ENCLOSURE`) is joined to
    them by a drawn pigtail, and which are not the confirmed splice closure of another tap.
-3. **Fit** – the drop symbol (`CX1-DROP`) on the line from the premise's address point
-   (`FMRESADD2` / `FMCOMADD2`) to the candidate's enclosure: position along the line,
-   offset from it and rotation pointing to the premise. A value already derived from the
-   reports is preferred.
+3. **Fit** – first a **drawn drop line** (layer `RTE_SpatialNet_UGDROP`, as drawn by the
+   FX_DROPS routine): premise address point → drop line → ped (`CX1-MAX5` / `CX1-MAX10` /
+   `CX1-PED4`) → the closure nearest that ped (rule `FS-DROP`; when a second closure is
+   almost as close to the ped, both stay candidates and the other evidence decides).
+   Without a drawn drop: the drop symbol (`CX1-DROP`) on the line from the premise's
+   address point (`FMRESADD2` / `FMCOMADD2`) to the candidate's enclosure – position along
+   the line, offset from it and rotation pointing to the premise. A value already derived
+   from the reports is preferred. Premises are matched on house number and street, keeping
+   the direction (`S OAK` ≠ `OAK`); an address without a house number is matched
+   on its text (`12TH AVE AVE` ~ number `12TH`, street `AVE`).
 4. **Joint assignment** – taps competing for the same closures are assigned together, one
    tap per closure (Hungarian method plus swap search), keeping the network's fibre-order
    convention: measured on the traced rows of the run (validation region A 4,532 of
@@ -92,8 +100,12 @@ The ranking numbers only choose between candidates; they are never reported as a
 confidence. The cell is PROVISIONAL with the closure, pigtail and drop-symbol positions as
 evidence, the next-best candidate in the note and the closure report that would confirm it
 in *Reports to Request*. Report-derived values are kept and noted as corroborated (or get
-`DRAWING_DISAGREES`); a report-derived closure is replaced only when it has **no tap
-enclosure** in the drawing, i.e. the fibre must continue on a branch cable beyond it.
+`DRAWING_DISAGREES`). A report-derived closure is replaced only when it has **no tap
+enclosure** in the drawing (the fibre must continue on a branch cable beyond it), or when a
+drawn drop names a closure reachable from it (`drawn_drop_over_report_inference`).
+Drawn drops are also checked against confirmed values: a drop that names another closure
+gives `DRAWN_DROP_DISAGREES` and the cell becomes PROVISIONAL; a drop to a closure the fibre
+cannot reach gives `DRAWN_DROP_UNREACHABLE`.
 
 Approved overrides (`OVERRIDE`) and accepted rule policies turn values into APPROVED.
 
