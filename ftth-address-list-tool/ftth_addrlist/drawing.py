@@ -70,7 +70,7 @@ def read_drawing_inventory(path: Path, cfg: dict):
                 texts, stats = _dxf_texts(path, cfg)
             except ImportError:
                 return None, [Issue("ERROR", "DRAWING_NO_EZDXF", "DXF cross-check needs the 'ezdxf' package "
-                                    "(pip install ezdxf)")]
+                                    "(pip install ezdxf); the packaged Windows program reads DWG only - give it the .dwg")]
             method = f"DXF text/attribute read ({stats['entities']} entities)"
             complete = True
             addresses = stats["addresses"]

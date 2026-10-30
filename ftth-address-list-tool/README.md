@@ -16,7 +16,20 @@ APPROVED and there are no errors. Otherwise it is written as
 `…_FTTH_Address List_DRAFT-REVIEW-REQUIRED.xlsx` and its *Run Info* sheet says
 **DRAFT – NOT FOR ISSUE**. Existing files are never overwritten (a ` (2)` suffix is added).
 
-## Quick start (Windows)
+## Stand-alone program (no Python on the user's computer)
+
+Download `FTTH_Address_List_Tool_v<version>_windows.zip` (GitHub: *Releases*, or *Actions* →
+latest "FTTH address-list tool - Windows program" run → *Artifacts*), unzip it, keep the folder
+together and double-click **`FTTH Address List Tool.exe`**. `ftth_addrlist_cli.exe` is the
+command-line version (same options as below). Settings are in the `config` folder next to the exe.
+The packaged program reads `.dwg` drawings; DXF needs the Python version.
+
+To build it yourself on any Windows PC with Python 3.11+: double-click **`build_exe.bat`**
+(result in `dist\`). GitHub builds it automatically on every change to the tool
+(`.github/workflows/ftth-tool-windows-exe.yml`); *Run workflow* with *publish* ticked attaches the
+zip to a pre-release.
+
+## Quick start (Windows, with Python)
 
 1. Install Python 3.11 or newer from python.org (tick *Add Python to PATH*).
 2. Double-click **`FTTH Address List Tool.bat`**. On first use it installs `openpyxl`.

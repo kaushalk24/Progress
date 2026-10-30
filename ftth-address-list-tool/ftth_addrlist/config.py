@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import sys
 from pathlib import Path
 
 try:  # Python 3.11+
@@ -10,7 +11,10 @@ try:  # Python 3.11+
 except ModuleNotFoundError:  # pragma: no cover - older Python
     import tomli as tomllib  # type: ignore
 
-TOOL_ROOT = Path(__file__).resolve().parent.parent
+# Folder holding config/, templates/ and docs/: the package's parent, or, in the packaged Windows
+# program, the folder of the .exe (so the configuration stays editable next to it).
+TOOL_ROOT = (Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
+             else Path(__file__).resolve().parent.parent)
 DEFAULT_CONFIG = TOOL_ROOT / "config" / "default_config.toml"
 
 

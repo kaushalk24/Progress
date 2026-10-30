@@ -427,7 +427,7 @@ def load_design(path: str | Path, cfg: dict) -> tuple[Design | None, list[Issue]
                 inserts, lines, meta = _entities_from_dxf(path)
             except ImportError:
                 return None, [Issue("ERROR", "DRAWING_NO_EZDXF", "Reading a DXF needs the 'ezdxf' package "
-                                    "(pip install ezdxf)")]
+                                    "(pip install ezdxf); the packaged Windows program reads DWG only - give it the .dwg")]
         else:
             return None, [Issue("ERROR", "DRAWING_UNSUPPORTED", f"Unsupported drawing type {suffix}; use .dwg or .dxf")]
     except Exception as exc:  # any decoding failure: the drawing is simply not used
