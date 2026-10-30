@@ -1,0 +1,24 @@
+{
+  "_comment": "Investigated causes of differences between the automated BOM and the manual NMK reference. Keys: '<part or label>' | '<part>|<network>' | '<part>|<network>|<G|NG>'. Text only - never used to change quantities.",
+
+  "Total Route Mileage": "Reference row 6 is typed-in. Network totals for NMK-R02 (14.965 mi), R03 (18.96) and R05 (24.80) equal the sum of route-footage labels (79,017 / 100,133 / 130,955 ft) within rounding. Grant/Non-Grant split differs: the reference split cannot be reproduced from the Non-Grant polygons now in the drawing.",
+  "Total Route Mileage|NMK-R04": "Reference 16.54 mi (87,331 ft). Drawing: R04 trench 84,529 ft + transport-corridor trench/strand now booked to R04. Transport corridor treatment differs from the reference.",
+  "Aerial Footage|NMK-R04": "Reference 5,740 ft. Drawing aerial-strand labels in the OTN transport corridor total 5,279 ft (all booked to R04). 461 ft unexplained (risers are 4 x 25 ft = 100 ft).",
+  "UG Footage": "Reference row 10 is not computed consistently: R04/R05 equal the sum of cable footage per column (incl. slack), R02 is within 0.5% of the trench-label route footage, R03 (87,569) matches neither. Tool uses trench route-footage labels (fiber-bearing route) for every network.",
+  "Total Drop Footage": "No drop length exists in the drawings (CX1-DROP FTG attributes are blank). Reference values are 'total - x' formulas typed by hand. Straight-line address-to-nearest-ped distance gives 52-60k ft per network vs 60-66k in the reference (no consistent allowance) - left blank for the engineer.",
+  "FE0-MAX10EXP4": "Reference = all MAX10 peds in NMK-R03 Grant, NMK-R04 Grant and NMK-R05 Non-Grant (formula =J19, =L19, =O19), zero elsewhere. No drawing attribute distinguishes these peds - engineer decision.",
+  "FE0-07264810": "Template note asks for a hand count of grounds (splices ending in G, first in line, ending in 0, EOL peds). Reference left it blank. Audit shows splice points ending in G only.",
+  "FM0-FF11002": "Heat-shrink sleeves: reference left blank. Audit shows fusion splices counted from splice reports (pass-through fibers excluded).",
+  "FE0-R863927": "450B trays: reference R03 1, R04 1, R05 2 for 1/1/3 enclosures. Fusion splices in those enclosures are 40 / 9 / (3, 4, 18) - no consistent splices-per-tray rule. Engineer decision.",
+  "FE0-R579575": "450D trays: reference '3+1' per network (R05 '3+1+1'). Each hub 450D (xx001G, 197-255 fusion splices) gets 3; the extra trays do not follow splice counts (R03 second 450D has 100 splices but 1 tray; R05 has three more 450Ds but 2 trays). Engineer decision.",
+
+  "CBP-MAX10DSM24|NMK-R03": "Network total matches (51). One MAX10 is classified Grant by the current Non-Grant polygons but Non-Grant in the reference - ped near a polygon edge.",
+  "CBP-MAX5DSM24": "Network totals match exactly in all four networks. Grant/Non-Grant split differs by 2-3 peds in R02-R04 and 8 in R05: peds near Non-Grant polygon edges; R05 also shows larger Non-Grant extents in the reference (vault, 450B, cable and route all shift the same way), suggesting the R05 Non-Grant boundary was edited after the manual BOM.",
+  "CBV-HGIB2436|NMK-R05": "Network total matches (9). Reference books one vault as Non-Grant; it lies inside Grant per current polygons (same R05 boundary pattern).",
+  "FE0-FOSC450B66NT0B3V|NMK-R05": "Network total matches (3). Reference books one 450B as Non-Grant; NMK-05131 sits 23 ft from a Non-Grant polygon edge.",
+  "FFA-F902402G5B|NMK-R04": "Drawing cable labels AND splice reports both give FC024 = 34,586 ft (+100 ft OLM tail). The reference moves 5,187 ft from FC024 to FC048 (FC024+FC048 total agrees exactly) - likely a manual BOM error; please confirm.",
+  "FFA-F904804M6B|NMK-R04": "See FC024 NMK-R04: reference FC048 is 5,187 ft higher than the drawing labels and splice reports.",
+  "FFA-F902402G5B|NMK-R05": "+100 ft = OLM -> NMK-05001G FC024 tail present in the splice reports but not labelled in the drawing. Reference counted this tail for R02 and R03 but not for R04/R05 (inconsistent). Tool includes it everywhere.",
+  "FFA-F902402G5B": "Network totals = sum of cable-label TOTAL (route + slack) + 100 ft OLM tail from splice reports. Grant/Non-Grant split follows routed spans; reference split differs by a few spans near boundaries.",
+  "FFA-F909608E7B": "Network totals match. Split: reference puts 1,872 ft of R02 FC096 in Non-Grant; routed spans give 1,009 ft - spans near the boundary."
+}

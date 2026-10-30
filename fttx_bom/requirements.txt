@@ -1,0 +1,3 @@
+openpyxl>=3.1
+ezdxf>=1.3   # DXF input (optional when only DWG is used)
+pytest>=8   # tests

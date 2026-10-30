@@ -1,0 +1,41 @@
+{
+  "_comment": "CAD drawing conventions observed in the Credit River (NMK) and Melcher-Dallas (DMI) designs. Change names here, not in code.",
+  "network_boundary_layers": ["OLM Boundary - Designed Not Built", "Boundary - Fiber Service Group"],
+  "network_label_layers": ["Site Text", "Boundary - Fiber Service Group", "Boundary - Designed Not Built"],
+  "network_assign_tolerance_ft": 150,
+  "transport_boundary_layers": ["Transport Boundary - Designed Not Built"],
+  "nongrant_layer": "Boundary - Designed Not Built",
+  "nongrant_exclude_label_regex": "15f|Transport|Fiber Service",
+  "grant_address_layer": "GRANTADDRESS",
+  "blocks": {
+    "ped_max10": {"names": ["CX1-MAX10"]},
+    "ped_max5": {"names": ["CX1-MAX5"]},
+    "vault": {"names": ["CX1-VAULT"]},
+    "olm": {"names": ["CX1_OLM"]},
+    "otn": {"names": ["CX1_OTN_MC"]},
+    "ug_lbox": {"names": ["CX1-UGLBOX"]},
+    "aerial_pole": {"names": ["CX1-PPOL", "CX1-PPOLTR", "CX1-DPOL"]},
+    "res_address": {"names": ["FMRESADD2"]},
+    "com_address": {"names": ["FMCOMADD2"]},
+    "mdu_address": {"names": ["FMMULTIADD"]},
+    "house_count": {"names": ["CX1-COUNT"], "attr": "HC"},
+    "com_count": {"names": ["CX1-COMCNT"], "attr": "CC"},
+    "mdu_count": {"names": ["CX1-MDUCOUNT"], "attr": "MDUC"},
+    "splice_point": {"names": ["MC_SPLICE.dwg"], "attr": "NAME"},
+    "cable_label": {"names": ["fiberinfo.dwg"]},
+    "route_footage": {"names": ["CX1-FTG-N2"], "attr": "FTG"},
+    "drop": {"names": ["CX1-DROP"]},
+    "riser": {"names": ["CX1-RISER"], "attr": "RFTG"}
+  },
+  "route_layers": {
+    "ug_trench": ["RTE_UGTRENCH"],
+    "aerial_strand": ["RTE_AESTRAND"],
+    "ug_drop": ["RTE_SpatialNet_UGDROP"]
+  },
+  "cable_layers": {
+    "underground": ["Fiber Cable - Underground"],
+    "aerial": ["Fiber Cable - Aerial"],
+    "pigtail": ["Fiber Cable - Pigtail"]
+  },
+  "drop_layers": ["RTE_UGDROP", "RTE_AEDROP"]
+}

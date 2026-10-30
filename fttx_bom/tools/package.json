@@ -1,0 +1,9 @@
+{
+  "name": "fttx-bom-dwg-tools",
+  "private": true,
+  "description": "DWG -> JSON converter used by fttx_bom (LibreDWG compiled to WebAssembly)",
+  "type": "module",
+  "dependencies": {
+    "@mlightcad/libredwg-web": "0.8.0"
+  }
+}
