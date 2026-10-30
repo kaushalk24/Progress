@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 - rules from the SME BOM walkthrough (see SME_MEETING_NOTES.md)
+- Splice trays (450B/450D) now computed: per location ROUNDUP(ROUNDUP(fusion splices / 24 or 48) / 2) packages. NMK: R02, R04 exact; R03/R05 one package higher than the reference (reference pools small locations).
+- SFP = ROUNDUP(Jumper Calculator splitters / 2) per column (identical on NMK; DMI-R15 now 5 instead of 8).
+- OLM equipment booked to Grant unless the OLM area has no grant passings.
+- Splitter totals use the designed count from the splice reports when available.
+- NMK reconciliation: 291/360 cells, 154/180 network totals (was 287/150).
+
 ## 0.1.0 - first working build
 
 ### Implementation

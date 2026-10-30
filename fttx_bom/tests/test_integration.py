@@ -112,6 +112,13 @@ def test_enclosures(nmk):
     assert cols(tk, "fosc450b")[5] == 1  # NMK-04073 is Non-Grant, as in the reference
 
 
+def test_splice_trays_sme_rule(nmk):
+    # SME walkthrough: per location ROUNDUP(ROUNDUP(splices/48)/2); R02 and R04 reproduce the reference "3+1"
+    tk = nmk[2]
+    assert nettot(tk, "tray_450d") == [4, 5, 4, 6]
+    assert nettot(tk, "tray_450b") == [0, 1, 1, 3]
+
+
 # ---- cable --------------------------------------------------------------------
 def test_cable_network_totals(nmk):
     tk = nmk[2]
@@ -147,8 +154,8 @@ def test_dmi_internal_consistency(dmi):
     assert tk.get("pass_res", n, GRANT) == 67  # all GRANTADDRESS blocks served (incl. unnumbered)
     assert tk.total("pass_com", n) == 13
     assert tk.total("splitter_1x32", n) == 7 and tk.total("splitter_1x64", n) == 0  # design uses 1x32
-    # reference convention: SFP rounded per area -> 3 + 5 = 8 for 7 designed PONs, flagged for review
-    assert tk.total("pon_ports", n) == 8
+    # SME rule: SFP = ROUNDUP(ROUNDUP(p/32)/2) per column -> 2 + 3 = 5 for 7 designed 1x32 PONs, flagged
+    assert tk.total("pon_ports", n) == 5
     assert any(c.name == f"SFP vs designed PONs {n}" and c.status == "WARN" for c in tk.checks)
     assert tk.total("olm", n) == 1
     assert [c for c in tk.checks if c.status == "FAIL"] == []

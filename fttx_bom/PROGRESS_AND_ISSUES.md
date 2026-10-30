@@ -13,7 +13,7 @@ _Last updated: 2026-10-30, build 0.1.0_
 | Measure | Result |
 |---|---|
 | Area cells compared | 360 |
-| Area cells matching | 287 |
+| Area cells matching | 291 (after SME rules) |
 | Network totals matching | 150 / 180 |
 
 Lines reproducing all 8 Grant/Non-Grant cells: residential, commercial and MDU passings; Z-14 OLM ped; OLM bundle; XGS SFP+; 1x64 and 1x32 splitters; MDU enclosure; FOSC 450A/C/D; OLM power equipment; batteries; FC072, FC144 and zero-quantity cable sizes; Transport BOM; Jumper Calculator.
@@ -25,7 +25,7 @@ Lines with exact network totals but a different Grant/Non-Grant split: MAX10 and
 1. **Drop footage (row 11): UNRESOLVED.** The drawings contain no drop lengths (`CX1-DROP` FTG attributes are blank) and the reference values are typed by hand. *Need from engineering:* the drop-length source (SpatialNet drop report?) or the rule, e.g. address-to-tap distance plus an allowance.
 2. **Route / UG footage (rows 6-10): INFERRED.** The tool uses the trench route-footage labels. The reference uses a different method in each network (R04/R05 cable sums incl. slack; R02 ≈ route; R03 neither). *Decision needed:* which definition is approved.
 3. **Reference cable errors to confirm:** R04 has 5,187 ft moved from FC024 to FC048 against both the drawing and the splice reports. The 100 ft OLM tail is counted in R02/R03 but not in R04/R05.
-4. **450B / 450D splice trays and MAX10 +4 upgrade kits: UNRESOLVED.** No consistent rule exists in the data; the per-enclosure fusion-splice counts are in the audit.
+4. **Splice trays:** now implemented with the SME's per-location rule. R03 and R05 are one package above the reference, which pools leftover trays; the pooling policy needs confirming. **MAX10 +4 upgrade kits** remain UNRESOLVED (not covered in the meeting).
 5. **Grant/Non-Grant split near boundaries.** Location-based classification is verified as the method, but a few items sit within a few feet of edges. *Need:* confirmation that the current DWG Non-Grant polygons are final (R05 especially).
 6. **SFP convention.** The reference rounds each area separately, giving 18 SFP for 15 PONs. The tool reproduces this and flags it.
 7. DMI-R15: 6 cable segments can't be routed because one end (DMI-14001G, DMI-16249G, 15222G, 15091G, 15029) has no splice symbol or splice report. Those segments are classified at their label point and flagged.
@@ -40,3 +40,7 @@ Lines with exact network totals but a different Grant/Non-Grant split: MAX10 and
 1. Get the drop-footage and route-footage definitions from engineering, then implement and verify them.
 2. Add tray rules once the engineer confirms the tray capacity and spare policy.
 3. Optional: a simple GUI or a Windows batch launcher.
+
+## Pending from the SME meeting
+- The marked-up template showing which cells to fill.
+- Grant address validation report: a separate deliverable, not built yet. Needs its template (see SME_MEETING_NOTES.md #13).

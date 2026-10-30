@@ -543,6 +543,7 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
 
 
 # ----------------------------------------------------------------- splice reports
+TRAY_CAPACITY = {"B": 24, "D": 48}  # splices per tray: ACC-B-24 tray, FOSC-ACC-D-TRAY-48
 ENCL_RE = re.compile(r"FOSC\s*450\s*([A-D])", re.I)
 
 
@@ -550,6 +551,9 @@ def enclosures(d, conv, cls, tk: Takeoff, reports: list[SpliceReport]):
     pos = {}
     for ins in _blocks(d, conv, "splice_point"):
         pos.setdefault(ins.attr("NAME").upper(), ins.pt)
+    if reports:
+        tk.ensure("tray_450b", "PKG", "per enclosure ROUNDUP(ROUNDUP(splices/24)/2)")
+        tk.ensure("tray_450d", "PKG", "per enclosure ROUNDUP(ROUNDUP(splices/48)/2)")
     for letter in "ABCD":
         tk.ensure(f"fosc450{letter.lower()}", "EA", "splice report Enclosure Type")
         tk.ensure(f"fosc450{letter.lower()}_splices", "EA", "fusion splices in enclosure (splice report)")
@@ -578,6 +582,13 @@ def enclosures(d, conv, cls, tk: Takeoff, reports: list[SpliceReport]):
             k = f"fosc450{m.group(1).lower()}"
             tk.add(k, net, area, 1, "EA", "splice report Enclosure Type", [r.name])
             tk.add(k + "_splices", net, area, r.fusion_splices, "EA", "fusion splices in enclosure", [r.name])
+            cap = TRAY_CAPACITY.get(m.group(1).upper())
+            if cap:
+                # SME (BOM walkthrough): per splice location, trays = ROUNDUP(splices / tray capacity);
+                # trays are ordered 2 per package -> packages = ROUNDUP(trays / 2), location by location
+                pk = math.ceil(math.ceil(r.fusion_splices / cap) / 2) if r.fusion_splices else 0
+                tk.add(f"tray_450{m.group(1).lower()}", net, area, pk, "PKG",
+                       f"per enclosure ROUNDUP(ROUNDUP(splices/{cap})/2)", [f"{r.name}:{r.fusion_splices}"])
         if net:
             tk.add("fusion_splices", net, area, r.fusion_splices, "EA", "fusion splices (all splice reports)", [r.name])
             for ratio, part in r.couplers:
@@ -590,9 +601,11 @@ def derived(d, conv, cls, tk: Takeoff, reports, address_lists):
     tk.ensure("olm_ground", "EA", "OLM blocks not at an aerial pole")
     tk.ensure("olm_aerial", "EA", "OLM blocks within 15 ft of an aerial pole")
     for ins in _blocks(d, conv, "olm"):
-        net, area = _locate(cls, ins, tk)
+        net, _loc = _locate(cls, ins, tk)
         if not net:
             continue
+        # SME: OLM equipment is always booked to Grant (1 per OLM) unless the whole OLM area is Non-Grant
+        area = GRANT if tk.get("passings", net, GRANT, 0) > 0 else NONGRANT
         aerial = any(dist(ins.pt, p) <= 15 for p in poles)
         tk.add("olm_aerial" if aerial else "olm_ground", net, area, 1, "EA", "OLM mounting by proximity to aerial pole", [ins.handle])
         tk.add("olm", net, area, 1, "EA", "count of OLM blocks", [ins.handle])
@@ -606,6 +619,11 @@ def derived(d, conv, cls, tk: Takeoff, reports, address_lists):
             tk.check(f"split ratio {n}", True, f"1x{ratio} ({why})")
         tot = tk.total("passings", n)
         need = math.ceil(tot / ratio) if tot else 0
+        designed = tk.total(f"report_splitter_1x{ratio}", n) if reports else 0
+        if designed:
+            if designed != need:
+                tk.check(f"designed splitters {n}", False, f"splice reports show {designed:g} x 1x{ratio}; ROUNDUP(passings/{ratio}) = {need}; designed count used", warn=True)
+            need = int(designed)
         gp = tk.get("passings", n, GRANT, 0)
         g = min(math.ceil(gp / ratio) if gp else 0, need)
         for r in (32, 64):
@@ -614,11 +632,13 @@ def derived(d, conv, cls, tk: Takeoff, reports, address_lists):
         tk.q[(f"splitter_1x{ratio}", n, NONGRANT)] = Qty(f"splitter_1x{ratio}", n, NONGRANT, need - g, "EA", f"ROUNDUP(network passings/{ratio}) - grant", [])
         for a in AREAS:
             p = tk.get("passings", n, a, 0)
-            tk.q[("pon_ports", n, a)] = Qty("pon_ports", n, a, math.ceil(p / ratio) if p else 0, "EA", f"ROUNDUP(passings/{ratio})", [])
+            # SME: SFP = ROUNDUP(Jumper Calculator 'Splitters Required' / 2), where the calculator uses
+            # ROUNDUP(passings/32) whatever splitter is actually designed
+            tk.q[("pon_ports", n, a)] = Qty("pon_ports", n, a, math.ceil(math.ceil(p / 32) / 2) if p else 0, "EA",
+                                            "ROUNDUP(ROUNDUP(passings/32)/2) (Jumper Calculator / 2)", [])
         sfp = tk.total("pon_ports", n)
         tk.check(f"SFP vs designed PONs {n}", sfp == need,
-                 f"per-area ROUNDUP gives {sfp:g} XGS SFP+ for {need} designed PONs (reference convention rounds Grant and "
-                 f"Non-Grant separately; NMK reference: 18 SFP for 15 PONs) - confirm", warn=True)
+                 f"SME rule (Jumper Calculator splitters / 2, per column) gives {sfp:g} XGS SFP+ for {need} designed 1x{ratio} PONs - confirm", warn=True)
         if reports:
             rep = tk.total(f"report_splitter_1x{ratio}", n)
             tk.check(f"splitters vs splice reports {n}", rep == need, f"design rule {need} x 1x{ratio} vs splice-report PLC COUPLER rows {rep:g}")
