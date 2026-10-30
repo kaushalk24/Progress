@@ -141,6 +141,7 @@ class Builder:
             order += sorted(dist, key=lambda s: (first_port(s), dist.index(s)))
         else:
             order += dist
+        self._hub_value_convention(order, feeder, rows_by_seg)
         for n, seg in enumerate(order, 1):
             for r in rows_by_seg[(seg.cable, seg.seg)]:
                 r.section = n
@@ -154,6 +155,30 @@ class Builder:
         for r in res.rows:
             res.issues.extend(r.issues)
         return res
+
+    def _hub_value_convention(self, order, feeder, rows_by_seg):
+        """Fibres that end in the hub (transport, splitter common, power) carry the hub as Fiber Splice
+        only on the sections named by fiber_splice.hub_value_sections."""
+        mode = self.cfg["fiber_splice"].get("hub_value_sections", "all")
+        if mode == "all":
+            return
+        pig = self.cfg["network"].get("pigtail_placement", "Pigtail")
+        keep = set()
+        if mode in ("feeder", "feeder_and_first_distribution"):
+            keep |= {(s.cable, s.seg) for s in feeder}
+        if mode == "feeder_and_first_distribution":
+            first = next((s for s in order if s not in feeder and pig not in (s.placement or "")), None)
+            if first is not None:
+                keep.add((first.cable, first.seg))
+        for k, rows in rows_by_seg.items():
+            if k in keep:
+                continue
+            for r in rows:
+                fv = r.fields["fiber_splice"]
+                if fv.code == "FS-HUB":
+                    r.fields["fiber_splice"] = FieldValue(
+                        None, CONFIRMED, f"fibre ends in the hub; hub not repeated on this section "
+                        f"(fiber_splice.hub_value_sections = {mode!r})", fv.evidence, code="FS-HUB-OMITTED")
 
     def _apply_rule_policy(self, res: OlmResult):
         if not self.accepted_rules:
@@ -286,6 +311,11 @@ class Builder:
                 circuit_term = loc
         tr: TraceResult = self.net.trace(hub, CableFiber(seg.cable, seg.seg, f), expected_usage=conn.usage)
         row.trace = [tr.path_text()]
+        row.route = tr.route
+        row.trace_end = {"stop": tr.stop, "at": tr.stop_location.name if tr.stop_location is not None else None,
+                         "last_closure": tr.last_closure, "step": tr.step,
+                         "cable": tr.last_fiber.cable if tr.last_fiber else None,
+                         "fiber": tr.last_fiber.fiber if tr.last_fiber else None}
         trace_term = tr.stop_location if tr.stop == "terminal" else None
         trace_ev = [str(s.conn.source) for s in tr.steps if s.conn is not None]
 
@@ -309,6 +339,7 @@ class Builder:
                 F["address"].note = "address part of the usage text looks like a tap identifier"
                 row.issues.append(Issue("WARNING", "ADDRESS_SUSPECT", f"{seg.cable} fibre {f}: usage {conn.usage!r} "
                                         f"has a tap identifier where the address should be", row.olm, seg.cable, f, ev))
+            self._address_quality(row, F, seg, f, ev)
         else:
             label = self._rewrite_usage(conn.usage)
             row.kind = "power" if label != conn.usage else "other"
@@ -342,7 +373,7 @@ class Builder:
             F["tap_name"] = FieldValue(None, UNRESOLVED, "no tap in usage text and no terminal enclosure found",
                                        [ev], code="TAP-NONE")
 
-        F["fiber_splice"] = self._fiber_splice(row, seg, f, tr, ev, trace_ev)
+        F["fiber_splice"] = self._fiber_splice(row, seg, f, tr, ev, trace_ev, hub)
         if tr.stop in ("missing_report", "unknown_segment") and tr.last_fiber is not None and tr.step:
             nxt = self.net._nearest_record(tr.last_fiber, tr.step, arriving_only=False, exclude=tr.path_closures)
             if nxt is not None:
@@ -362,7 +393,33 @@ class Builder:
                                             f"{conn.usage!r} but {msg} - check report revisions", row.olm, seg.cable,
                                             f, ev))
 
-    def _fiber_splice(self, row, seg, f, tr: TraceResult, ev, trace_ev) -> FieldValue:
+    def _address_quality(self, row: OutputRow, F, seg, f, ev):
+        """Flag addresses that cannot identify a premise as recorded. The value is kept exactly as the
+        spatial system has it (it is never corrected here)."""
+        acfg = self.cfg["address"]
+        addr = F["address"].value or ""
+        if F["address"].code == "ADDR-SUSPECT":
+            return
+        body = re.sub(acfg.get("number_prefix_regex", r"^(?:C-|VAC )"), "", addr)
+        first = body.split(" ", 1)[0]
+        if not re.fullmatch(acfg.get("house_number_regex", r"\d+[A-Z]?(?:-\d+)?"), first) or \
+                re.fullmatch(r"\d+(?:ST|ND|RD|TH)", first):
+            fv = F["address"]
+            if fv.status == CONFIRMED:
+                fv.status, fv.code = PROVISIONAL, "ADDR-NO-NUMBER"
+            fv.note = (fv.note + "; " if fv.note else "") + "address has no house number in the source usage text"
+            row.issues.append(Issue("WARNING", "ADDRESS_NO_NUMBER", f"{seg.cable} fibre {f}: address {addr!r} has "
+                                    f"no house number - kept as recorded; correct it in the spatial system",
+                                    row.olm, seg.cable, f, ev))
+        rep = re.search(r"\b([A-Z0-9]+) \1\b", addr)
+        if rep:
+            row.issues.append(Issue("WARNING", "ADDRESS_REPEATED_WORD", f"{seg.cable} fibre {f}: address {addr!r} "
+                                    f"repeats {rep.group(1)!r} - kept as recorded; correct it in the spatial system",
+                                    row.olm, seg.cable, f, ev))
+            F["address"].note = (F["address"].note + "; " if F["address"].note else "") + \
+                f"repeated word {rep.group(1)!r} in the source usage text"
+
+    def _fiber_splice(self, row, seg, f, tr: TraceResult, ev, trace_ev, hub) -> FieldValue:
         cfg = self.cfg
         fs = FieldValue(None, UNRESOLVED, "", [ev] + trace_ev, code="FS-UNKNOWN")
         if tr.stop == "terminal":
@@ -370,7 +427,7 @@ class Builder:
             fs.rule = "fibre trace reaches the pigtail/drop to the terminal enclosure in this closure"
         elif tr.stop in ("missing_report", "unknown_segment") and tr.last_fiber is not None and tr.step:
             x = tr.stop_location.name if tr.stop_location is not None else None
-            brk = self.net.find_break_point(x, tr.last_fiber, tr.step, tr.path_closures)
+            brk = self.net.find_break_point(x, tr.last_fiber, tr.step, tr.path_closures, origin=hub)
             dest = seg_named_dest(tr.last_fiber.cable)
             where = (f"arriving at {x} (no report)" if x else
                      f"leaving {tr.last_closure} (far end of the segment not recorded)")
@@ -383,6 +440,13 @@ class Builder:
                            f"(fibre could continue on a branch cable)")
                 fs.evidence.append(str(bconn.source))
                 row.needs_reports.append(loc.name)
+            elif dest is not None and dest == row.value("tap_name") and tr.last_fiber.cable.startswith(
+                    f"{tr.last_closure} TO ") and tr.last_closure in tr.path_closures:
+                # the fibre was put on the tap's own cable ("<closure> TO <tap> FCnnn") in that closure
+                fs.value, fs.status, fs.code = tr.last_closure, PROVISIONAL, "FS-TAP-CABLE"
+                fs.rule = (f"fibre enters cable {tr.last_fiber.cable} (named to tap {dest}) in "
+                           f"{tr.last_closure}")
+                fs.note = "the far end of the tap cable is not recorded in the supplied reports"
             elif x is not None and dest == x:
                 fs.value, fs.code = x, "FS-CABLE-END"
                 fs.status = PROVISIONAL
@@ -416,6 +480,17 @@ class Builder:
             row.issues.append(Issue("WARNING", "USAGE_TEXT_VARIANT", f"{seg.cable} fibre {f}: hub usage "
                                     f"{row.value('address')!r} but downstream " + "; ".join(tr.usage_variants[:2]),
                                     row.olm, seg.cable, f, ev))
+        if tr.premise_variants:
+            msg = ("downstream records of the same circuit (same hub origin) name another premise: " +
+                   "; ".join(tr.premise_variants[:2]))
+            for k in ("address", "tap_name"):
+                fv = row.fields[k]
+                if fv.status == CONFIRMED:
+                    fv.status, fv.code = PROVISIONAL, "ADDR-VARIANT" if k == "address" else "TAP-VARIANT"
+                fv.note = (fv.note + "; " if fv.note else "") + msg
+            row.issues.append(Issue("WARNING", "DOWNSTREAM_PREMISE_DIFFERS", f"{seg.cable} fibre {f}: hub usage "
+                                    f"{row.value('address')!r} but {msg} - the hub value is used; check which "
+                                    f"premise is correct", row.olm, seg.cable, f, ev))
         if tr.seg_aliases:
             if fs.status == CONFIRMED:
                 fs.status, fs.code = PROVISIONAL, "FS-SEG-ALIAS"

@@ -50,7 +50,9 @@ class TraceResult:
     step: int | None = None
     seg_aliases: list[str] = field(default_factory=list)
     usage_variants: list[str] = field(default_factory=list)
+    premise_variants: list[str] = field(default_factory=list)   # same circuit, but a different premise named
     path_closures: set = field(default_factory=set)
+    route: list[str] = field(default_factory=list)   # closures in path order, incl. bridged ones without report
 
     def path_text(self) -> str:
         parts = [s.closure for s in self.steps]
@@ -97,6 +99,7 @@ class Network:
         self.terminal_kinds = set(net["terminal_kinds"])
         self.olm_kinds = set(net["olm_kinds"])
         self.usage_re = re.compile(cfg["address"]["usage_regex"])
+        self._by_fiber = None
         for rep in reports:
             self._add(rep)
 
@@ -180,38 +183,68 @@ class Network:
             return -1
         return None
 
+    def _records_of(self, cable: str, fiber: int) -> list[tuple[str, tuple, list[Connection]]]:
+        """(closure, key, connections) of every report row on this cable and fibre number (any segment)."""
+        if self._by_fiber is None:
+            self._by_fiber = defaultdict(list)
+            for name, idx in self.conn_index.items():
+                for key, conns in idx.items():
+                    if key[0] == "C":
+                        self._by_fiber[(key[1], key[3])].append((name, key, conns))
+        return self._by_fiber.get((cable, fiber), [])
+
     def _nearest_record(self, fiber: CableFiber, step: int, arriving_only: bool, exclude=frozenset()):
         best = None
-        for name, idx in self.conn_index.items():
+        for name, key, conns in self._records_of(fiber.cable, fiber.fiber):
             if name in exclude:
                 continue  # never jump back to a closure already on the path
-            for key, conns in idx.items():
-                if key[0] != "C" or key[1] != fiber.cable or key[3] != fiber.fiber:
-                    continue
-                s2 = key[2]
-                if (s2 - fiber.seg) * step <= 0:
-                    continue
-                if arriving_only:
-                    seg2 = self.segments.get((fiber.cable, s2))
-                    arrive_end = (seg2.end if step == 1 else seg2.start) if seg2 else None
-                    if arrive_end is None or arrive_end.name != name:
-                        continue  # record is where segment s2 leaves, not where it arrives
-                d = abs(s2 - fiber.seg)
-                if best is None or d < best[0]:
-                    best = (d, name, s2, conns[0])
+            s2 = key[2]
+            if (s2 - fiber.seg) * step <= 0:
+                continue
+            if arriving_only:
+                seg2 = self.segments.get((fiber.cable, s2))
+                arrive_end = (seg2.end if step == 1 else seg2.start) if seg2 else None
+                if arrive_end is None or arrive_end.name != name:
+                    continue  # record is where segment s2 leaves, not where it arrives
+            d = abs(s2 - fiber.seg)
+            if best is None or d < best[0]:
+                best = (d, name, s2, conns[0])
         return best
 
-    def _bridge(self, fiber: CableFiber, step: int, expected_usage: str | None, exclude=frozenset()):
+    def circuit_relation(self, conn: Connection, origin: str | None) -> str | None:
+        """How a downstream record's circuit relates to a live circuit that starts at `origin` (the hub):
+        'same'    - a live record whose circuit start/end names the origin: the same fibre circuit, whatever
+                    the usage text;
+        'remnant' - both circuit ends are splice closures and neither is the origin: a cut piece of fibre
+                    (Broken, Residential, ...) whose circuit ends mark where it was cut;
+        None      - not decidable from the circuit fields (e.g. hand-made guides)."""
+        if not origin:
+            return None
+        ends = [loc for loc in (conn.circuit_start, conn.circuit_end) if loc is not None and loc.name]
+        dark = (conn.state or "") in self.cfg["labels"]["spare_states"]
+        if any(loc.name == origin for loc in ends):
+            return None if dark else "same"
+        closure_kinds = set(self.cfg["network"]["closure_kinds"])
+        if len(ends) == 2 and all(loc.kind in closure_kinds for loc in ends):
+            return "remnant"
+        return None
+
+    def _bridge(self, fiber: CableFiber, step: int, expected_usage: str | None, exclude=frozenset(),
+                origin: str | None = None):
         """The path reaches a closure without a report (or a segment whose far end is unknown).
         The fibre is taken to continue only when the next downstream report on the same cable
-        lists the same fibre number carrying the same circuit usage."""
+        lists the same fibre number carrying the same circuit: same circuit origin, or (when the
+        circuit fields do not decide) the same usage text."""
         if not expected_usage or expected_usage == "No Desc":
             return None
         best = self._nearest_record(fiber, step, arriving_only=True, exclude=exclude)
         if best is None:
             return None
         dist, name, s2, conn = best
-        if compare_usage(conn.usage, expected_usage, self.usage_re) == "different":
+        rel = self.circuit_relation(conn, origin)
+        if rel == "remnant" or (conn.state or "") in self.cfg["labels"].get("break_states", ["Broken"]):
+            return None   # a cut piece: the live fibre left the cable before this closure
+        if rel != "same" and compare_usage(conn.usage, expected_usage, self.usage_re) == "different":
             return None
         return {"closure": Location("Splice Case", name), "fiber": CableFiber(fiber.cable, s2, fiber.fiber),
                 "from_seg": fiber.seg, "to_seg": s2}
@@ -228,16 +261,19 @@ class Network:
                 pos.setdefault(seg.end.name, s)
         return pos
 
-    def find_break_point(self, closure: str | None, fiber: CableFiber, step: int, exclude=frozenset()):
+    def find_break_point(self, closure: str | None, fiber: CableFiber, step: int, exclude=frozenset(),
+                         origin: str | None = None):
         """The live fibre stops being traceable at `closure` (no report, or unknown segment end).
-        Look for the nearest downstream record of the same cable and fibre number. When that remnant
-        is recorded as broken, its circuit start/end names the closure where the fibre was cut.
+        Look for the nearest downstream record of the same cable and fibre number. When that record
+        is a remnant (state Broken, or a circuit between two closures that does not come from the
+        origin), its circuit start/end names the closure where the fibre was cut.
         Returns (Location, Connection) or None."""
         best = self._nearest_record(fiber, step, arriving_only=False, exclude=exclude)
         if best is None:
             return None
         _, rec_closure, _, conn = best
-        if (conn.state or "") not in self.cfg["labels"].get("break_states", ["Broken"]):
+        if (conn.state or "") not in self.cfg["labels"].get("break_states", ["Broken"]) and \
+                self.circuit_relation(conn, origin) != "remnant":
             return None
         m = re.match(r"^(.+?) TO (.+?) FC\d+$", fiber.cable)
         far_name = (m.group(2) if step == 1 else m.group(1)) if m else None
@@ -265,12 +301,31 @@ class Network:
               max_steps: int = 500) -> TraceResult:
         self._aliases_scratch = []
         self._variants_scratch = []
+        self._premise_scratch = []
         self._path = {start_closure}
+        self._route = [start_closure]
+        self._origin = start_closure
         result = self._trace(start_closure, start, expected_usage, max_steps)
         result.seg_aliases = list(self._aliases_scratch)
         result.usage_variants = list(self._variants_scratch)
+        result.premise_variants = list(self._premise_scratch)
         result.path_closures = set(self._path)
+        result.route = list(self._route)
+        if result.stop == "missing_report" and result.stop_location is not None and \
+                result.stop_location.name not in result.route:
+            result.route.append(result.stop_location.name)
         return result
+
+    def _passed(self, cable: str, from_seg: int, to_seg: int) -> list[str]:
+        """Closures between segment from_seg and to_seg of a cable (bridged without reports)."""
+        out = []
+        step = 1 if to_seg > from_seg else -1
+        for k in range(from_seg, to_seg, step):
+            seg = self.segments.get((cable, k))
+            loc = (seg.end if step == 1 else seg.start) if seg else None
+            if loc is not None and loc.name and loc.name not in out:
+                out.append(loc.name)
+        return out
 
     def _segment_alias(self, fiber: CableFiber, from_closure: str, at_closure: str) -> CableFiber | None:
         """Same physical span listed under a different segment number in the two closure reports
@@ -304,13 +359,14 @@ class Network:
                 # far end not recorded anywhere (e.g. only a hand-made guide lists this segment)
                 leave = self.arrival_step(seg, closure)
                 step = -leave if leave else None
-                bridge = self._bridge(fiber, step, expected_usage, self._path) if step else None
+                bridge = self._bridge(fiber, step, expected_usage, self._path, self._origin) if step else None
                 if bridge is None:
                     r = TraceResult(steps, "unknown_segment", None, closure, fiber, uses_guide, conflicts)
                     r.step = step
                     return r
                 steps.append(TraceStep(f"[{fiber.cable} Seg{bridge['from_seg']}->Seg{bridge['to_seg']}: far end "
                                        f"not recorded; same fibre, same circuit downstream]", None, None))
+                self._route += self._passed(fiber.cable, bridge["from_seg"], bridge["to_seg"])
                 far, fiber = bridge["closure"], bridge["fiber"]
             elif far.kind in self.terminal_kinds:
                 return TraceResult(steps, "terminal", far, closure, fiber, uses_guide, conflicts)
@@ -318,11 +374,12 @@ class Network:
                 return TraceResult(steps, "olm", far, closure, fiber, uses_guide, conflicts)
             elif far.name not in self.reports:
                 step = self.arrival_step(seg, far.name)
-                bridge = self._bridge(fiber, step, expected_usage, self._path) if step else None
+                bridge = self._bridge(fiber, step, expected_usage, self._path, self._origin) if step else None
                 if bridge is None:
                     r = TraceResult(steps, "missing_report", far, closure, fiber, uses_guide, conflicts)
                     r.step = step
                     return r
+                self._route += self._passed(fiber.cable, bridge["from_seg"], bridge["to_seg"])
                 steps.append(TraceStep(
                     f"[{far.name}{' ...' if abs(bridge['to_seg'] - bridge['from_seg']) > 1 else ''}: no report; "
                     f"Seg{bridge['from_seg']}->Seg{bridge['to_seg']} same fibre, same circuit downstream]",
@@ -342,14 +399,23 @@ class Network:
             conn = conns[0]
             if conn.fmt == FMT_GUIDE:
                 uses_guide = True
+            rel = self.circuit_relation(conn, self._origin) if expected_usage and conn.fmt != FMT_GUIDE else None
             if expected_usage and conn.usage and conn.fmt != FMT_GUIDE and conn.usage != expected_usage:
                 kind = compare_usage(conn.usage, expected_usage, self.usage_re)
-                if kind == "variant":
+                if kind == "variant" or rel == "same":
+                    # same circuit (same origin, or same tap port and house numbers): text differs between
+                    # report revisions
                     self._variants_scratch.append(f"{far.name} ({conn.source}): {conn.usage!r}")
+                    if kind not in ("variant", "address_only"):
+                        self._premise_scratch.append(f"{far.name} ({conn.source}): {conn.usage!r}")
                 else:
                     conflicts.append(f"{far.name} ({conn.source}): usage {conn.usage!r}")
+            if rel == "remnant" and (conn.state or "") not in self.cfg["labels"]["spare_states"]:
+                conflicts.append(f"{far.name} ({conn.source}): record is a cut piece ({conn.state!r}, circuit "
+                                 f"{conn.circuit_start} - {conn.circuit_end}) on a live circuit")
             steps.append(TraceStep(far.name, conn, fiber))
             self._path.add(far.name)
+            self._route.append(far.name)
             nxt = conn.other(fiber.key).endpoint
             if isinstance(nxt, DevicePort):
                 return TraceResult(steps, "device", far, far.name, None, uses_guide, conflicts)

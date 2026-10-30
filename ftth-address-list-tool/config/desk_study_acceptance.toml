@@ -1,0 +1,20 @@
+# Desk-study approvals policy.
+#
+# Use when no further splice reports can be obtained and no field check is possible, and
+# only after the engineering lead has agreed to it for the project. The evidence-based
+# Fiber Splice inferences below are then shown as APPROVED (traceable to the rule, never
+# CONFIRMED). Data-quality flags on addresses and taps (ADDR-*, TAP-*) are NOT accepted
+# here: they still need a per-row decision in the overrides file.
+#
+#   python -m ftth_addrlist run ... --config config/desk_study_acceptance.toml
+
+[approvals]
+accepted_rules = [
+  "FS-CABLE-END",     # fibre reaches the end of its cable at a closure without report
+  "FS-BREAK-POINT",   # a cut piece downstream names the closure where the fibre left the cable
+  "FS-TAP-CABLE",     # fibre put on the tap's own cable
+  "FS-DRAWING",       # closure located from the design drawing (pigtail, drop symbol, fibre order)
+  "FS-SEG-ALIAS",     # same span numbered differently in two report revisions
+  "FS-USAGE-VARIANT", # usage text differs between report revisions on the same circuit
+  "FS-GUIDE",         # path uses a hand-made splice guide
+]

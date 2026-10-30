@@ -26,8 +26,11 @@ APPROVED and there are no errors. Otherwise it is written as
      report for each OLM **and as many downstream closure reports as possible**.
    * **Output folder** – where results are written.
    * **File name prefix** – e.g. `123456_Example City ST`.
-   * Optional: drawing (`.dxf` preferred, `.dwg` experimental), regional config,
-     approved overrides CSV, completed workbooks to compare against.
+   * **Design drawing** (recommended) – the region's `.dwg` as exported (AutoCAD 2010–2018
+     format) or a `.dxf`. Where the closure reports stop before the tap splice, the drawn
+     network (closures, tap enclosures and pigtails, cables, address points, drop symbols)
+     locates the Fiber Splice closure (PROVISIONAL, rule `FS-DRAWING`, evidence recorded).
+   * Optional: regional config, approved overrides CSV, completed workbooks to compare against.
    * **Scan** lists the OLMs found; leave *OLM* blank to generate all of them.
 4. Click **Generate address list(s)**.
 
@@ -57,6 +60,9 @@ Command line (same options): `run_cli.bat run --reports "<folder>" --out "<folde
    so they survive reruns and row re-ordering.
 5. An engineering lead may accept a whole inference rule for a project in the config
    (`[approvals] accepted_rules = ["FS-CABLE-END"]`); such values show as APPROVED, never CONFIRMED.
+   When no further reports can be obtained, `config/desk_study_acceptance.toml` accepts the
+   evidence-based Fiber Splice rules in one step; address/tap data-quality flags still need
+   a per-row decision.
 
 ## Configuration
 
@@ -84,9 +90,11 @@ python -m pytest tests                      # synthetic tests (no client data in
 FTTH_REFERENCE_PACK=<pack folder> python -m pytest tests   # adds the reference-pack test
 ```
 
-Dependencies: Python ≥ 3.11, `openpyxl`; `ezdxf` only for the DXF cross-check;
+Dependencies: Python ≥ 3.11, `openpyxl`; `ezdxf` only for DXF drawings (DWG needs nothing extra);
 Tkinter (bundled with Python on Windows) for the window.
 
 Layout: `ftth_addrlist/` – `splice_reports.py` (readers), `network.py` (connectivity
 and fibre tracing), `builder.py` (rules), `overrides.py`, `workbook.py`, `compare.py`,
-`drawing.py` + `dwg_container.py` (drawing inventory), `pipeline.py`, `cli.py`, `gui.py`.
+`dwg_container.py` + `dwg_objects.py` (DWG sections and objects), `design.py` (drawn
+network model, DWG or DXF), `drawing_splice.py` (Fiber Splice from the drawing),
+`drawing.py` (identifier cross-check, address coverage), `pipeline.py`, `cli.py`, `gui.py`.

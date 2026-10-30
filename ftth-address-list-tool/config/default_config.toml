@@ -68,6 +68,8 @@ pon_name_format = "{index}"
 section_order = "first_pon_port"
 # Include the OLM feeder cable as the first section.
 include_feeder = true
+# Segment placement text (segment table "... - <placement>") of tap pigtails.
+pigtail_placement = "Pigtail"
 
 [labels]
 spare = "Spare (dark)"
@@ -92,20 +94,77 @@ usage_regex = '^(?P<tap>.+?):(?P<port>\d+) (?P<address>.+)$'
 rewrites = []
 # Trim and collapse whitespace in addresses and identifiers.
 normalise_whitespace = true
+# Address quality check (flags only, the address is never changed): text removed before the
+# house number (commercial / vacant prefixes), and the house-number pattern. An address whose
+# first word is not a house number (e.g. '78TH AVE AVE') is PROVISIONAL (ADDR-NO-NUMBER).
+number_prefix_regex = '^(?:C-|VAC )'
+house_number_regex = '\d+[A-Z]?(?:-\d+)?'
+
 
 [fiber_splice]
 # Value used for fibres that end in the hub (transport, splitter common, power port).
 hub_value_for_hub_fibres = true
+# Sections on which those fibres show the hub:
+#   "feeder_and_first_distribution" - the feeder and the first distribution (non-pigtail) section;
+#                                     blank on later sections (convention of the completed lists)
+#   "all" | "feeder" | "none"
+hub_value_sections = "feeder_and_first_distribution"
 # When the trace reaches a closure whose splice report was not supplied:
 #   "provisional" -> use that closure, mark PROVISIONAL (needs report or review)
 #   "unresolved"  -> leave blank, mark UNRESOLVED
 missing_report_policy = "provisional"
 
+[drawing]
+# Design drawing (.dwg AutoCAD 2010-2018, or .dxf). Used to cross-check identifiers and, where the
+# splice reports stop before the tap splice, to locate that closure (rule FS-DRAWING, PROVISIONAL).
+resolve_fiber_splice = true
+# Block names and attribute tags of the spatial-system drawing export.
+closure_blocks = ["MC_SPLICE.dwg"]
+closure_name_tag = "NAME"
+enclosure_blocks = ["CX1_MDU_ENCLOSURE"]
+address_blocks = ["FMRESADD2", "FMCOMADD2", "FMMULTIADD"]
+# Address point attribute pairs [house number tag, street tag], tried in order
+# (residential points, then commercial points).
+address_tags = [["STREET_NUMBER", "STREET_NAME"], ["BUILDING_ADDRESS", "BUILDING_NAME"]]
+drop_blocks = ["CX1-DROP"]
+# Layers: fibre cables start with this text; the tap pigtail layer ties an enclosure to its closure.
+cable_layer_prefix = "Fiber Cable"
+pigtail_layer = "Fiber Cable - Pigtail"
+# Tap name -> address of the tap premise (used to find its address point).
+tap_address_regex = '^[A-Z]{2,5}-R\d*-(?P<address>.+)$'
+# Geometry tolerances, in drawing units (survey feet in the spatial-system export).
+node_snap = 3.0          # cable vertices / closure symbols closer than this are the same node
+pigtail_snap = 1.0       # pigtail end to enclosure / closure symbol
+# Drop symbol on the premise-to-enclosure line: position range as a fraction of the line from the
+# premise, typical position, largest offset from the line, largest deviation from the drop direction.
+drop_position = [0.2, 0.7]
+drop_typical_position = 0.42
+drop_max_offset = 30.0
+drop_max_angle = 35.0
+# Addresses without a house number: name unserved address points on the same street within this
+# distance of the tap enclosure, as a review hint (the address itself is never changed).
+address_hint_radius = 1500.0
+# Fibre order along a route, used to choose between closures when several taps share a cable:
+#   "learn"         - measured from the traced rows of the run (used when >= 90% of pairs agree)
+#   "lower_farther" - lower fibre numbers are spliced at closures farther along the route
+#   "lower_nearer" | "none"
+fiber_order = "learn"
+# Candidate ranking (used only to choose between candidate closures; never reported as a confidence):
+order_weight = 80.0         # per pair of taps out of fibre order
+report_value_bonus = 30.0   # candidate equals the value derived from the splice reports
+no_drop_base = 60.0         # premise found but no drop symbol supports the candidate (+ distance / 20)
+no_premise_cost = 100.0     # premise not found in the drawing
+unassigned_cost = 200.0     # leave the tap unassigned
+# Identifier patterns for the cross-check (closure ids, cable names, tap names in drawing text).
+closure_regex = '(?<![A-Z0-9-])[A-Z]{2,5}-\d{4,6}G?(?![A-Z0-9])'
+cable_regex = '[A-Z]{2,5}-[A-Z0-9-]+ TO [A-Z]{2,5}-[A-Z0-9 -]+? FC\d{3}'
+tap_regex = '[A-Z]{2,5}-R\d*-(?:C-)?\d+ [A-Z0-9 .-]+'
+
 [approvals]
 # Rule codes whose PROVISIONAL results your engineering lead has agreed to accept
 # without a per-row review. Accepted values are shown as APPROVED (not CONFIRMED)
 # and remain traceable to the rule. Leave empty to review every provisional value.
-# Candidates: "FS-BREAK-POINT", "FS-CABLE-END", "FS-GUIDE", "COL-MISMATCH"
+# Candidates: "FS-BREAK-POINT", "FS-CABLE-END", "FS-TAP-CABLE", "FS-DRAWING", "FS-GUIDE", "COL-MISMATCH"
 accepted_rules = []
 
 [overrides]

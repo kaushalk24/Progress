@@ -47,6 +47,14 @@ ACTIONS = {
     "REPORT_UNREADABLE": "Re-export the report as .xlsx",
     "NO_HUB": "Supply the hub (splitter) closure report for this OLM",
     "PON_PORTS_FREE": "Information only",
+    "FIBER_SPLICE_FROM_DRAWING": "Closure located from the design drawing; confirm with that closure's splice "
+                                 "report, or accept FS-DRAWING in the approvals policy",
+    "DRAWING_DISAGREES": "Report-derived closure and drawing differ; check the closure report or the drawing",
+    "DRAWING_NO_CANDIDATE": "No unclaimed tap enclosure reachable in the drawing; supply the splice reports",
+    "DOWNSTREAM_PREMISE_DIFFERS": "Hub and downstream reports name different premises on one circuit; correct "
+                                  "the spatial system and re-export",
+    "ADDRESS_NO_NUMBER": "Address has no house number; correct it in the spatial system",
+    "ADDRESS_REPEATED_WORD": "Repeated word in the address (e.g. 'AVE AVE'); correct it in the spatial system",
 }
 
 

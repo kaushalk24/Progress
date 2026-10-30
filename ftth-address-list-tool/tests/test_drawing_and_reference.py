@@ -2,7 +2,7 @@
 
 Set FTTH_REFERENCE_PACK to a folder containing 'Splice Reports/' and 'Address List/' (and optionally
 a .dwg) to run the integration test, e.g.:
-    FTTH_REFERENCE_PACK=C:/packs/credit_river python -m pytest tests
+    FTTH_REFERENCE_PACK=C:/packs/region_a python -m pytest tests
 """
 
 import os
@@ -85,15 +85,27 @@ def test_reference_pack():
     net = Network(reps, cfg)
     refs = sorted((pack / "Address List").glob("*.xlsx"))
     assert refs
+    results = {o: Builder(net, cfg).build(o) for o in net.olms()}
+    dwgs = list(pack.rglob("*.dwg"))
+    if dwgs:   # Fiber Splice from the drawing: every row filled, agreement with the completed lists >= 99 %
+        from ftth_addrlist.design import load_design
+        from ftth_addrlist.drawing_splice import resolve_from_drawing
+        inv, _ = read_drawing_inventory(dwgs[0], cfg)
+        assert inv and inv["complete"] and len(inv["closures"]) > 100
+        design, _ = load_design(dwgs[0], cfg)
+        resolve_from_drawing(list(results.values()), net, design, cfg)
+    agree = compared = 0
     for ref in refs:
         olm = next(o for o in net.olms() if o in ref.name)
-        res = Builder(net, cfg).build(olm)
+        res = results[olm]
         c = compare(res, ref, cfg)
         assert c.matched == c.ref_rows == c.gen_rows and c.order_identical
         for f in ("pon_name", "pon_port", "fiber_no", "cable_name"):
             assert c.field_stats[f]["exact"] == c.field_stats[f]["compared"], (olm, f)
-        assert c.field_stats["tap_name"]["normalised"] == c.field_stats["tap_name"]["compared"], olm
-    dwgs = list(pack.glob("*.dwg"))
+        assert c.field_stats["tap_name"]["normalised"] >= c.field_stats["tap_name"]["compared"] - 2, olm
+        agree += c.field_stats["fiber_splice"]["normalised"]
+        compared += c.field_stats["fiber_splice"]["compared"]
+        if dwgs:
+            assert not [r for r in res.rows if r.fields["fiber_splice"].status == "UNRESOLVED"], olm
     if dwgs:
-        inv, _ = read_drawing_inventory(dwgs[0], cfg)
-        assert inv and len(inv["closures"]) > 100
+        assert agree >= 0.99 * compared

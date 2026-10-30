@@ -80,7 +80,8 @@ def main(argv=None) -> int:
             p.add_argument("--out", required=True, help="output folder (existing files are never overwritten)")
         p.add_argument("--olm", action="append", help="OLM name, e.g. ABC-R01 (repeatable; default: all found)")
         p.add_argument("--config", help="regional configuration .toml")
-        p.add_argument("--drawing", help="design drawing (.dxf preferred, .dwg experimental) for cross-checks")
+        p.add_argument("--drawing", help="design drawing (.dwg AutoCAD 2010-2018 or .dxf): cross-checks and Fiber "
+                       "Splice where the reports stop (FS-DRAWING)")
 
     p = sub.add_parser("run", help="generate address-list workbook(s)")
     common(p)

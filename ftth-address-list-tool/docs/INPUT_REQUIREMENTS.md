@@ -6,15 +6,19 @@
   COLOR TUBE, COLOR FIBER, CABLE NAME) and for Fiber Tap Name; these came out 100 % on
   the reference pack apart from documented manual errors. All of it comes from the
   **hub closure report**.
-* **Fiber Splice needs the downstream closure reports.** It is confirmed only when the
-  report of the closure where the tap pigtail/drop is spliced is supplied. In the
-  reference pack 88 % of those closures (624 of 706) had no report, so most Fiber Splice values
-  are provisional (inferred from cable ends or broken remnants) or unresolved.
-* **The DWG alone cannot produce the list.** It holds closure names, cable names,
-  address points (house number + street attributes), poles, strand, grant/non-grant area
-  labels and drawing notes, but **no fibre, tube, splitter, PON port or circuit
-  assignments, and no tap names**. It is used for validation (identifier and
-  address-point coverage), never to assign service by proximity.
+* **Fiber Splice is confirmed only by the downstream closure reports** – the report of the
+  closure where the tap pigtail/drop is spliced. In the two validation regions most of
+  those closures had no report (region A: 624 of 706).
+* **The design DWG fills the rest.** It has no fibre, tube, splitter, PON port, circuit or
+  tap-name data, so it cannot produce the list by itself, but it does hold the drawn
+  network: closure symbols (`NAME`), tap enclosures joined to their closure by pigtails,
+  fibre-cable polylines, address points and drop symbols. Where the reports stop before
+  the tap splice, the tool locates the closure from these objects (rule `FS-DRAWING`,
+  PROVISIONAL, evidence recorded): in validation this filled every remaining row and
+  matched the completed lists in 354 of 354 such rows (286 in region A, 68 in
+  region B). Service is never assigned by proximity alone: candidates are restricted to the
+  part of the network the traced fibre can still reach, and the drop symbol, the pigtail
+  and the fibre order decide between them.
 
 ## Input matrix
 
@@ -26,32 +30,27 @@
 | Template workbook | Optional | `.xlsx`, header in row 1, a styled row 2 | header text, column order, styles, widths | output layout | header matched to `template.columns` | built-in layout (identical to the reference lists) |
 | Regional config | Optional | `.toml` | conventions that differ (naming, prefixes, splitter naming, address rewrites, approved rules) | regional conventions without code changes | validated on load | defaults |
 | Approved overrides | Optional | `.csv` (see README) | olm, cable_name, fiber_no, field, action, value, approved_by, approved_on, reason | recorded human decisions | approver/date mandatory, target exists, stale detection | review items stay open |
-| Design drawing | Optional (validation) | **DXF** (full) or DWG (experimental) | text, block attributes (closure `NAME`, `STREET_NUMBER`, `STREET_NAME`) | identifier cross-check, address-point coverage | coverage counts | no drawing cross-check |
+| Design drawing | **Recommended** (needed where downstream reports are missing) | **DWG** AutoCAD 2010–2018 (AC1024–AC1032) or **DXF** | closure blocks with `NAME`, tap enclosure blocks + pigtail polylines, fibre-cable polylines, address-point blocks (`STREET_NUMBER`/`STREET_NAME`, `BUILDING_ADDRESS`/`BUILDING_NAME`), drop symbols | Fiber Splice where the reports stop (`FS-DRAWING`), corroboration of report-derived values, identifier cross-check, address-point coverage | decode-error rate, enclosure–pigtail links, coverage counts | those Fiber Splice cells stay UNRESOLVED |
 | Premise/address export from the spatial system (address points with unit numbers, grant flag) | Optional, recommended | `.csv`/`.xlsx` | address id, house number, street, unit, OLM/serving area | detect premises not served, unit completeness | (planned: same as DXF address coverage) | coverage relies on DXF address points |
 
 ## DWG handling
 
-The DWG is AutoCAD 2018-format (AC1032), saved by AutoCAD 2020 / Map 3D, written by the
-SpatialNet DWG filer. The tool contains a read-only container reader that recovers the
-text strings (enough for identifier cross-checks: it found every closure that appears in
-the reports and in the reference lists) but it does not decode entities, so it cannot
-pair attribute tags with values or read geometry.
+The spatial-system export is an AutoCAD 2018-format DWG (AC1032) written by the SpatialNet
+DWG filer. The tool reads it directly, with no AutoCAD or converter:
 
-**Supported export for full content (DXF):**
+* `dwg_container.py` decrypts the file header and decompresses the sections;
+* `dwg_objects.py` decodes the objects the model needs (layers, block names, INSERT with
+  attributes, LWPOLYLINE/LINE, TEXT/MTEXT) and skips everything else by size. Both
+  validation drawings decoded with **0 errors** (43,189 and 70,399 objects, 2–4 s).
+  AC1024/AC1027 use the same layout and are attempted; older versions are refused with a
+  message. If more than 1 % of objects fail to decode, the drawing is not used for
+  Fiber Splice (`DRAWING_MODEL_UNRELIABLE`) and only the identifier scan runs.
+* The block names, attribute tags, layer names and tolerances are in the `[drawing]`
+  section of the configuration, so another export style is a configuration change.
 
-1. AutoCAD / Map 3D / Civil 3D: open the DWG → `SAVEAS` → *AutoCAD 2018 DXF (*.dxf)*.
-   Or, without AutoCAD: free **ODA File Converter** (Windows) – input folder with the DWG,
-   output version *ACAD2018*, output type *DXF*.
-2. Give the `.dxf` to the tool (*Design drawing*).
-3. Preserved: text, MTEXT, block names, **block attribute tags and values** (closure
-   `NAME`, address points `STREET_NUMBER`/`STREET_NAME`, `TAP_ID`, `NODE`, …), layers, geometry.
-   Lost: Map 3D *object data* tables and SpatialNet database links (not part of DXF). If
-   address or asset attributes are held as object data rather than block attributes,
-   export them separately (Map 3D `MAPEXPORT` to SHP/CSV, or directly from the spatial system).
-
-The DXF path is implemented and tested with synthetic drawings; it has **not** been run
-on the reference drawing because no DWG→DXF converter was available in the build
-environment.
+A DXF (AutoCAD `SAVEAS` → *AutoCAD 2018 DXF*, or the free ODA File Converter) is read with
+`ezdxf` and gives the same model. Map 3D object data and SpatialNet database links are not
+in the DWG/DXF block attributes and are not used.
 
 ## New-region export checklist
 
@@ -69,9 +68,11 @@ Before running the tool for a region, obtain:
       segments and moved taps between hub and downstream reports).
 - [ ] System-exported reports only – no hand-made "Fiber Optic Splice Guide" sheets.
 - [ ] Report file names = splice names; one report per closure (no copies).
-- [ ] Optional: design drawing as **DXF** (see above) for the cross-check.
+- [ ] **Design drawing** of the same revision (DWG as exported, or DXF), covering every
+      OLM area: closures, tap enclosures with pigtails, cables, address points, drop symbols.
 - [ ] Optional: premise/address export with unit numbers for coverage checks.
 - [ ] Project file-name prefix (e.g. `<job number>_<area name>`), and a regional config if
       naming conventions differ (splitter naming, power-port wording, address prefixes).
-- [ ] Decide, with the engineering lead, whether any inference rules (`FS-CABLE-END`,
-      `FS-BREAK-POINT`) are acceptable without per-row review for this project.
+- [ ] Decide, with the engineering lead, whether the evidence-based inference rules
+      (`FS-CABLE-END`, `FS-BREAK-POINT`, `FS-TAP-CABLE`, `FS-DRAWING`, ...) are acceptable without
+      per-row review for this project (`config/desk_study_acceptance.toml` is a starting point).

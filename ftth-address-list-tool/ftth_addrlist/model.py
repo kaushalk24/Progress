@@ -184,6 +184,8 @@ class OutputRow:
     trace: list[str] = field(default_factory=list)
     issues: list[Issue] = field(default_factory=list)
     needs_reports: list[str] = field(default_factory=list)   # closure reports that would confirm this row
+    route: list[str] = field(default_factory=list)           # closures the fibre trace passed, in order
+    trace_end: dict | None = None                            # where/how the fibre trace stopped
 
     @property
     def status(self) -> str:

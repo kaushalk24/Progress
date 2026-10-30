@@ -20,7 +20,7 @@ class App(tk.Tk):
         ("out", "Output folder *", "dir"),
         ("prefix", "File name prefix (e.g. 123456_Example City ST)", "text"),
         ("olm", "OLM (blank = all found)", "olm"),
-        ("drawing", "Design drawing (.dxf / .dwg) - optional cross-check", "file"),
+        ("drawing", "Design drawing (.dwg / .dxf) - recommended", "file"),
         ("config", "Regional config (.toml) - optional", "file"),
         ("overrides", "Approved overrides (.csv) - optional", "file"),
         ("reference", "Completed workbooks to compare - optional", "dir"),

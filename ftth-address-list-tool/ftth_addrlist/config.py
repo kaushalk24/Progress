@@ -63,6 +63,10 @@ def _validate(cfg: dict) -> None:
         raise ConfigError(f"colors.abbreviations missing entries for {missing}")
     if cfg["fiber_splice"]["missing_report_policy"] not in ("provisional", "unresolved"):
         raise ConfigError("fiber_splice.missing_report_policy must be 'provisional' or 'unresolved'")
+    hv = cfg["fiber_splice"].get("hub_value_sections", "all")
+    if hv not in ("all", "feeder", "feeder_and_first_distribution", "none"):
+        raise ConfigError("fiber_splice.hub_value_sections must be 'all', 'feeder', "
+                          "'feeder_and_first_distribution' or 'none'")
 
 
 def resolve_tool_path(p: str) -> Path:

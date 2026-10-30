@@ -131,9 +131,29 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
         input_meta.append({"file": Path(drawing).name, "format": "drawing", "closure": "", "prepared_on": "",
                            "sha256": sha256(Path(drawing)), "bytes": Path(drawing).stat().st_size})
 
+    design = None
+    if drawing and cfg["drawing"].get("resolve_fiber_splice", True):
+        from .design import load_design
+        design, des_issues = load_design(Path(drawing), cfg)
+        global_issues += des_issues
+        for i in des_issues:
+            if i.code in ("DRAWING_MODEL", "DRAWING_MODEL_UNREADABLE", "DRAWING_MODEL_UNRELIABLE"):
+                log(f"Drawing model: {i.message}")
+
+    built = {olm: Builder(net, cfg).build(olm) for olm in targets}
+    if design is not None:
+        # every OLM of the drawing takes part, so closures confirmed for one OLM are not offered to another
+        from .drawing_splice import address_hints, resolve_from_drawing
+        everyone = list(built.values()) + [Builder(net, cfg).build(o) for o in found if o not in built]
+        ds_issues = resolve_from_drawing(everyone, net, design, cfg)
+        address_hints(everyone, design)
+        global_issues += ds_issues
+        for i in ds_issues:
+            log(i.message)
+
     outcomes, results, comparisons = [], [], []
     for olm in targets:
-        res: OlmResult = Builder(net, cfg).build(olm)
+        res: OlmResult = built[olm]
         res.issues = _relevant_issues(global_issues, res) + res.issues
         if ov_rows or ov_issues:
             res.issues += ov_issues + apply_overrides(res, ov_rows)

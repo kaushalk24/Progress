@@ -95,7 +95,8 @@ def usage(n: int) -> str:
 
 
 def build_network(folder: Path, *, hub_extra: list[dict] | None = None, skip: set[str] = frozenset(),
-                  tst4_extra: list[dict] | None = None) -> Path:
+                  tst4_extra: list[dict] | None = None, hub_segments_extra: list[tuple] = (),
+                  tst2_extra: list[dict] | None = None, tst2_segments_extra: list[tuple] = ()) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     term = lambda n: f"MAX10 Enclosure(M Bulk): TST-R-{n} MAIN ST"
     hub_c = [
@@ -116,6 +117,7 @@ def build_network(folder: Path, *, hub_extra: list[dict] | None = None, skip: se
             (f"{FEEDER}: Seg1", 24, f"OLM Housing: {OLM}", f"Splice Case: {HUB}", "Underground"),
             (f"{POWER}: Seg1", 4, f"Splice Case: {HUB}", "MAX10 Enclosure(M Bulk): TST-R01-POWER TAP", "Pigtail"),
             (f"{CAB}: Seg1", 12, f"Splice Case: {HUB}", "Splice Case: TST-00002", "Underground"),
+            *hub_segments_extra,
         ], hub_c, devices=[("PLC COUPLER 64 1 FE0-F1PLC64", 65)])
     # TST-00002: fibre 3 to the tap pigtail, fibres 1,2,4,5,6 continue
     c2 = [{"a": cable_side(f"{CAB}: Seg1", 3), "b": cable_side(f"{PIG}: Seg1", 1), "usage": usage(100),
@@ -123,11 +125,13 @@ def build_network(folder: Path, *, hub_extra: list[dict] | None = None, skip: se
     for fib, u in ((1, f"{OLM} OLM TRANSPORT RETURN"), (2, f"{OLM} OLM TRANSPORT FORWARD"), (4, usage(200)),
                    (5, usage(300)), (6, usage(400))):
         c2.append({"a": cable_side(f"{CAB}: Seg1", fib), "b": cable_side(f"{CAB}: Seg2", fib), "usage": u})
+    c2 += tst2_extra or []
     if "TST-00002" not in skip:
         write_report(folder / "TST-00002.xlsx", "TST-00002", [
             (f"{CAB}: Seg1", 12, f"Splice Case: {HUB}", "Splice Case: TST-00002", "Underground"),
             (f"{CAB}: Seg2", 12, "Splice Case: TST-00002", "Splice Case: TST-00003", "Underground"),
             (f"{PIG}: Seg1", 4, "Splice Case: TST-00002", "MAX10 Enclosure(M Bulk): TST-R-100 MAIN ST", "Pigtail"),
+            *tst2_segments_extra,
         ], c2)
     # TST-00004 (TST-00003 has no report): fibre 4 continues with the same circuit, fibre 5 broken from TST-00003
     c4 = [{"a": cable_side(f"{CAB}: Seg3", 4), "b": cable_side(f"{CAB}: Seg4", 4), "usage": usage(200)},
