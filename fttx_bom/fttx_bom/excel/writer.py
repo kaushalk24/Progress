@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import openpyxl
+from openpyxl.formula.translate import Translator
 from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -46,10 +47,42 @@ class WriteResult:
     template_sheets: list[str] = field(default_factory=list)
     template_snapshot: dict[str, object] = field(default_factory=dict)  # B..G cells below the header
     template_rows: list[tuple[int, str, str]] = field(default_factory=list)
+    formula_repairs: list[str] = field(default_factory=list)
+    formulas_replaced: list[str] = field(default_factory=list)
 
 
 def area_label(net: str, area: str) -> str:
     return f"{net} {'Grant' if area == GRANT else 'Non Grant'}"
+
+
+def area_columns(ws, header_row: int, first_col: int, max_scan: int = 24) -> list[str]:
+    """Area (Grant / Non-Grant) column letters = the contiguous non-empty header cells after
+    'Total Quantity' (the Credit River workbook has 8, the blank per-OLM template has 4)."""
+    out = []
+    for c in range(first_col, first_col + max_scan):
+        v = ws.cell(header_row, c).value
+        if v is None or not str(v).strip():
+            break
+        out.append(get_column_letter(c))
+    return out
+
+
+def template_area_count(template: Path, sheet: str) -> int:
+    """Number of area columns in the template, read cheaply (read-only, header rows only)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        wb = openpyxl.load_workbook(template, read_only=True)
+        rows = list(wb[sheet].iter_rows(min_row=1, max_row=30, max_col=40, values_only=True))
+        wb.close()
+    for row in rows:
+        vals = [str(v or "").strip() for v in row]
+        if len(vals) > 1 and vals[1].lower() == "part number" and "total quantity" in [v.lower() for v in vals]:
+            i = [v.lower() for v in vals].index("total quantity") + 1
+            n = 0
+            while i < len(vals) and vals[i]:
+                n, i = n + 1, i + 1
+            return n
+    raise ValueError(f"header row with 'Part Number' / 'Total Quantity' not found in {sheet}")
 
 
 def find_rows(ws, rules: list[Rule], header_row: int) -> tuple[dict[str, int], list[str]]:
@@ -92,11 +125,13 @@ def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: di
     if header_row is None:
         raise ValueError("template header row ('Part Number' in column B) not found")
     c0 = column_index_from_string(cfg["first_data_col"])
-    ncol = cfg["max_columns"]
+    letters = area_columns(ws, header_row, c0)
+    if not letters:
+        raise ValueError("no area columns found after 'Total Quantity' in the template header")
     cols = tk.columns
-    if len(cols) > ncol:
-        raise ValueError(f"{len(tk.networks)} networks need {len(cols)} area columns; template has {ncol}. Run networks in groups of {ncol // 2}.")
-    letters = [get_column_letter(c0 + i) for i in range(ncol)]
+    if len(cols) > len(letters):
+        raise ValueError(f"{len(tk.networks)} networks need {len(cols)} area columns; template has {len(letters)}. "
+                         f"Run one OLM per BOM (the CLI does this automatically).")
     res.columns = {col: letters[i] for i, col in enumerate(cols)}
 
     # header text
@@ -130,6 +165,22 @@ def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: di
                 res.cleared.append(f"{L}{r}={v!r}")
                 cell.value = None
 
+    # template formulas in the area columns must be the same formula shifted per column; the blank
+    # per-OLM template has e.g. I28 =SUM(I21:I22) where H28 =SUM(H19:H20)*2 - repair from the first column
+    for rule in rules:
+        r = rows.get(rule.key)
+        if r is None or rule.status != "TEMPLATE_FORMULA":
+            continue
+        base = ws[f"{letters[0]}{r}"].value
+        if not (isinstance(base, str) and base.startswith("=")):
+            continue
+        for L in letters[1:]:
+            want = Translator(base, origin=f"{letters[0]}{r}").translate_formula(f"{L}{r}")
+            cell = ws[f"{L}{r}"]
+            if cell.value != want:
+                res.formula_repairs.append(f"{rule.key} {L}{r}: {cell.value!r} -> {want!r}")
+                cell.value = want
+
     for rule in rules:
         r = rows.get(rule.key)
         if r is None or rule.status == "TEMPLATE_FORMULA":
@@ -144,6 +195,8 @@ def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: di
             v, note = evaluate(rule, tk, net, area)
             vals[(net, area)] = (v, note)
             if rule.write and v is not None:
+                if isinstance(cell.value, str) and cell.value.startswith("=") and not CONST_FORMULA.match(cell.value.replace(" ", "")):
+                    res.formulas_replaced.append(f"{rule.key} {L}{r}: template {cell.value} -> {v:g}")
                 cell.value = int(v) if float(v).is_integer() else v
             else:
                 if cell.value is not None:
@@ -172,37 +225,38 @@ def _write_transport(wb, tk, cfg, cols, res):
         res.issues.append("Transport BOM header 'Total Quantity' not found")
         return
     first = start + 1
-    for i in range(8):
-        ws.cell(hr, first + i).value = area_label(*cols[i]) if i < len(cols) else None
+    letters = area_columns(ws, hr, first)
+    if len(letters) < len(cols):
+        res.issues.append(f"Transport BOM has {len(letters)} area columns for {len(cols)} needed - extra columns not written")
+    for i, L in enumerate(letters):
+        ws[f"{L}{hr}"].value = area_label(*cols[i]) if i < len(cols) else ws[f"{L}{hr}"].value
     parts = {p.upper() for p in t["rows_per_olm"]}
     for r in range(hr + 1, ws.max_row + 1):
         b = str(ws.cell(r, 2).value or "").strip().upper()
         if b in parts:
-            for i in range(8):
-                c = ws.cell(r, first + i)
-                c.value = int(tk.get(t["value"], *cols[i], 0)) if i < len(cols) else None
+            for i, L in enumerate(letters):
+                ws[f"{L}{r}"].value = int(tk.get(t["value"], *cols[i], 0)) if i < len(cols) else None
 
 
 def _write_jumpers(wb, tk, cfg, cols, res):
+    """Jumper Calculator: one block per area column. Blocks are found by their 'Splitters Required'
+    header (column C); the label is the row above, the houses-passed cell (column B) the row below."""
     j = cfg.get("jumper_sheet")
     if not j or j["sheet"] not in wb.sheetnames:
         res.issues.append("jumper sheet missing in template")
         return
     ws = wb[j["sheet"]]
-    lc = column_index_from_string(j["label_col"])
-    for i in range(j["blocks"]):
-        r = j["first_label_row"] + i * j["block_rows"]
-        label_cell = ws.cell(r, lc)
-        houses = ws.cell(r + j["houses_offset"], lc)
-        if not str(label_cell.value or "").strip() or "cabinet" in str(label_cell.value).lower():
-            res.issues.append(f"Jumper Calculator block {i + 1} at row {r} has unexpected label {label_cell.value!r}")
-            continue
+    blocks = [r for r in range(1, ws.max_row + 1) if str(ws.cell(r, 3).value or "").strip().lower() == "splitters required"]
+    if len(blocks) < len(cols):
+        res.issues.append(f"Jumper Calculator has {len(blocks)} blocks for {len(cols)} area columns")
+    for i, hr in enumerate(blocks):
+        label_cell, houses = ws.cell(hr - 1, 2), ws.cell(hr + 1, 2)
         if i < len(cols):
             net, area = cols[i]
             label_cell.value = f"{net} {'Grant' if area == GRANT else 'Non-Grant'}"
             houses.value = int(tk.get("passings", net, area, 0))
-        else:
-            label_cell.value = "(unused)"
+        elif isinstance(houses.value, (int, float)) and houses.value:
+            res.cleared.append(f"Jumper Calculator B{hr + 1}={houses.value!r} (unused block)")
             houses.value = 0
 
 

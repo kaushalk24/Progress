@@ -21,7 +21,7 @@ from .engine.rules import CONFIG_DIR, load_rules
 from .engine.takeoff import build_takeoff
 from .excel.reports import compare, read_reference, write_audit, write_discrepancies
 from .excel.verify import verify
-from .excel.writer import write_bom
+from .excel.writer import template_area_count, write_bom
 from .extract.backends import ExtractionError, load_drawing
 from .inputs.address_list import read_address_lists
 from .inputs.splice_reports import read_splice_reports
@@ -82,6 +82,22 @@ def run(args) -> int:
 
     proj = project_from_filename(Path(args.dwg).name)
     project = {"name": args.project_name or proj["name"], "number": args.project_number or proj["number"], "system": args.system or ""}
+    n_area = template_area_count(template, cfg["sheet"])
+    if len(networks) * 2 <= n_area:
+        groups = [networks]
+    else:
+        print(f"template has {n_area} area columns: writing one BOM per OLM ({len(networks)} files)")
+        groups = [[n] for n in networks]
+    ref = read_reference(Path(args.reference), cfg["sheet"], rules) if args.reference else None
+    worst = 0
+    for group in groups:
+        worst = max(worst, _write_group(args, group, tk.subset(group), drawing, cls, reports, al_files, template,
+                                        rules, cfg, project, out, ref))
+    print(f"elapsed   : {time.time() - t0:.1f}s")
+    return worst
+
+
+def _write_group(args, networks, tk, drawing, cls, reports, al_files, template, rules, cfg, project, out, ref) -> int:
     tag = networks[0] if len(networks) == 1 else networks[0] + "".join("-" + n.split("-")[-1] for n in networks[1:])
     prefix = f"{project['number']}_{tag}" if project["number"] else tag
     bom_path = out / f"{prefix}_FINAL_BOM.xlsx"
@@ -94,13 +110,11 @@ def run(args) -> int:
             expected[(rule.key,)] = sum(vals) if vals else None
     ver = verify(res, expected, out / ".work", recalc=not args.no_recalc)
 
-    ref = comp = None
-    if args.reference:
-        ref = read_reference(Path(args.reference), cfg["sheet"], rules)
+    comp = None
+    if ref is not None:
         comp = compare(rules, res, ref, tk)
         write_discrepancies(out / f"{prefix}_BOM_DISCREPANCIES.xlsx", comp, ref, tk)
 
-    trows = res.template_rows
     meta = {
         "Generated": dt.datetime.now().isoformat(timespec="seconds"),
         "Tool version": __version__,
@@ -111,6 +125,9 @@ def run(args) -> int:
         "Address lists": ", ".join(str(p) for p in al_files) or "none",
         "Splice reports": f"{len(reports)} files",
         "Template": str(template),
+        "Template area columns": ", ".join(res.columns.values()),
+        "Template formulas repaired": "; ".join(res.formula_repairs) or "none",
+        "Template formulas replaced by computed values": "; ".join(res.formulas_replaced) or "none",
         "Reference BOM": args.reference or "none (no independent reference - quantities are internally checked only)",
         "Networks": ", ".join(networks),
         "Network boundaries found": ", ".join(cls.networks) or "single-network drawing",
@@ -118,11 +135,10 @@ def run(args) -> int:
         "Cable segments": len(tk.cables),
         "Writer issues": "; ".join(res.issues) or "none",
         "Reference constants cleared from template": len(res.cleared),
-        "_census": dict(drawing.census),
-        "_block_census": drawing.block_census,
     }
-    summary = write_audit(out / f"{prefix}_BOM_AUDIT.xlsx", tk, rules, res, ver, {k: v for k, v in meta.items() if not k.startswith("_")} | {"_census": meta["_census"], "_block_census": meta["_block_census"]},
-                          cls, reports, ref, comp, trows)
+    summary = write_audit(out / f"{prefix}_BOM_AUDIT.xlsx", tk, rules, res, ver,
+                          meta | {"_census": dict(drawing.census), "_block_census": drawing.block_census},
+                          cls, reports, ref, comp, res.template_rows)
 
     print(f"FINAL BOM : {bom_path}")
     print(f"AUDIT     : {out / f'{prefix}_BOM_AUDIT.xlsx'}")
@@ -132,6 +148,8 @@ def run(args) -> int:
         print(f"DISCREP.  : {out / f'{prefix}_BOM_DISCREPANCIES.xlsx'}")
         print(f"reference : area cells {sum(x['status'] == 'MATCH' for x in cells)}/{len(cells)} match, "
               f"network totals {sum(x['status'] == 'MATCH' for x in tots)}/{len(tots)} match")
+    if res.formula_repairs:
+        print(f"template  : {len(res.formula_repairs)} inconsistent template formulas repaired (see audit)")
     print("coverage  : " + ", ".join(f"{k}={v}" for k, v in sorted(summary["coverage"].items())))
     nfail = sum(1 for c in tk.checks if c.status == "FAIL")
     print(f"checks    : engine FAIL={nfail} WARN={sum(1 for c in tk.checks if c.status == 'WARN')}; "
@@ -141,7 +159,6 @@ def run(args) -> int:
             print(f"  FAIL {c.name}: {c.detail}")
     for c in ver.failed:
         print(f"  FAIL {c[0]}: {c[2]}")
-    print(f"elapsed   : {time.time() - t0:.1f}s")
     return 1 if ver.failed else 0
 
 

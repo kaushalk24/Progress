@@ -161,7 +161,8 @@ def write_audit(path: Path, tk: Takeoff, rules: list[Rule], res: WriteResult, ve
 
     ws = _sheet(wb, "Summary", ["Item", "Value"], {1: 48, 2: 110})
     for k, v in meta.items():
-        ws.append([k, str(v)])
+        if not k.startswith("_"):
+            ws.append([k, str(v)[:32000]])
     ws.append([])
     ws.append(["COVERAGE (template material lines)", ""])
     ws.append(["Total material lines in template", sum(cov.values())])

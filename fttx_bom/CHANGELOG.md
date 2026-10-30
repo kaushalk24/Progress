@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 - FX_DROPS / CalcFTG routines, blank per-OLM template
+- **Drop footage** (row 11) now computed from the FX_DROPS lines on `RTE_SpatialNet_UGDROP` (ped edge to address PED, CX1-FTG-N2 length). Each drop follows the address it serves. The row carries Non-Grant drops only, matching the reference "total - grant"; grant drops are shown in the audit. If a network has no drop lines, the row is left blank with a "run FXAUTO" warning. NMK-R03 Non-Grant 52,752 vs reference 52,678 (0.14%); DMI-R15 222 drops = 222 passings, 36,117 ft = label sum.
+- **Splice trays**: trays per location ROUNDUP(splices/48 or /24), then 2-tray packages pooled per column. Reproduces the reference 450D R02 4 / R04 4 / R05 5 and 450B 1/1/2 (R03 5 vs 4).
+- **MAX10 +4 upgrade kits**: need-based (a kit per 4 passings a ped feeds above its 4 stock ports, HC/CC association as in FX_DROPS). No ped in NMK or DMI feeds more than 2, so 0. The reference's 44/63 and the template's `=I19` are a blanket policy; flagged for confirmation.
+- **Blank per-OLM template** (4 area columns): area columns are detected from the header. The CLI writes one BOM per OLM when the job has more networks than columns. Transport BOM columns and Jumper Calculator blocks are detected by structure.
+- Template formulas that are inconsistent across area columns are repaired from the first column and logged (new template: I-K28 summed the GOAT peds, I-K29 was x2). Template formulas replaced by computed values are logged (SFP, splitters, power IFs, MAX10 upgrade).
+- A per-network value that was not computed now stays blank instead of 0.
+- NMK reconciliation: 292/360 cells, 156/180 network totals.
+
 ## 0.2.0 - rules from the SME BOM walkthrough (see SME_MEETING_NOTES.md)
 - Splice trays (450B/450D) now computed: per location ROUNDUP(ROUNDUP(fusion splices / 24 or 48) / 2) packages. NMK: R02, R04 exact; R03/R05 one package higher than the reference (reference pools small locations).
 - SFP = ROUNDUP(Jumper Calculator splitters / 2) per column (identical on NMK; DMI-R15 now 5 instead of 8).

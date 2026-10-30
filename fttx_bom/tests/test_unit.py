@@ -152,3 +152,27 @@ def test_rule_evaluation_never_silent_zero():
     assert v is None and "not computed" in note
     v, note = evaluate(Rule(None, "x", "2*missing_key", "EA", "VERIFIED", True, "", ""), tk, "N", GRANT)
     assert v is None and "missing" in note
+
+
+def test_template_formula_repair_and_area_columns():
+    # regression: blank per-OLM template has I28 =SUM(I21:I22) while H28 =SUM(H19:H20)*2
+    import openpyxl
+    from fttx_bom.excel.writer import area_columns
+    from openpyxl.formula.translate import Translator
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    for c, v in zip("BCDEFGHIJKL", ["Part Number", "", "", "", "", "Total Quantity", "Cabinet Name", "Cabinet Name", "Cabinet Name", "Cabinet Name", None]):
+        ws[f"{c}5"] = v
+    assert area_columns(ws, 5, 8) == ["H", "I", "J", "K"]
+    assert Translator("=SUM(H19:H20)*2", origin="H28").translate_formula("I28") == "=SUM(I19:I20)*2"
+
+
+def test_takeoff_subset_per_olm():
+    tk = Takeoff(["A-R01", "A-R02"])
+    tk.add("olm", "A-R01", GRANT, 1, "EA", "")
+    tk.add("olm", "A-R02", GRANT, 1, "EA", "")
+    tk.check("drops vs passings A-R02", False, "x", warn=True)
+    sub = tk.subset(["A-R01"])
+    assert sub.columns == [("A-R01", GRANT), ("A-R01", NONGRANT)]
+    assert sub.total("olm") == 1 and not sub.checks

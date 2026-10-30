@@ -62,7 +62,9 @@ def evaluate(rule: Rule, tk: Takeoff, net: str, area: str) -> tuple[float | None
     if IDENT.match(rule.value):
         if rule.value not in known:
             return None, f"takeoff key '{rule.value}' not computed"
-        return tk.get(rule.value, net, area, 0), ""
+        if (rule.value, net, area) not in tk.q:
+            return None, f"'{rule.value}' not computed for {net}"
+        return tk.get(rule.value, net, area), ""
     env = _Env(tk.column(net, area), known)
     val = eval(rule.value, {"__builtins__": {}}, env)  # expressions come from the trusted rule catalogue
     if env.missing:

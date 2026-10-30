@@ -113,10 +113,26 @@ def test_enclosures(nmk):
 
 
 def test_splice_trays_sme_rule(nmk):
-    # SME walkthrough: per location ROUNDUP(ROUNDUP(splices/48)/2); R02 and R04 reproduce the reference "3+1"
+    # SME: trays per location ROUNDUP(splices/48 or /24); 2-tray packages pooled per column.
+    # Reproduces reference 450D R02 4, R04 4, R05 5 (R03 5 vs 4) and 450B 1/1/2 exactly.
     tk = nmk[2]
-    assert nettot(tk, "tray_450d") == [4, 5, 4, 6]
-    assert nettot(tk, "tray_450b") == [0, 1, 1, 3]
+    assert nettot(tk, "trays_450d") == [7, 9, 7, 9]
+    assert nettot(tk, "tray_450d") == [4, 5, 4, 5]
+    assert nettot(tk, "tray_450b") == [0, 1, 1, 2]
+
+
+def test_drops_fx_drops_lines(nmk):
+    # FX_DROPS drop lines exist for R03 and R05 only; R03 Non-Grant reproduces the reference (52,678) within 0.2%
+    tk = nmk[2]
+    assert tk.get("drop_ft", "NMK-R03", NONGRANT) == pytest.approx(52678, rel=0.002)
+    assert ("drop_ft_bom", "NMK-R02", NONGRANT) not in tk.q  # no drops drawn -> not computed, never 0
+    assert any(c.name == "drops vs passings NMK-R03" and c.status == "PASS" for c in tk.checks)
+
+
+def test_max10_upgrades_need_based(nmk):
+    tk = nmk[2]
+    assert max(tk.get("ped_ports_max", n, a) for n in NETS for a in (GRANT, NONGRANT)) <= 4
+    assert nettot(tk, "max10_upgrades") == [0, 0, 0, 0]
 
 
 # ---- cable --------------------------------------------------------------------
@@ -159,6 +175,18 @@ def test_dmi_internal_consistency(dmi):
     assert any(c.name == f"SFP vs designed PONs {n}" and c.status == "WARN" for c in tk.checks)
     assert tk.total("olm", n) == 1
     assert [c for c in tk.checks if c.status == "FAIL"] == []
+
+
+def test_dmi_drops(tmp_path_factory):
+    p = DATA / "dwg/386021_MelcherDallas_BEAD_FTTH_DMI-R15_DWG_drops.dwg"
+    if not p.exists():
+        pytest.skip("drop-run DMI drawing not supplied")
+    d = load_drawing(p, tmp_path_factory.mktemp("cache"))
+    als = read_address_lists([DATA / "dmi/386021_MelcherDallas_BEAD_FTTH_DMI-R15_Address List.xlsx"])
+    cls = build_classifier(d, CONV, ["DMI-R15"])
+    tk = build_takeoff(d, CONV, cls, ["DMI-R15"], als, read_splice_reports([DATA / "dmi/splice"]))
+    assert tk.total("drop_count", "DMI-R15") == 222  # one drop per served (non-MDU) address
+    assert tk.total("drop_ft", "DMI-R15") == pytest.approx(36117, abs=5)  # = sum of CX1-FTG-N2 drop labels
 
 
 @pytest.mark.slow

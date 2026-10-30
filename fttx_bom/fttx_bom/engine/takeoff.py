@@ -99,6 +99,16 @@ class Takeoff:
     def column(self, net, area) -> dict[str, float]:
         return {k: q.value for (k, n, a), q in self.q.items() if n == net and a == area}
 
+    def subset(self, nets: list[str]) -> "Takeoff":
+        """View of the takeoff restricted to some networks (one BOM per OLM)."""
+        others = [n for n in self.networks if n not in nets]
+        sub = Takeoff(list(nets))
+        sub.q = {k: v for k, v in self.q.items() if k[1] in nets}
+        sub.checks = [c for c in self.checks if not any(o in c.name or o in c.detail for o in others)]
+        sub.cables = [c for c in self.cables if c.network in nets]
+        sub.unassigned = list(self.unassigned)
+        return sub
+
     def check(self, name, ok, detail, warn=False):
         self.checks.append(Check(name, "PASS" if ok else ("WARN" if warn else "FAIL"), detail))
 
@@ -552,8 +562,8 @@ def enclosures(d, conv, cls, tk: Takeoff, reports: list[SpliceReport]):
     for ins in _blocks(d, conv, "splice_point"):
         pos.setdefault(ins.attr("NAME").upper(), ins.pt)
     if reports:
-        tk.ensure("tray_450b", "PKG", "per enclosure ROUNDUP(ROUNDUP(splices/24)/2)")
-        tk.ensure("tray_450d", "PKG", "per enclosure ROUNDUP(ROUNDUP(splices/48)/2)")
+        for L in "bd":
+            tk.ensure(f"trays_450{L}", "EA", "per enclosure ROUNDUP(splices / tray capacity)")
     for letter in "ABCD":
         tk.ensure(f"fosc450{letter.lower()}", "EA", "splice report Enclosure Type")
         tk.ensure(f"fosc450{letter.lower()}_splices", "EA", "fusion splices in enclosure (splice report)")
@@ -584,11 +594,11 @@ def enclosures(d, conv, cls, tk: Takeoff, reports: list[SpliceReport]):
             tk.add(k + "_splices", net, area, r.fusion_splices, "EA", "fusion splices in enclosure", [r.name])
             cap = TRAY_CAPACITY.get(m.group(1).upper())
             if cap:
-                # SME (BOM walkthrough): per splice location, trays = ROUNDUP(splices / tray capacity);
-                # trays are ordered 2 per package -> packages = ROUNDUP(trays / 2), location by location
-                pk = math.ceil(math.ceil(r.fusion_splices / cap) / 2) if r.fusion_splices else 0
-                tk.add(f"tray_450{m.group(1).lower()}", net, area, pk, "PKG",
-                       f"per enclosure ROUNDUP(ROUNDUP(splices/{cap})/2)", [f"{r.name}:{r.fusion_splices}"])
+                # SME walkthrough: trays per splice location = ROUNDUP(splices / tray capacity);
+                # packages of 2 trays are pooled per column (spare tray of a package goes to another location)
+                trays = math.ceil(r.fusion_splices / cap) if r.fusion_splices else 0
+                tk.add(f"trays_450{m.group(1).lower()}", net, area, trays, "EA",
+                       f"per enclosure ROUNDUP(splices/{cap})", [f"{r.name}:{r.fusion_splices} splices -> {trays} trays"])
         if net:
             tk.add("fusion_splices", net, area, r.fusion_splices, "EA", "fusion splices (all splice reports)", [r.name])
             for ratio, part in r.couplers:
@@ -660,6 +670,107 @@ def split_ratio(net, reports, address_lists) -> tuple[int | None, str]:
     return None, ""
 
 
+def tray_packages(tk: Takeoff):
+    for L in "bd":
+        if any(k == f"trays_450{L}" for k, _n, _a in tk.q):
+            for n, a in tk.columns:
+                t = tk.get(f"trays_450{L}", n, a, 0)
+                tk.q[(f"tray_450{L}", n, a)] = Qty(f"tray_450{L}", n, a, math.ceil(t / 2), "PKG",
+                                                   "ROUNDUP(sum of per-location trays / 2) - 2 trays per package", [])
+
+
+def max10_upgrades(d, conv, cls, tk: Takeoff):
+    """Upgrade kits (+4 ports) needed where a MAX ped feeds more than its 4 stock ports.
+    Ports used = house count (CX1-COUNT HC within 30 ft) + commercial count (CX1-COMCNT CC within 50 ft),
+    the same association the FX_DROPS routine uses."""
+    hc = [(i.pt, num(i.attr("HC")) or 0) for i in _blocks(d, conv, "house_count")]
+    cc = [(i.pt, num(i.attr("CC")) or 0) for i in _blocks(d, conv, "com_count")]
+    tk.ensure("max10_upgrades", "EA", "MAX peds feeding > 4 passings: ROUNDUP((ports - 4) / 4) kits")
+    tk.ensure("ped_ports_max", "EA", "largest number of passings fed by one MAX ped")
+    for key in ("ped_max10", "ped_max5"):
+        for ins in _blocks(d, conv, key):
+            ports = sum(v for p, v in hc if dist(p, ins.pt) <= 30) + sum(v for p, v in cc if dist(p, ins.pt) <= 50)
+            net, area = cls.network_of(ins.pt, ins.handle), cls.area_of(ins.pt)
+            if not net:
+                continue
+            q = tk.q[("ped_ports_max", net, area)]
+            q.value = max(q.value, ports)
+            if ports > 4:
+                tk.add("max10_upgrades", net, area, math.ceil((ports - 4) / 4), "EA",
+                       "MAX peds feeding > 4 passings", [f"{ins.name}:{ins.handle}:{ports:g}"])
+
+
+def drop_footage(d, conv, cls, tk: Takeoff, address_lists):
+    """Drop footage from the FX_DROPS routine output: straight drop lines on RTE_SpatialNet_UGDROP from
+    the feeding MAX ped to a PED 6.6 ft off the address, labelled with a CX1-FTG-N2 length (rounded).
+    Network and Grant / Non-Grant follow the address the drop serves."""
+    layers = conv["route_layers"]["ug_drop"]
+    drops = [p for p in d.polylines if p.layer in layers and len(p.points) >= 2]
+    labels = [i for i in d.inserts if i.layer in layers and i.name in conv["blocks"]["route_footage"]["names"]]
+    addrs = [i for i in d.inserts if i.name in set(conv["blocks"]["res_address"]["names"] + conv["blocks"]["com_address"]["names"])]
+    if not drops:
+        for n in tk.networks:
+            tk.check(f"drop lines {n}", False, "no drop lines on RTE_SpatialNet_UGDROP - run FX_DROPS (FXAUTO) in AutoCAD before the BOM; drop footage left blank", warn=True)
+        return
+    tk.ensure("drop_ft", "FT", "sum of FX_DROPS drop lengths by served address")
+    tk.ensure("drop_count", "EA", "drop lines")
+    grid = defaultdict(list)
+    for a in addrs:
+        grid[(int(a.pt[0] // 100), int(a.pt[1] // 100))].append(a)
+
+    def near_addr(p):
+        best, bd = None, 1e9
+        gx, gy = int(p[0] // 100), int(p[1] // 100)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for a in grid.get((gx + dx, gy + dy), []):
+                    dd = dist(p, a.pt)
+                    if dd < bd:
+                        best, bd = a, dd
+        return best, bd
+
+    lab_grid = defaultdict(list)
+    for lb in labels:
+        lab_grid[(int(lb.pt[0] // 50), int(lb.pt[1] // 50))].append(lb)
+    for pl in drops:
+        geo = polyline_length(pl.points)
+        (a0, d0), (a1, d1) = near_addr(pl.points[0]), near_addr(pl.points[-1])
+        addr, dd = (a0, d0) if d0 <= d1 else (a1, d1)
+        if addr is None or dd > 25:
+            tk.check("drop without address", False, f"drop {pl.handle} ({geo:.0f} ft) ends > 25 ft from any address block", warn=True)
+            continue
+        # prefer the drawn length label (what the designer sees) when it sits on this drop
+        mid = pl.points[len(pl.points) // 2] if len(pl.points) > 2 else ((pl.points[0][0] + pl.points[-1][0]) / 2, (pl.points[0][1] + pl.points[-1][1]) / 2)
+        L = round(geo)
+        for lb in lab_grid.get((int(mid[0] // 50), int(mid[1] // 50)), []):
+            v = num(lb.attr("FTG"))
+            if v is not None and dist(lb.pt, mid) < 15 and abs(v - geo) <= 1.5:
+                L = v
+                break
+        net = cls.network_of(addr.pt, f"drop:{pl.handle}", strict=True) or cls.network_of(addr.pt, f"drop:{pl.handle}")
+        if not net:
+            continue
+        if addr.name in conv["blocks"]["res_address"]["names"]:
+            area = GRANT if addr.layer == conv["grant_address_layer"] else NONGRANT
+        else:
+            area = cls.area_of(addr.pt)
+        tk.add("drop_ft", net, area, L, "FT", "FX_DROPS drop length, area of the served address", [pl.handle])
+        tk.add("drop_count", net, area, 1, "EA", "drop lines", [pl.handle])
+    for n in tk.networks:
+        cnt = tk.total("drop_count", n)
+        mdu = tk.total("pass_mdu", n)
+        need = tk.total("passings", n) - mdu
+        tk.check(f"drops vs passings {n}", cnt == need,
+                 f"{cnt:g} drop lines vs {need:g} non-MDU passings (FX_DROPS skips MDU addresses)" + ("" if cnt == need else " - run FXMISSING"),
+                 warn=cnt != need)
+        if cnt == 0:
+            continue  # no drops drawn for this network: leave the BOM row "not computed", never 0
+        # reference convention: BOM row carries the Non-Grant drop footage only ("total - grant")
+        tk.q[("drop_ft_bom", n, GRANT)] = Qty("drop_ft_bom", n, GRANT, 0, "FT", "reference convention: grant drops not ordered on this BOM", [])
+        tk.q[("drop_ft_bom", n, NONGRANT)] = Qty("drop_ft_bom", n, NONGRANT, tk.get("drop_ft", n, NONGRANT, 0), "FT",
+                                                 "Non-Grant drop footage (reference: total - grant)", [])
+
+
 def grounding_points(d, conv, cls, tk: Takeoff):
     tk.ensure("grounding_points", "EA", "splice points whose name ends in G")
     for ins in _blocks(d, conv, "splice_point"):
@@ -679,6 +790,9 @@ def build_takeoff(d: Drawing, conv: dict, cls: Classifier, networks: list[str],
     cable_footage(d, conv, cls, tk, networks, reports)
     enclosures(d, conv, cls, tk, reports)
     derived(d, conv, cls, tk, reports, address_lists)
+    tray_packages(tk)
+    max10_upgrades(d, conv, cls, tk)
+    drop_footage(d, conv, cls, tk, address_lists)
     grounding_points(d, conv, cls, tk)
     if cls.nearest_assigned:
         tk.checks.append(Check("objects outside boundaries", "WARN",

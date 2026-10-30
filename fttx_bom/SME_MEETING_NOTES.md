@@ -19,3 +19,24 @@ Transcribed locally with Whisper (small.en). Timestamps refer to the recording. 
 | 13 | [29:56]–[34:00] Final deliverable: **grant address validation report**. Starts from the fiber-drafting grant validation report; add the Non-Grant addresses; remarks for field-verified differences. Grant addresses are never changed (comment only); Non-Grant addresses are corrected in SpatialNet with the comment "followed correct street number". Light yellow = grant, orange = Non-Grant. Filter by OLM. | Not implemented yet: a separate deliverable. Needs the validation-report template. |
 
 Not covered in the meeting: drop footage source, MAX10 +4 upgrade kits, tray pooling policy.
+
+## AutoCAD routines supplied afterwards
+
+- **FX_DROPS_v9.lsp** (`FXPED`, `FXAUTO`, `FXDROP`, `FXMISSING`, `FXLABEL`, `FXCHECK`):
+  - Places a `PED` block 6.6 ft off every address, on the side facing its feeding ped.
+  - Draws one straight drop per address on `RTE_SpatialNet_UGDROP`, from the edge of the feeding MAX5/MAX10 box to that PED.
+  - Labels each drop with a `CX1-FTG-N2` FTG rounded to the nearest foot. Drops longer than 1,500 ft are not drawn.
+  - MDU addresses get no drop. Peds never get more drops than their `CX1-COUNT` house count.
+  - **The tool reads these lines for row 11**, so FXAUTO must be run and saved before the BOM. The tool warns when a network has no drops, or when the drop count differs from the non-MDU passings (the same check as FXMISSING).
+- **CalcFTG_3_1_2.LSP**: pick a closed boundary, then it sums `CX1-FTG-N2` FTG labels fully inside it (window polygon), separated by layer `GRANT FTG` / `NON-GRANT FTG` / `RTE_UGTRENCH`. This is how rows 6-10 were filled. The tool uses the same labels, with the OLM boundary and the Non-Grant polygons standing in for the manual selection.
+
+## Blank BOM template (NewPeds ... FTTH_BOM_1.27.26)
+
+- **One OLM per BOM**, with 4 area columns (H-K). The tool writes one BOM per OLM.
+- **Formula bugs in the template**, repaired and logged in the audit:
+  - I28-K28 `=SUM(x21:x22)` should be `=SUM(x19:x20)*2`.
+  - I29-K29 are `*2` but should be `*1`, as in column H and the reference.
+- **Default formulas the tool overrides** with SME / data-based values (logged):
+  - SFP and 1x64 splitter `=ROUNDUP(x12/64)` per column.
+  - MAX10 upgrade `I23=I19`.
+  - Power-supply `IF(H18…)`.

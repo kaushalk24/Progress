@@ -37,11 +37,20 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Jumper Calculator | Houses passed per column (sheet formulas do the rest) | 930/64/8/32/3 identical |
 | Route miles / UG / aerial footage | Σ `CX1-FTG-N2` FTG labels on `RTE_UGTRENCH` / `RTE_AESTRAND` | INFERRED. Reference rows 6-10 are typed in and use a different method per network. |
 
+## Rules added from the AutoCAD routines and the SME walkthrough (0.3.0)
+
+| BOM line | Rule | Evidence |
+|---|---|---|
+| Total Drop Footage | Sum of FX_DROPS drop lines (`RTE_SpatialNet_UGDROP`, ped box edge to the address PED 6.6 ft off the address, `CX1-FTG-N2` label rounded to the nearest foot). The area follows the served address. The row carries Non-Grant only, matching the reference "total - grant". | R03 0.14% off; DMI 222 drops / 36,117 ft = labels |
+| Route footage (rows 6-10) | `CalcFTG.lsp`: sum of `CX1-FTG-N2` FTG on `RTE_UGTRENCH` (or `GRANT FTG` / `NON-GRANT FTG`) inside the boundary | R02/R03/R05 network totals exact |
+| 450B/450D trays | Trays per location ROUNDUP(fusion splices / 24 or 48); packages = ROUNDUP(sum of trays / 2) per column | 6 of 7 reference network totals |
+| MAX10 +4 upgrade | One kit per 4 passings a MAX ped feeds above 4 (none in these designs) | No ped feeds more than 2 |
+| SFP | ROUNDUP(ROUNDUP(passings/32)/2) per column (SME: Jumper Calculator / 2) | 8/8 |
+| Splitters | Designed count (splice reports). Grant = ROUNDUP(grant/ratio), the rest Non-Grant (SME). The template's per-column ROUNDUP(/64) is overridden. | 8/8 |
+| OLM equipment | Grant column unless the OLM has no grant passings (SME) | 8/8 |
+
 ## Not reproducible from the supplied data (left blank, flagged)
 
-* **Drop footage**: `CX1-DROP` FTG attributes are blank; no drop length source.
-* **450B / 450D trays**: no consistent splices-per-tray rule (see the investigations file).
-* **MAX10 +4 upgrade kits**: engineer decision; no drawing attribute.
 * **Ground wire kits, heat shrink**: the reference left them blank. The audit shows counts as SUGGESTED.
 * **GOAT peds, peds-with-tap, FTP/FST/MST/OTE taps, plenum lateral**: no symbol in these designs.
 

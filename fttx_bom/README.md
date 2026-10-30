@@ -51,6 +51,8 @@ python -m fttx_bom --dwg 386106_Credit_River_MN_FTTH_Combined_DWG.dwg \
   --system "Capital West" --out out/NMK
 ```
 
+Before running: in AutoCAD, run **FXAUTO** (FX_DROPS.lsp) and save, so drop lines exist for the drop-footage row. If the template has fewer area columns than the job needs (the blank template holds one OLM), the tool writes one BOM per OLM.
+
 Networks come from the address-list sheet names (`NMK-R02` ...) unless
 `--networks` is given. The template holds up to 4 networks (8 Grant/Non-Grant
 columns). Exit code 0 means every workbook verification check passed.
