@@ -34,20 +34,23 @@ zip to a pre-release.
 1. Install Python 3.11 or newer from python.org (tick *Add Python to PATH*).
 2. Double-click **`FTTH Address List Tool.bat`**. On first use it installs `openpyxl`.
 3. In the window:
-   * **Splice reports folder** – the folder holding the region's splice reports
-     (sub-folders per OLM are fine; all `.xlsx` files are read). Include the hub
-     report for each OLM **and as many downstream closure reports as possible**.
-   * **Output folder** – where results are written.
-   * **File name prefix** – e.g. `123456_Example City ST`.
-   * **Design drawing** (recommended) – the region's `.dwg` as exported (AutoCAD 2010–2018
-     format) or a `.dxf`. Where the closure reports stop before the tap splice, the drawn
-     network (closures, tap enclosures and pigtails, cables, address points, drop symbols)
-     locates the Fiber Splice closure (PROVISIONAL, rule `FS-DRAWING`, evidence recorded).
-     If the drop routine (FX_DROPS) has been run and checked, its drop lines tie each
-     premise to its ped and closure directly (rule `FS-DROP`) and check every other value.
-   * Optional: regional config, approved overrides CSV, completed workbooks to compare against.
-   * **Scan** lists the OLMs found; leave *OLM* blank to generate all of them.
-4. Click **Generate address list(s)**.
+   * **1 Inputs** – *Splice reports folder* (sub-folders per OLM are fine; include the hub report
+     of each OLM and as many downstream closure reports as possible), *Design drawing* (the
+     `.dwg` as exported – recommended), *Output folder*, *File name prefix* (e.g.
+     `123456_Example City ST`). *Scan reports* lists the OLMs; leave *All OLMs found* to
+     generate every OLM.
+   * **2 Options** – *Regional config*: pick a file from the `config` folder (e.g. *Desk study
+     acceptance*) or browse to one; the line below says what it does and which rules it accepts.
+     *Approved overrides*: the filled-in review worklist. *Completed workbooks to compare*: a
+     finished list, or a folder of them, to measure the result against.
+   * Hover over a field for help. The window remembers the last settings.
+4. Click **Generate address list(s)**. The *Results* tab shows each OLM (FINAL / DRAFT, row counts,
+   match with the completed list); its buttons open the workbook, the review worklist, the
+   exceptions and the reports to request. *Use worklist as overrides* puts the selected worklist in
+   the overrides field for the next run. The *Log* tab has the details.
+
+**Company logo:** put a square PNG named `logo.png` in the `assets` folder of the tool (next to the
+exe in the packaged program); it replaces the built-in logo in the window.
 
 Command line (same options): `run_cli.bat run --reports "<folder>" --out "<folder>" --prefix "<prefix>"`
 (see `python -m ftth_addrlist --help`).

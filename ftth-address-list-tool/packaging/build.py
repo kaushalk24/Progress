@@ -35,6 +35,7 @@ Nothing needs to be installed: Python and all packages are inside this folder.
 Command line / batch:  ftth_addrlist_cli.exe run --reports "<folder>" --out "<folder>" --prefix "<prefix>" --drawing "<file.dwg>"
                        ftth_addrlist_cli.exe --help
 
+Company logo: put a square PNG (256 x 256) as assets\\logo.png - it replaces the built-in logo.
 Settings: config\\default_config.toml (copy it to make a regional config, select it in the window).
 Approvals policy for desk studies: config\\desk_study_acceptance.toml.
 Documentation: docs\\ and README.md.
@@ -62,7 +63,7 @@ def pyinstaller():
 
 
 def copy_support_files(ver: str):
-    for d in ("config", "templates", "docs"):
+    for d in ("config", "templates", "docs", "assets"):
         shutil.copytree(ROOT / d, APP / d, dirs_exist_ok=True)
     shutil.copy2(ROOT / "README.md", APP / "README.md")
     (APP / "HOW TO RUN.txt").write_text(HOW_TO.format(version=ver), encoding="utf-8")
