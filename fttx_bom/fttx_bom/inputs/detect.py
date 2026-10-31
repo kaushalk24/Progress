@@ -21,6 +21,14 @@ from pathlib import Path
 import openpyxl
 
 BOM_SHEET = "OLM SF-8M BOM"
+_BOM_SHEET_RE = re.compile(r"^OLM\b.*\bBOM$", re.I)  # completed BOMs rename it per OLM, e.g. "OLM DMI-R15 BOM"
+
+
+def bom_sheet_name(sheetnames: list[str], preferred: str = BOM_SHEET) -> str | None:
+    """The OLM BOM sheet of a workbook: the template name, else the first 'OLM ... BOM' sheet."""
+    if preferred in sheetnames:
+        return preferred
+    return next((n for n in sheetnames if _BOM_SHEET_RE.match(n.strip())), None)
 GENERATED_MARK = "fttx_bom generated"  # workbook keyword written into every BOM this tool produces
 GENERATED_NAME = re.compile(r"(_FINAL_BOM|_BOM_AUDIT|_BOM_DISCREPANCIES|^BATCH_SUMMARY)\.xlsx$", re.I)
 ZIP_MAX_BYTES = 20 * 1024**3  # total uncompressed size accepted from one zip
@@ -77,10 +85,11 @@ def classify_xlsx(p: Path) -> str:
     except Exception as exc:  # corrupt / password protected
         return f"unknown: cannot open ({exc.__class__.__name__})"
     try:
-        if BOM_SHEET in wb.sheetnames:
+        bom = bom_sheet_name(wb.sheetnames)
+        if bom:
             if GENERATED_MARK in (wb.properties.keywords or ""):
                 return "unknown: a BOM produced by this tool - not used as template or approved BOM"
-            return "bom_completed" if _bom_has_quantities(wb[BOM_SHEET]) else "bom_template"
+            return "bom_completed" if _bom_has_quantities(wb[bom]) else "bom_template"
         ws = wb.worksheets[0]
         rows = []
         with warnings.catch_warnings():

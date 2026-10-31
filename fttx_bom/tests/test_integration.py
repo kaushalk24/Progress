@@ -101,7 +101,10 @@ def test_olm_and_power(nmk):
 def test_splitters_and_sfp(nmk):
     tk = nmk[2]
     assert cols(tk, "splitter_1x64") == [1, 3, 1, 3, 1, 3, 2, 1]
-    assert cols(tk, "pon_ports") == [1, 4, 1, 4, 1, 3, 2, 2]
+    # SME rule (Melcher-Dallas BOM): Non-Grant = ROUNDUP(NG/64), Grant = ROUNDUP(total/64) - Non-Grant
+    assert cols(tk, "pon_ports") == [0, 4, 0, 4, 1, 3, 1, 2]
+    assert sum(cols(tk, "pon_ports")) == 15 == sum(tk.extra["designed_pons"].values())  # one SFP per designed PON
+    assert cols(tk, "pon_ports@jumper_half") == [1, 4, 1, 4, 1, 3, 2, 2]  # Credit River BOM: rounded per column (18)
     assert all(c.status == "PASS" for c in tk.checks if c.name.startswith("splitters vs"))
 
 
@@ -132,7 +135,9 @@ def test_drops_fx_drops_lines(nmk):
 def test_max10_upgrades_need_based(nmk):
     tk = nmk[2]
     assert max(tk.get("ped_ports_max", n, a) for n in NETS for a in (GRANT, NONGRANT)) <= 4
-    assert nettot(tk, "max10_upgrades") == [0, 0, 0, 0]
+    assert nettot(tk, "max10_upgrades@need_based") == [0, 0, 0, 0]
+    # default = blank-template formula (one kit per Non-Grant MAX10), as in the approved Melcher-Dallas BOM
+    assert cols(tk, "max10_upgrades") == [0 if a == GRANT else tk.get("ped_max10", n, a) for n in NETS for a in (GRANT, NONGRANT)]
 
 
 # ---- cable --------------------------------------------------------------------
@@ -170,8 +175,8 @@ def test_dmi_internal_consistency(dmi):
     assert tk.get("pass_res", n, GRANT) == 67  # all GRANTADDRESS blocks served (incl. unnumbered)
     assert tk.total("pass_com", n) == 13
     assert tk.total("splitter_1x32", n) == 7 and tk.total("splitter_1x64", n) == 0  # design uses 1x32
-    # SME rule: SFP = ROUNDUP(ROUNDUP(p/32)/2) per column -> 2 + 3 = 5 for 7 designed 1x32 PONs, flagged
-    assert tk.total("pon_ports", n) == 5
+    # SME rule (approved DMI BOM): Non-Grant ROUNDUP(155/64) = 3, Grant ROUNDUP(222/64) - 3 = 1
+    assert (tk.get("pon_ports", n, GRANT), tk.get("pon_ports", n, NONGRANT)) == (1, 3)
     assert any(c.name == f"SFP vs designed PONs {n}" and c.status == "WARN" for c in tk.checks)
     assert tk.total("olm", n) == 1
     assert [c for c in tk.checks if c.status == "FAIL"] == []
@@ -297,6 +302,40 @@ def test_template_capacity_counts_transport_columns():
         pytest.skip("blank template not in FTTX_TEST_DATA/template2")
     assert template_capacity(tpl, cfg) == 2  # 4 main columns but 2 Transport BOM columns -> one OLM per BOM
     assert template_capacity(DATA / "bom/386106_Credit River MN_FTTH_Combined_BOM.xlsx", cfg) == 8
+
+
+def test_dmi_rf_plant_excluded(dmi):
+    # approved Melcher-Dallas BOM: RF (coax) support structures are not calculated
+    _d, _cls, tk = dmi
+    n = "DMI-R15"
+    assert (tk.get("vault", n, GRANT), tk.get("vault", n, NONGRANT)) == (7, 1)  # 9 drawn, 1 at the RF amplifier
+    assert tk.total("route_aerial_ft", n) == 0  # 512 ft strand carries no fiber
+    rf = {k for k, *_x in tk.extra["rf_structures"]}
+    assert rf == {"vault", "route_aerial_ft"}
+
+
+def test_dmi_duplicate_cable_label_counted_once(dmi):
+    # the approved BOM summed both labels of 'DMI-14001G TO DMI-15204G FC024' (6,467 ft twice)
+    _d, _cls, tk = dmi
+    assert tk.total("cable_024", "DMI-R15") == 140644  # = splice reports
+    assert any(c.name == "duplicate cable label" and "DMI-14001G TO DMI-15204G" in c.detail for c in tk.checks)
+
+
+def test_dmi_approved_bom_reconciliation(dmi):
+    from fttx_bom.engine.rules import load_rules
+    from fttx_bom.excel.reports import read_reference
+
+    path = DATA / "dmi_ref/386021_MelcherDallas_BEAD_FTTH_DMI-R15_BOM.xlsx"
+    if not path.exists():
+        pytest.skip("approved DMI-R15 BOM not in FTTX_TEST_DATA/dmi_ref")
+    cfg, rules = load_rules()
+    ref = read_reference(path, cfg["sheet"], rules)  # sheet is named "OLM DMI-R15 BOM"
+    tk = dmi[2]
+    want = {"FM0-3FE47548AD": "pon_ports", "FE0-F1PLC32": "splitter_1x32", "CBV-HGIB2436": "vault",
+            "FE0-MAX10EXP4": "max10_upgrades", "CBP-MAX10DSM24": "ped_max10", "Residential Count": "pass_res"}
+    for part, key in want.items():
+        for a in (GRANT, NONGRANT):
+            assert (ref.values[part][("DMI-R15", a)] or 0) == tk.get(key, "DMI-R15", a), (part, a)
 
 
 def test_splice_guide_format_parsed():

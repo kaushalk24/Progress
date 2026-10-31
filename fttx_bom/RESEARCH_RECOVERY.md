@@ -162,3 +162,42 @@ Findings 9–19 from the reviewer's final report:
 - **18 OPEN:** learned-evidence key collisions between projects. MINOR; documented.
 
 Tests: `tests/test_review_regressions.py` (12) plus 4 more integration tests. **72 passed** (non-slow).
+
+---
+
+# Task 2 (started 2026-10-31 after 0.5.0): DMI-R15 manual BOM reconciliation
+
+What the user asked for:
+1. Do deep research on the manual DMI-R15 BOM, saved at `$S/inputs/dmi_ref/386021_MelcherDallas_BEAD_FTTH_DMI-R15_BOM.xlsx`. Client data: not committed.
+2. **RF support structures are not calculated.** DMI-R15 also contains an RF (coax) network, and its structures must be excluded.
+3. **The user's Grant/Non-Grant rule:** Non-Grant = everything inside the Non-Grant boundaries; Grant = total − Non-Grant.
+
+Status: started. The steps are to:
+1. inspect the reference;
+2. run DMI with `--reference`;
+3. find the RF structures in the DWG;
+4. test the NG-inside / G = total − NG rule on NMK and DMI;
+5. implement it, test, regenerate, and commit.
+
+## Task 2 checkpoint (code changes done, not yet committed)
+
+**Findings on the DMI manual BOM** (forensic scripts `$S/forensic/d1`–`d11`):
+- **FC024:** the approved BOM double-counts the duplicated label "DMI-14001G TO DMI-15204G" (6,467 ft).
+- **Aerial footage 512 ft:** RF strand with no aerial fiber cable. Excluded.
+- **Vault 3CC8B7:** an RF vault at the amplifier. Excluded, giving 8 vaults.
+- **SFP:** Non-Grant = ROUNDUP(NG/64), Grant = ROUNDUP(total/64) − Non-Grant. This is the user's rule, now the default. It also gives NMK 15 SFP = 15 designed PONs.
+- **MAX10 +4:** the template formula (Non-Grant MAX10) is now the default.
+- **Ground kits:** blank in both approved BOMs, so the line is no longer written (SUGGESTED).
+- **Drops:** the two BOMs disagree. The default is now "both" (Non-Grant inside, Grant = total − Non-Grant), with options nongrant_only and total_nongrant.
+- **UG route:** −1.8%; one 2,374 ft trench has no fiber (WARN TRENCH_NO_FIBER, policy fiber_bearing).
+- **D trays:** 5 in the approved BOM against 4 from the rule. Unexplained.
+- **Bonding jumper and ped bonding kit:** the approved BOM inherits the template's inconsistent column formulas. The tool repairs them.
+
+**Code changes:**
+- renamed BOM sheet support (`detect.bom_sheet_name`);
+- `takeoff.SegIndex`, `rf_support_test`, and the RF exclusion in `count_blocks` and `route_footage`;
+- policy `engine` field; new options and defaults (sfp, max10_upgrade, drop_columns, route_footage);
+- conventions: `rf_*`;
+- rules, investigations, and doctor checks RF_EXCLUDED and TRENCH_NO_FIBER.
+
+Tests: 76 pass.

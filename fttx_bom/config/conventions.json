@@ -154,7 +154,48 @@
     "CX1-MDUCOUNT",
     "CX1-FTG-N2",
     "CX1-DROP",
-    "fiberinfo.dwg"
+    "fiberinfo.dwg",
+    "CX1_TRIPAM",
+    "CX1_HGDULA",
+    "CX1_2PTTAP",
+    "CX1_2PTTAP_EQPAD",
+    "CX1_4PTTAP_EQPAD",
+    "CX1_EOL2",
+    "CX1_TERM",
+    "CX1_EQ",
+    "CX1_2WYSPL",
+    "CX1_SPLICE",
+    "CX1_NONSPS",
+    "CX1_PWRINS",
+    "CX1-POWANC1",
+    "CX1-CTVANC1"
   ],
-  "_ignore_comment": "ignore_blocks: symbols that are never BOM materials (terminal node markers, labels, counts) - not reported as unmapped"
+  "_ignore_comment": "ignore_blocks: symbols that are never BOM materials (terminal node markers, labels, counts) - not reported as unmapped",
+  "rf_device_layers": [
+    "DES_AMPS",
+    "DES_TAPS",
+    "DES_EOL",
+    "DES_TERM",
+    "DES_SPLITS"
+  ],
+  "rf_device_blocks": [
+    "CX1_TRIPAM",
+    "CX1_HGDULA",
+    "CX1_2PTTAP",
+    "CX1_2PTTAP_EQPAD",
+    "CX1_4PTTAP_EQPAD",
+    "CX1_EOL2",
+    "CX1_TERM",
+    "CX1_EQ",
+    "CX1_2WYSPL",
+    "CX1_SPLICE"
+  ],
+  "rf_support_keys": [
+    "vault",
+    "ug_lbox"
+  ],
+  "rf_support_radius_ft": 50,
+  "rf_support_splice_ft": 100,
+  "fiber_bearing_strand_ft": 75,
+  "_rf_comment": "RF (coax/HFC) plant is not part of the FTTH BOM (SME). rf_device_*: RF devices on the DES_* design layers (amplifiers, taps, splitters, terminators, end-of-line). A vault/L-box within rf_support_radius_ft of an RF device and with no fiber splice within rf_support_splice_ft is RF support and not counted. Aerial strand counts only with an aerial fiber cable within fiber_bearing_strand_ft. RF power supplies (DES_POWER) are not evidence: the coax-powered OLM sits beside one."
 }

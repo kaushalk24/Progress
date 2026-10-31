@@ -73,7 +73,13 @@ def template_area_count(template: Path, sheet: str) -> int:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         wb = openpyxl.load_workbook(template, read_only=True)
-        rows = list(wb[sheet].iter_rows(min_row=1, max_row=30, max_col=40, values_only=True))
+        from ..inputs.detect import bom_sheet_name
+
+        name = bom_sheet_name(wb.sheetnames, sheet)
+        if name is None:
+            wb.close()
+            raise ValueError(f"template has no '{sheet}' (or 'OLM ... BOM') sheet")
+        rows = list(wb[name].iter_rows(min_row=1, max_row=30, max_col=40, values_only=True))
         wb.close()
     for row in rows:
         vals = [str(v or "").strip() for v in row]
@@ -143,9 +149,11 @@ def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: di
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         wb = openpyxl.load_workbook(template, keep_links=True)
-    sheet = cfg["sheet"]
-    if sheet not in wb.sheetnames:
-        raise ValueError(f"template has no sheet '{sheet}' (sheets: {wb.sheetnames})")
+    from ..inputs.detect import bom_sheet_name
+
+    sheet = bom_sheet_name(wb.sheetnames, cfg["sheet"])  # a completed BOM used as template may say "OLM DMI-R15 BOM"
+    if sheet is None:
+        raise ValueError(f"template has no sheet '{cfg['sheet']}' or 'OLM ... BOM' (sheets: {wb.sheetnames})")
     ws = wb[sheet]
     res = WriteResult(out, sheet)
     res.template_sheets = list(wb.sheetnames)
@@ -305,8 +313,10 @@ def _restore_validation(wb):
     """openpyxl drops the x14 list validation on B1 ('System:' picker); re-add it."""
     if "Sheet1" not in wb.sheetnames:
         return
-    for name in ("Cabinet OLT BOM", "OLM SF-8M BOM"):
-        if name in wb.sheetnames:
+    from ..inputs.detect import bom_sheet_name
+
+    for name in ("Cabinet OLT BOM", bom_sheet_name(wb.sheetnames)):
+        if name and name in wb.sheetnames:
             ws = wb[name]
             dv = DataValidation(type="list", formula1="Sheet1!$A$1:$A$5", allow_blank=True,
                                 showErrorMessage=True, error="Please select from list")

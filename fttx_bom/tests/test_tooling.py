@@ -98,7 +98,7 @@ def test_policy_apply_and_calibrate(tmp_path):
                     values={rule.key: {("N-R01", GRANT): 1, ("N-R01", NONGRANT): 3}})
     rows = [r for r in pol.calibrate(tk, [rule], ref) if r["policy"] == "sfp"]
     best = [r for r in rows if r["best"]]
-    assert len(best) == 1 and best[0]["option"] == "jumper_half"  # tie with designed_pons -> documented default
+    assert len(best) == 1 and best[0]["option"] == "jumper_half"  # ties with designed_pons; total_minus_ng not computed here
     path = tmp_path / "policies.json"
     sel = pol.learn(rows, "job1", path)
     assert sel["sfp"] == "jumper_half"
@@ -108,7 +108,7 @@ def test_policy_apply_and_calibrate(tmp_path):
 def test_unknown_policy_option_falls_back():
     tk = _tk()
     pol.apply(tk, {"sfp": "nonsense"})
-    assert tk.policy_used["sfp"] == "jumper_half"
+    assert tk.policy_used["sfp"] == pol.BY_NAME["sfp"].default
     assert any(c.name == "policy sfp" for c in tk.checks)
 
 

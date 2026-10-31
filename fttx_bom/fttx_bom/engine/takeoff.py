@@ -157,6 +157,60 @@ def resolve_report_networks(d, conv, cls: Classifier, tk: "Takeoff", reports) ->
             tk.check("splice report network", False, f"{r.name}: network not found (name/folder '{r.network}', no drawing location)", warn=True)
 
 
+class SegIndex:
+    """Grid index of polyline segments for 'distance to the nearest line' queries."""
+
+    def __init__(self, polylines, cell: float = 100.0):
+        self.cell = cell
+        self.g = defaultdict(list)
+        for pl in polylines:
+            for a, b in zip(pl.points, pl.points[1:]):
+                for gx in range(int(min(a[0], b[0]) // cell), int(max(a[0], b[0]) // cell) + 1):
+                    for gy in range(int(min(a[1], b[1]) // cell), int(max(a[1], b[1]) // cell) + 1):
+                        self.g[(gx, gy)].append((a, b))
+
+    def nearest(self, p, radius: float) -> float | None:
+        """Distance to the nearest indexed line within `radius`, else None."""
+        k = int(radius // self.cell) + 1
+        gx, gy = int(p[0] // self.cell), int(p[1] // self.cell)
+        best = None
+        for dx in range(-k, k + 1):
+            for dy in range(-k, k + 1):
+                for a, b in self.g.get((gx + dx, gy + dy), ()):
+                    dd = point_segment_distance(p, a, b)
+                    if dd <= radius and (best is None or dd < best):
+                        best = dd
+        return best
+
+
+def fiber_cables(d, conv, which=("underground", "aerial")) -> list:
+    layers = [lay for w in which for lay in conv["cable_layers"][w]]
+    return [p for p in d.polylines if p.layer in layers and len(p.points) >= 2]
+
+
+def rf_support_test(d, conv):
+    """Callable(point) -> reason or None: a support structure (vault, L-box) that serves the RF (coax)
+    plant, not the fiber. RF plant is not part of the FTTH BOM (SME). A structure is RF when an RF
+    device (amplifier, tap, splitter, terminator, end-of-line) is within rf_support_radius_ft and no
+    fiber splice point is within rf_support_splice_ft. RF power supplies are not used as evidence:
+    the coax-powered OLM sits beside one in the fiber hub vault."""
+    layers = set(conv.get("rf_device_layers", []))
+    names = set(conv.get("rf_device_blocks", []))
+    devs = [i for i in d.inserts if i.layer in layers or i.name in names]
+    if not devs:
+        return lambda p: None
+    splices = [i.pt for i in _blocks(d, conv, "splice_point")]
+    r_dev, r_spl = conv.get("rf_support_radius_ft", 50.0), conv.get("rf_support_splice_ft", 100.0)
+
+    def test(p):
+        near = min(((dist(p, i.pt), i.name) for i in devs), default=(1e18, ""))
+        if near[0] <= r_dev and not any(dist(p, q) <= r_spl for q in splices):
+            return f"RF device {near[1]} {near[0]:.0f} ft away, no fiber splice within {r_spl:g} ft"
+        return None
+
+    return test
+
+
 def count_blocks(d, conv, cls, tk, key, qkey=None, unit="EA"):
     qkey = qkey or key
     names = conv["blocks"][key]["names"]
@@ -167,6 +221,17 @@ def count_blocks(d, conv, cls, tk, key, qkey=None, unit="EA"):
                  f"{qkey} not counted (left blank); add the drawing's block name to config/conventions.json")
         return
     tk.ensure(qkey, unit, f"count of block {names}")
+    if key in conv.get("rf_support_keys", []):
+        is_rf = rf_support_test(d, conv)
+        kept = []
+        for ins in found:
+            why = is_rf(ins.pt)
+            if why:
+                tk.extra.setdefault("rf_structures", []).append((qkey, ins.handle, ins.pt, why))
+                tk.check(f"RF support structure {qkey}", False, f"{ins.name} {ins.handle}: {why} - RF plant, not counted", warn=True)
+            else:
+                kept.append(ins)
+        found = kept
     for ins in found:
         net, area = _locate(cls, ins, tk)
         if net:
@@ -301,10 +366,23 @@ def passings(d, conv, cls, tk: Takeoff, address_lists: dict[str, AddressList]):
 
 
 # ----------------------------------------------------------------- route footage
+TRENCH_NO_FIBER_FT = 200.0  # a trench label this far from every fiber cable carries no fiber
+
+
 def route_footage(d, conv, cls, tk: Takeoff):
+    """Rows 6-10 (CalcFTG): sum of CX1-FTG-N2 route labels inside the boundary.
+
+    Aerial strand counts only where an aerial fiber cable is lashed to it (within
+    fiber_bearing_strand_ft); strand of the RF (coax) plant is not FTTH route (SME: RF support
+    structures are not calculated). UG trench with no fiber cable within TRENCH_NO_FIBER_FT is
+    counted (the Credit River BOM counts it) but listed, and the `fiber_bearing` policy drops it."""
     names = set(conv["blocks"]["route_footage"]["names"])
     groups = {"route_ug_ft": conv["route_layers"]["ug_trench"], "route_aerial_ft": conv["route_layers"]["aerial_strand"],
               "route_ugdrop_ft": conv["route_layers"]["ug_drop"]}
+    aerial_fiber = SegIndex(fiber_cables(d, conv, ("aerial",)))
+    any_fiber = SegIndex(fiber_cables(d, conv))
+    strand_ft = conv.get("fiber_bearing_strand_ft", 75.0)
+    tk.extra.setdefault("trench_no_fiber", [])
     for key, layers in groups.items():
         tk.ensure(key, "FT", f"sum of {sorted(names)} FTG labels on {layers}")
         for ins in d.inserts:
@@ -313,9 +391,18 @@ def route_footage(d, conv, cls, tk: Takeoff):
                 if v is None:
                     tk.check("route label value", False, f"{ins.handle} on {ins.layer} has no numeric FTG", warn=True)
                     continue
+                if key == "route_aerial_ft" and aerial_fiber.nearest(ins.pt, strand_ft) is None:
+                    if cls.resolve(ins.pt)[0] in tk.networks:  # report only this job's strand
+                        tk.extra.setdefault("rf_structures", []).append(("route_aerial_ft", ins.handle, ins.pt,
+                                                                         f"{v:g} ft strand with no aerial fiber cable within {strand_ft:g} ft"))
+                        tk.check("RF support structure strand", False, f"strand label {ins.handle} ({v:g} ft) carries no fiber "
+                                 f"(no aerial fiber cable within {strand_ft:g} ft) - RF strand, not counted", warn=True)
+                    continue
                 net, area = _locate(cls, ins, tk)
                 if net:
                     tk.add(key, net, area, v, "FT", f"sum of FTG labels on {layers}", [ins.handle])
+                    if key == "route_ug_ft" and any_fiber.nearest(ins.pt, TRENCH_NO_FIBER_FT) is None:
+                        tk.extra["trench_no_fiber"].append((net, area, v, ins.handle, ins.pt))
     for n, a in tk.columns:
         tk.q[("route_miles", n, a)] = Qty(
             "route_miles", n, a, round((tk.get("route_ug_ft", n, a, 0) + tk.get("route_aerial_ft", n, a, 0)) / 5280.0, 4),

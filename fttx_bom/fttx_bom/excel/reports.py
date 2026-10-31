@@ -45,8 +45,13 @@ def read_reference(path: Path, sheet: str, rules: list[Rule]) -> Reference:
         wf = openpyxl.load_workbook(path, data_only=False, read_only=True)
     from .verify import GridSheet, grid
 
-    ws = GridSheet(grid(wv[sheet], max_col=24))
-    fgrid = grid(wf[sheet], max_col=24)
+    from ..inputs.detect import bom_sheet_name
+
+    name = bom_sheet_name(wv.sheetnames, sheet)  # manual BOMs rename the sheet per OLM ("OLM DMI-R15 BOM")
+    if name is None:
+        raise ValueError(f"approved BOM {path.name} has no '{sheet}' or 'OLM ... BOM' sheet")
+    ws = GridSheet(grid(wv[name], max_col=24))
+    fgrid = grid(wf[name], max_col=24)
     ref = Reference(str(path))
     header_row = next(r for r in range(1, 30) if str(ws.cell(r, 2).value or "").strip().lower() == "part number")
     tq = next((c for c in range(1, 24) if str(ws.cell(header_row, c).value or "").strip().lower() == "total quantity"), 7)

@@ -27,17 +27,23 @@ class Policy:
     keys: str  # regex of base quantity keys the policy decides
     default: str
     options: dict[str, str]
+    engine: str = ""  # option the engine's base value implements (default when empty)
+
+    @property
+    def base_option(self) -> str:
+        return self.engine or self.default
 
     def owns(self, key: str) -> bool:
         return re.fullmatch(self.keys, key) is not None
 
 
 POLICIES = [
-    Policy("sfp", "XGS SFP+ per column", r"pon_ports", "jumper_half", {
+    Policy("sfp", "XGS SFP+ per column", r"pon_ports", "total_minus_ng", {
+        "total_minus_ng": "SME rule: Non-Grant = ROUNDUP(Non-Grant passings/64); Grant = network total ROUNDUP(passings/64) - Non-Grant",
         "jumper_half": "SME walkthrough: ROUNDUP(Jumper Calculator splitters / 2) = ROUNDUP(ROUNDUP(passings/32)/2) per column",
         "split_ratio": "one SFP per PON at the designed split ratio: ROUNDUP(passings/ratio) per column",
         "designed_pons": "one SFP per designed splitter (same Grant/Non-Grant split as the splitter line)",
-    }),
+    }, engine="jumper_half"),
     Policy("splitter_split", "Splitters Grant / Non-Grant", r"splitter_1x\d+", "grant_first", {
         "grant_first": "SME: designed count; Grant = ROUNDUP(grant passings/ratio), rest Non-Grant",
         "per_column": "blank-template formula: ROUNDUP(column passings/ratio) in every column",
@@ -47,18 +53,20 @@ POLICIES = [
         "per_location": "packages per location ROUNDUP(ROUNDUP(splices/cap)/2), summed",
         "fully_pooled": "ROUNDUP(ROUNDUP(all splices in the column/cap)/2)",
     }),
-    Policy("max10_upgrade", "MAX10 +4 upgrade kits", r"max10_upgrades", "need_based", {
+    Policy("max10_upgrade", "MAX10 +4 upgrade kits", r"max10_upgrades", "max10_nongrant", {
         "need_based": "a kit per 4 passings a MAX ped feeds above its 4 stock ports",
         "all_max10": "one kit for every MAX10 ped",
         "max10_nongrant": "blank-template default: every Non-Grant MAX10 (Grant 0)",
-    }),
-    Policy("drop_columns", "Drop footage columns", r"drop_ft_bom", "nongrant_only", {
-        "nongrant_only": "reference 'total - grant': Non-Grant drops only, Grant column 0",
-        "both": "Grant and Non-Grant drop footage in their own columns",
-    }),
+    }, engine="need_based"),
+    Policy("drop_columns", "Drop footage columns", r"drop_ft_bom", "both", {
+        "both": "SME rule: Non-Grant = drops of Non-Grant addresses; Grant = total - Non-Grant",
+        "nongrant_only": "Credit River BOM: Non-Grant drops only, Grant column 0",
+        "total_nongrant": "Melcher-Dallas BOM: all drop footage in the Non-Grant column",
+    }, engine="nongrant_only"),
     Policy("route_footage", "Route footage rows 6-10", r"route_(ug_ft|aerial_ft|miles)", "route_labels", {
         "route_labels": "CalcFTG: sum of CX1-FTG-N2 route labels inside the boundary",
         "cable_totals": "sum of cable design length (TOTAL) by placement",
+        "fiber_bearing": "route labels, minus UG trench with no fiber cable within 200 ft",
     }),
     Policy("cable_split", "Cable Grant / Non-Grant split", r"cable_\d{3}", "span", {
         "span": "routed cable split at splices/structures, each span by majority area",
@@ -89,7 +97,7 @@ def compute_variants(tk: Takeoff) -> None:
             continue
         for p in POLICIES:
             if p.owns(k):
-                tk.q[(f"{k}@{p.default}", n, a)] = Qty(f"{k}@{p.default}", n, a, q.value, q.unit, q.method, q.evidence)
+                tk.q[(f"{k}@{p.base_option}", n, a)] = Qty(f"{k}@{p.base_option}", n, a, q.value, q.unit, q.method, q.evidence)
     nets = tk.networks
     for n in nets:
         ratio = tk.extra["ratio"].get(n, 64)
@@ -97,6 +105,11 @@ def compute_variants(tk: Takeoff) -> None:
         for a in AREAS:
             p = tk.get("passings", n, a, 0)
             _put(tk, f"pon_ports@split_ratio", n, a, math.ceil(p / ratio) if p else 0, "EA", f"ROUNDUP(passings/{ratio})")
+            # total - Non-Grant (SME): ROUNDUP(ROUNDUP(x/32)/2) == ROUNDUP(x/64)
+            tot_p, ng_p = tk.total("passings", n), tk.get("passings", n, NONGRANT, 0)
+            ng_sfp = math.ceil(ng_p / 64) if ng_p else 0
+            _put(tk, "pon_ports@total_minus_ng", n, a, ng_sfp if a == NONGRANT else (math.ceil(tot_p / 64) if tot_p else 0) - ng_sfp,
+                 "EA", "Non-Grant ROUNDUP(NG passings/64); Grant = ROUNDUP(total/64) - Non-Grant")
             _put(tk, f"pon_ports@designed_pons", n, a, tk.get(sk, n, a, 0), "EA", "designed splitters in the column")
             for r in (32, 64):
                 if r == ratio:
@@ -107,11 +120,18 @@ def compute_variants(tk: Takeoff) -> None:
             _put(tk, "max10_upgrades@all_max10", n, a, m10, "EA", "every MAX10")
             _put(tk, "max10_upgrades@max10_nongrant", n, a, m10 if a == NONGRANT else 0, "EA", "Non-Grant MAX10")
             if ("drop_ft_bom", n, a) in tk.q:
-                _put(tk, "drop_ft_bom@both", n, a, tk.get("drop_ft", n, a, 0), "FT", "drops in their own column")
+                _put(tk, "drop_ft_bom@both", n, a, tk.get("drop_ft", n, a, 0), "FT", "drops in their own column (Grant = total - Non-Grant)")
+                _put(tk, "drop_ft_bom@nongrant_only", n, a, tk.get("drop_ft", n, a, 0) if a == NONGRANT else 0, "FT", "Non-Grant drops only")
+                _put(tk, "drop_ft_bom@total_nongrant", n, a, tk.total("drop_ft", n) if a == NONGRANT else 0, "FT", "all drops in Non-Grant")
             ug, ar = tk.get("cable_ug_ft", n, a, 0), tk.get("cable_aerial_ft", n, a, 0)
             _put(tk, "route_ug_ft@cable_totals", n, a, round(ug), "FT", "cable TOTAL, UG")
             _put(tk, "route_aerial_ft@cable_totals", n, a, round(ar), "FT", "cable TOTAL, aerial")
             _put(tk, "route_miles@cable_totals", n, a, round((ug + ar) / 5280.0, 4), "MI", "cable TOTAL / 5280")
+            nofib = sum(v for nn, aa, v, _h, _p in tk.extra.get("trench_no_fiber", []) if nn == n and aa == a)
+            rug, rar = tk.get("route_ug_ft", n, a, 0), tk.get("route_aerial_ft", n, a, 0)
+            _put(tk, "route_ug_ft@fiber_bearing", n, a, rug - nofib, "FT", "route labels minus trench with no fiber cable")
+            _put(tk, "route_aerial_ft@fiber_bearing", n, a, rar, "FT", "route labels (fiber-bearing strand)")
+            _put(tk, "route_miles@fiber_bearing", n, a, round((rug - nofib + rar) / 5280.0, 4), "MI", "fiber-bearing route / 5280")
     # trays
     caps = {"B": 24, "D": 48}
     for L in "BD":

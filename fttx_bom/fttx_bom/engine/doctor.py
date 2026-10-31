@@ -65,6 +65,7 @@ ENGINE_MAP = [
     ("unassigned objects", "Boundaries", "UNASSIGNED", "All lines", "Objects outside every OLM boundary and the transport corridor are not counted"),
     ("policy", "Policies", "POLICY_UNKNOWN", "Policy lines", "Fix the option name in the policy file"),
     ("network boundary", "Boundaries", "NETWORK_BLANK", "Every line of the network", "Draw / label the OLM boundary; the network's BOM is blank until then"),
+    ("RF support structure", "RF plant", "RF_EXCLUDED", "Vaults / L-boxes / aerial footage", "None - RF (coax) plant is not part of the FTTH BOM; check the structure carries no fiber"),
     ("block not defined", "Drawing", "BLOCK_NOT_DEFINED", "The line named in the message", "Block renamed in this drawing? Add its name to config/conventions.json"),
     ("splice report unreadable", "Splice reports", "REPORT_UNREADABLE", "FOSC enclosures, trays, splitters", "Re-export the splice report"),
     ("splice report cell", "Splice reports", "REPORT_CELL", "Cable cross-check", "Fix the cell in the export"),
@@ -86,7 +87,7 @@ def _from_engine(tk: Takeoff) -> list[Issue]:
                 break
         net = next((n for n in tk.networks if n in c.name or n in c.detail), "")
         sev = "ERROR" if c.status == "FAIL" else "WARN"
-        if code in ("OUTSIDE_BOUNDARY",):
+        if code in ("OUTSIDE_BOUNDARY", "RF_EXCLUDED"):
             sev = "INFO"
         out.append(Issue(sev, cat, code, net, c.detail, aff, fix))
     return out
@@ -325,6 +326,38 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
                       f"({c.path_ft / c.route_ft:.2f}x)", "Cable Grant/Non-Grant split; possibly the footage",
                       "Check the label footage or the cable polylines (routing may follow a different cable)",
                       lbl.pt[0] if lbl else None, lbl.pt[1] if lbl else None))
+
+    # ---------------------------------------------------------------- Grant address layer vs Non-Grant boundary
+    # Grant / Non-Grant passings follow the GRANTADDRESS layer (both approved BOMs); the SME rule "Non-Grant =
+    # inside the Non-Grant boundaries" agrees only when every served address sits on the matching side.
+    for n in tk.networks:
+        if n not in address_lists or not address_lists[n].served:
+            continue
+        idx = ServedIndex(address_lists[n])
+        for a in d.inserts:
+            if a.name not in conv["blocks"]["res_address"]["names"] or net_of(a.pt) != n:
+                continue
+            if addr_tokens(f"{a.attr('STREET_NUMBER')} {a.attr('STREET_NAME')}") not in idx:
+                continue
+            grant_layer, ng_area = a.layer == conv["grant_address_layer"], cls.area_of(a.pt) == "NG"
+            if grant_layer == ng_area:
+                where = "inside a Non-Grant polygon" if ng_area else "outside every Non-Grant polygon"
+                add(Issue("WARN", "Addresses", "ADDRESS_LAYER_VS_BOUNDARY", n,
+                          f"Served address {a.attr('STREET_NUMBER')} {a.attr('STREET_NAME')} is on layer {a.layer} but {where}",
+                          "Grant / Non-Grant passings, splitters, SFP",
+                          "Move the address to the right layer (GRANTADDRESS = BEAD location) or fix the Non-Grant boundary", a.pt[0], a.pt[1]))
+
+    # ---------------------------------------------------------------- route footage without fiber (one note per network)
+    by_net = defaultdict(list)
+    for net, _area, ftg, handle, pt in tk.extra.get("trench_no_fiber", []):
+        by_net[net].append((ftg, handle, pt))
+    for net, rows in by_net.items():
+        big = max(rows)
+        add(Issue("INFO", "Route", "TRENCH_NO_FIBER", net,
+                  f"{len(rows)} trench labels ({sum(r[0] for r in rows):,.0f} ft) have no fiber cable within 200 ft - counted in UG footage; "
+                  f"largest {big[1]} ({big[0]:g} ft, circled)", "UG / route footage rows 6-10",
+                  "If a trench carries only RF (coax) or is not FTTH route, it should not be in the FTTH route (policy route_footage=fiber_bearing)",
+                  big[2][0], big[2][1]))
 
     # ---------------------------------------------------------------- closure capacity (FOSC 450 ordering guide)
     for net, _area, L, splices, name in tk.extra.get("enclosures", []):

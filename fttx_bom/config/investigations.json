@@ -19,5 +19,16 @@
   "FFA-F902402G5B|NMK-R05": "+100 ft = OLM -> NMK-05001G FC024 tail present in the splice reports but not labelled in the drawing. Reference counted this tail for R02 and R03 but not for R04/R05 (inconsistent). Tool includes it everywhere.",
   "FFA-F902402G5B": "Network totals = sum of cable-label TOTAL (route + slack) + 100 ft OLM tail from splice reports. Grant/Non-Grant split follows routed spans; reference split differs by a few spans near boundaries.",
   "FFA-F909608E7B": "Network totals match. Split: reference puts 1,872 ft of R02 FC096 in Non-Grant; routed spans give 1,009 ft - spans near the boundary.",
-  "FM0-3FE47548AD": "SME: SFP = ROUNDUP(Jumper Calculator 'Splitters Required' / 2) per column, regardless of the splitter actually designed."
+  "FM0-3FE47548AD": "SME: SFP = ROUNDUP(Jumper Calculator 'Splitters Required' / 2) per column, regardless of the splitter actually designed.",
+  "Total Route Mileage|DMI-R15": "Approved Melcher-Dallas BOM typed the route FOOTAGE (165,584 / 51,957 ft) into the mileage row 6; row 7 (fiber-bearing route) holds the miles 31.36 / 9.84. The tool writes miles in row 6.",
+  "UG Footage|DMI-R15": "Drawing labels inside the boundary 221,517 ft vs approved 217,541 (-1.8%). Non-Grant differs by exactly two labels (250 + 128 ft, 50-55 ft from the fiber cable). One 2,374 ft trench label has no fiber cable within 1,200 ft (flagged TRENCH_NO_FIBER; policy route_footage=fiber_bearing drops it). Remaining difference not reproducible: label-to-trench matching is ambiguous.",
+  "Aerial Footage|DMI-R15": "The 3 strand labels (512 ft) have no aerial fiber cable at all - RF (coax) strand at the amplifier/power-supply poles. RF support structures are not calculated (SME): excluded = approved 0.",
+  "CBV-HGIB2436|DMI-R15": "9 CX1-VAULT drawn; vault 3CC8B7 sits 31 ft from the RF amplifier (CX1_TRIPAM) with no fiber splice within 300 ft - RF support structure, excluded -> 8 (7 G / 1 NG) = approved.",
+  "CBP-MAX5DSM24|DMI-R15": "Network total matches (147). One MAX5 is inside a Non-Grant polygon in the current drawing but counted Grant in the approved BOM (boundary edited after the BOM, or hand selection).",
+  "FFA-F902402G5B|DMI-R15": "The approved BOM sums every fiberinfo label: 'DMI-14001G TO DMI-15204G FC024' (6,467 ft) is labelled TWICE with identical values, so it was counted twice (147,111). The splice reports list it once; the tool counts it once (140,644) and flags the duplicate label. Approved BOM over-orders FC024 by 6,467 ft.",
+  "FE0-R579575|DMI-R15": "Trays per location: DMI-15001G 234 splices -> 5 D trays, DMI-15019 93 -> 2; 7 trays -> 4 packages (2 per kit). Approved BOM orders 5 packages; no splice-count rule reproduces 5 (Credit River R03 goes the other way: 4 vs 5).",
+  "FM0-3FE47548AD|DMI-R15": "SME rule reproduced: Non-Grant = ROUNDUP(155/64) = 3 (template formula), Grant = ROUNDUP(222/64) - 3 = 1.",
+  "Total Drop Footage|DMI-R15": "Approved BOM puts the whole drop footage (35,941 ft; drawing labels 36,117) in the Non-Grant column. The SME rule (Non-Grant inside the boundaries, Grant = total - Non-Grant) gives 10,194 / 25,923. Credit River put Non-Grant drops only. Confirm which (policy drop_columns).",
+  "FE0-MAX10EXP4|DMI-R15": "Approved BOM = blank-template formula I23 = I19: one +4 kit per Non-Grant MAX10 (9), Grant 0. Now the default.",
+  "FE0-07264810|DMI-R15": "Left blank in the approved BOM although the template carries the hand-count note; the tool no longer writes it (audit shows the template-note count)."
 }

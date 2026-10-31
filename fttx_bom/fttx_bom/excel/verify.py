@@ -138,7 +138,7 @@ def verify(res: WriteResult, expected: dict[tuple[str, str], float | None], work
     vals = _load(rc, data_only=True)
     errs = []
     for ws in vals.worksheets:
-        if ws.title not in ("OLM SF-8M BOM", "Jumper Calculator", "Transport BOM"):
+        if ws.title not in (res.sheet, "Jumper Calculator", "Transport BOM"):
             continue
         for coord, val in grid(ws).items():
             if isinstance(val, str) and val.strip() in ERRORS:
