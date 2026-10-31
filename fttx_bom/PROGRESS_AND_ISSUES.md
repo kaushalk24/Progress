@@ -15,7 +15,35 @@ _Last updated: 2026-10-31, build 0.5.0_
 
 ## NMK reconciliation (reference = manual Credit River BOM)
 
-RECON_TABLE
+| Measure | 0.5.0 | 0.4.0 |
+|---|---|---|
+| Area cells matching | **298 / 368** | 292 / 360 |
+| Network totals matching | **160 / 184** | 156 / 180 |
+| Like-for-like (0.4.0 lines only) | 290 / 360 cells, 156 / 180 totals | — |
+
+**Why the like-for-like figure is 2 cells lower:** the 0.4.0 discrepancy report compared route-mileage cells with a 0.5 tolerance, so differences up to half a mile counted as matches. It now uses 0.01 mi, as calibration does. No quantity changed.
+
+**Exact quantity check:** every takeoff quantity was compared between 0.4.0 and 0.5.0 on NMK and on DMI. The only changes are the two new lines:
+- ground kits: Credit River reference blank, so 0/8 by design;
+- D basket: 8/8.
+
+**Lines reproducing all 8 Grant/Non-Grant cells (30 BOM lines):**
+- passings, Z-14 ped, GOAT and tap peds (0);
+- FC072, FC120–FC288, FOSC 450A/C/D, D basket;
+- OLM bundle, XGS SFP+, 1x32 and 1x64 splitters;
+- MDU enclosure, OLM power equipment and batteries;
+- plus the Transport BOM and Jumper Calculator sheets.
+
+**Exact network totals, different Grant/Non-Grant split:** MAX10 and MAX5 peds, vaults, 450B, FC096, B trays. These are objects or spans within a few feet of Non-Grant edges. R05 shifts the same way on every line, which suggests the boundary was edited after the manual BOM.
+
+**Not reproducible or reference errors:**
+- UG and route footage split (F4);
+- FC024 and FC048 in R04 (reference error, F8);
+- drops (R02 and R04 have no drop lines);
+- MAX10 +4 (blanket policy in the reference);
+- heat shrink (not filled in, per the SME).
+
+See FORENSIC_FINDINGS.md for the line-by-line table.
 
 ## Critical unresolved issues (deliverable G), ranked by effect on BOM correctness
 
@@ -45,7 +73,7 @@ RECON_TABLE
 ## Tests
 
 `python -m pytest -q` (with `FTTX_TEST_DATA`):
-- TEST_COUNT
+- 77 tests: 76 run without the slow end-to-end test, which is run before a release;
 - unit, tooling, forensic-rule and review-regression tests;
 - integration on the real NMK / DMI files;
 - the end-to-end CLI run.

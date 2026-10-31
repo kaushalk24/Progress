@@ -48,7 +48,7 @@ All primary sources opened on raw.githubusercontent.com:
 - **Snippet only:** NTIA BEAD FAQs (v18, v21) and the Final Proposal guidance. Shared costs must be allocated by "standard cost allocation practices", with a pro-rated share, under 2 CFR 200.405.
 - **Conclusion:** no source prescribes splitting by passings or by footage.
   - The tool splits by **location**: dedicated items by where they are, cable by routed spans.
-  - The Credit River BOM matches this on 292 of 360 cells.
+  - The Credit River BOM matches this on 298 of 368 cells (0.5.0).
   - Forensic test F4 (FORENSIC_FINDINGS.md) rejected allocation by passings carried, with 86,323 ft error against 2,497 ft for the span method.
   - The method used is recorded in the audit's *Policies* sheet.
 

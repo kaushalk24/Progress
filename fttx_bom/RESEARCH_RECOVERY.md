@@ -2,7 +2,7 @@
 
 This file lets work resume after a usage-limit interruption with no loss. Update it after every meaningful discovery, code change or test run.
 
-_Last checkpoint: 2026-10-31 ~07:55 UTC. Code and tests are done; the deliverable runs are going (`$S/regen.sh` writes to `$S/out5`, log `$S/out5.log`)._
+_Last checkpoint: 2026-10-31 ~08:20 UTC. **The 0.5.0 task is complete.** Code is in `a4e4a6d`, plus a docs commit. 77 of 77 tests pass, including the slow end-to-end test. The deliverables are in `$S/out5` (NMK_ref, NMK_new, DMI), and every job exited 0 with workbook FAIL=0 and deep-check ERROR=0._
 
 ## 1. Task being resumed
 
@@ -68,13 +68,24 @@ The scripts are in `$S/forensic/`. Each takes the package path as `argv[1]`, and
   - the discrepancy report's mileage tolerance (0.5 mi hid differences; now 0.01 mi, as in calibration);
   - version 0.5.0;
   - CHANGELOG, README, BOM_RULES (chains) and RESEARCH.md written.
-- **Remaining:**
-  1. wait for `$S/out5` (EXIT1–3 in `$S/out5.log`);
-  2. write FORENSIC_FINDINGS.md from `$S/out5/NMK_ref/*_BOM_DISCREPANCIES.xlsx` (per-line table);
-  3. update PROGRESS_AND_ISSUES.md with the new reconciliation numbers;
-  4. run the slow e2e test;
-  5. commit and push;
-  6. send the outputs to the user.
+- **Verification done:**
+  - every takeoff quantity was compared between 0.4.0 (a git worktree at `$S/wt040`) and 0.5.0, on NMK and on DMI;
+  - the only changes are `grounding_points` and `basket_d`;
+  - the reviewer's experiment scripts were rerun after the fixes (`/tmp/claude-0/review_scratch/rerun_after_fix.txt`) and all show the fixed behaviour.
+- **Final results:**
+
+  | Run | Cells | Totals | Deep check |
+  |---|---|---|---|
+  | NMK, reference template | 298/368 | 160/184 | ERROR 0, WARN 42, INFO 36 |
+  | NMK, new template, one BOM per OLM | R02 77/92, R03 73/92, R04 75/92, R05 73/92 (sums to the combined run) | 42+40+37+41 = 160/184 | ERROR 0 |
+  | DMI-R15 | (no reference) | | ERROR 0, WARN 17, INFO 26 |
+
+- **Late fix:** each ped-splice is tied to its nearest housing and FOSC-closure splices are excluded. This removed 4 false MAX5 hits (the OLM hub splices). The rule is now "no MAX5 on a cable above 48F, any role".
+- **Next actionable tasks (only if the user asks):**
+  - SME decisions G1–G4 (PROGRESS_AND_ISSUES.md);
+  - allow the vendor hosts in network settings and verify the current CommScope tray limits;
+  - check the LibreDWG version bundled in `@mlightcad/libredwg-web@0.8.0`;
+  - review finding 18 (scope learned evidence per project).
 
 ## 6. Exact unfinished operations at the interruption (original list, items 1–5 now done)
 
