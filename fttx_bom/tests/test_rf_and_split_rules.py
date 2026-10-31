@@ -117,12 +117,11 @@ def test_sfp_nongrant_first_rule():
     # DMI-R15 approved BOM: Non-Grant = ROUNDUP(155/64) = 3, Grant = ROUNDUP(222/64) - 3 = 1
     tk = _passing_takeoff(67, 155)
     pol.compute_variants(tk)
-    pol.apply(tk, {})
-    assert tk.policy_used["sfp"] == "total_minus_ng"
+    pol.apply(tk, {"sfp": "total_minus_ng"})
     assert (tk.get("pon_ports", NET, GRANT), tk.get("pon_ports", NET, NONGRANT)) == (1, 3)
     tk = _passing_takeoff(17, 212)  # NMK-R02: total ROUNDUP(229/64) = 4, NG 4 -> Grant 0
     pol.compute_variants(tk)
-    pol.apply(tk, {})
+    pol.apply(tk, {"sfp": "total_minus_ng"})
     assert (tk.get("pon_ports", NET, GRANT), tk.get("pon_ports", NET, NONGRANT)) == (0, 4)
 
 
@@ -137,7 +136,7 @@ def test_drop_column_options():
         pol.apply(tk, {"drop_columns": opt})
         assert (tk.get("drop_ft_bom", NET, GRANT), tk.get("drop_ft_bom", NET, NONGRANT)) == cells, opt
     pol.apply(tk, {})
-    assert tk.policy_used["drop_columns"] == "both"  # SME rule: Grant = total - Non-Grant
+    assert tk.policy_used["drop_columns"] == "both"  # Design standard: Grant = total - Non-Grant
 
 
 def test_engine_option_kept_when_default_changes():

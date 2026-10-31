@@ -21,6 +21,7 @@ from .engine.rules import CONFIG_DIR, load_rules
 from .engine.takeoff import build_takeoff
 from .excel.reports import compare, read_reference, write_audit, write_discrepancies
 from .excel.verify import verify
+from .excel.confidence import assess
 from .excel.writer import template_capacity, write_bom
 from .extract.backends import load_drawing
 from .inputs.address_list import read_address_lists
@@ -176,7 +177,10 @@ def _write_group(p: JobParams, networks, tk, drawing, cls, reports, rules, cfg, 
     out = p.out
     bom_path = out / f"{prefix}_FINAL_BOM.xlsx"
     log(f"writing {bom_path.name} ...")
-    res = write_bom(p.template, bom_path, tk, rules, cfg, project)
+    # confidence of every quantity cell (design check without the workbook-level checks), highlighted in the BOM
+    pre = run_doctor(drawing, conv, cls, tk, address_lists, reports)
+    flags = assess(rules, tk, pre, address_lists, reports)
+    res = write_bom(p.template, bom_path, tk, rules, cfg, project, flags)
     expected = {}
     for rule in rules:
         if rule.write and rule.key in res.rule_values:

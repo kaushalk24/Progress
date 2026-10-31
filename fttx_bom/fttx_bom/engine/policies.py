@@ -4,7 +4,7 @@ Every policy is computed every way (`key@option` quantities), the selected
 option is copied into the base key the rule catalogue uses, and - when an
 approved BOM is supplied - every option is scored against it. Scores from
 approved BOMs accumulate in config/policies.json (`--learn`), so the tool picks
-conventions from evidence instead of waiting for SME answers.
+conventions from evidence instead of waiting for manual confirmation.
 """
 from __future__ import annotations
 
@@ -38,14 +38,14 @@ class Policy:
 
 
 POLICIES = [
-    Policy("sfp", "XGS SFP+ per column", r"pon_ports", "total_minus_ng", {
-        "total_minus_ng": "SME rule: Non-Grant = ROUNDUP(Non-Grant passings/64); Grant = network total ROUNDUP(passings/64) - Non-Grant",
-        "jumper_half": "SME walkthrough: ROUNDUP(Jumper Calculator splitters / 2) = ROUNDUP(ROUNDUP(passings/32)/2) per column",
+    Policy("sfp", "XGS SFP+ per column", r"pon_ports", "jumper_half", {
+        "total_minus_ng": "Non-Grant = ROUNDUP(Non-Grant passings/64); Grant = network total ROUNDUP(passings/64) - Non-Grant",
+        "jumper_half": "Design standard: ROUNDUP(Jumper Calculator splitters / 2) = ROUNDUP(ROUNDUP(passings/32)/2) per column",
         "split_ratio": "one SFP per PON at the designed split ratio: ROUNDUP(passings/ratio) per column",
         "designed_pons": "one SFP per designed splitter (same Grant/Non-Grant split as the splitter line)",
     }, engine="jumper_half"),
     Policy("splitter_split", "Splitters Grant / Non-Grant", r"splitter_1x\d+", "grant_first", {
-        "grant_first": "SME: designed count; Grant = ROUNDUP(grant passings/ratio), rest Non-Grant",
+        "grant_first": "Design standard: designed count; Grant = ROUNDUP(grant passings/ratio), rest Non-Grant",
         "per_column": "blank-template formula: ROUNDUP(column passings/ratio) in every column",
     }),
     Policy("trays", "450B / 450D splice tray packages", r"tray_450[bd]", "pooled", {
@@ -59,7 +59,7 @@ POLICIES = [
         "max10_nongrant": "blank-template default: every Non-Grant MAX10 (Grant 0)",
     }, engine="need_based"),
     Policy("drop_columns", "Drop footage columns", r"drop_ft_bom", "both", {
-        "both": "SME rule: Non-Grant = drops of Non-Grant addresses; Grant = total - Non-Grant",
+        "both": "Design standard: Non-Grant = drops of Non-Grant addresses; Grant = total - Non-Grant",
         "nongrant_only": "Credit River BOM: Non-Grant drops only, Grant column 0",
         "total_nongrant": "Melcher-Dallas BOM: all drop footage in the Non-Grant column",
     }, engine="nongrant_only"),
@@ -78,7 +78,7 @@ POLICIES = [
         "not_ordered": "not ordered separately (0); the MAX peds already include a grounding bar and wire kit",
     }),
     Policy("olm_column", "OLM equipment column", r"olm(_ground|_aerial)?", "grant_if_any", {
-        "grant_if_any": "SME: Grant column unless the OLM area has no grant passings",
+        "grant_if_any": "Design standard: Grant column unless the OLM area has no grant passings",
         "location": "column of the OLM block's location",
     }),
 ]
@@ -105,7 +105,7 @@ def compute_variants(tk: Takeoff) -> None:
         for a in AREAS:
             p = tk.get("passings", n, a, 0)
             _put(tk, f"pon_ports@split_ratio", n, a, math.ceil(p / ratio) if p else 0, "EA", f"ROUNDUP(passings/{ratio})")
-            # total - Non-Grant (SME): ROUNDUP(ROUNDUP(x/32)/2) == ROUNDUP(x/64)
+            # total - Non-Grant: ROUNDUP(ROUNDUP(x/32)/2) == ROUNDUP(x/64)
             tot_p, ng_p = tk.total("passings", n), tk.get("passings", n, NONGRANT, 0)
             ng_sfp = math.ceil(ng_p / 64) if ng_p else 0
             _put(tk, "pon_ports@total_minus_ng", n, a, ng_sfp if a == NONGRANT else (math.ceil(tot_p / 64) if tot_p else 0) - ng_sfp,
@@ -234,7 +234,7 @@ def calibrate(tk: Takeoff, rules, ref) -> list[dict]:
     for row in out:
         k = row["policy"]
         cur = best.get(k)
-        # ties go to the documented default (SME / AutoCAD routine) before total error
+        # ties go to the documented default (design standard / AutoCAD routine) before total error
         key = (row["matched"], row["default"], -row["abs_error"])
         if cur is None or key > (cur["matched"], cur["default"], -cur["abs_error"]):
             best[k] = row

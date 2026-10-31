@@ -12,7 +12,7 @@ For every line, several hypotheses were tested against the drawing entities, eac
 
 A hypothesis is accepted only if it:
 - reproduces the reference from independent data;
-- or is stated by the customer's template or the SME;
+- or is stated by the customer's template or the design standard;
 - and generalises to the second design (DMI-R15).
 
 Blank and zero lines were treated as evidence too: a blank line may mean "not ordered", "not filled in", or "not applicable".
@@ -122,13 +122,13 @@ The test is the absolute Non-Grant error over the 12 R02/R03 cells that the refe
 |---|---|---|---|
 | FE0-07264810 ground kit | blank | Older template, not filled in | Writes the template-note count; reference blank is not taken as evidence (calibration skips all-blank rows) |
 | FE0-R89279 D basket | 0 | The T3V includes its basket | 0 (VERIFIED) |
-| FM0-FF11002 heat shrink | blank | SME: not updated in the BOM | Blank; the audit shows splices |
+| FM0-FF11002 heat shrink | blank | design standard: not updated in the BOM | Blank; the audit shows splices |
 | FOSC 450A / 450C | 0 / blank | No such enclosure in the reports | 0 when reports exist; blank without reports |
 | GOAT peds, taps, MST, plenum lateral | 0 / blank | No symbol in the design | Blank, NOT_DETECTED |
 
 ## Melcher-Dallas (DMI-R15): reconstruction of the manual BOM (0.6.0)
 
-The manual DMI-R15 BOM was supplied after 0.5.0. It uses the new blank template, with the sheet renamed "OLM DMI-R15 BOM". The SME gave two rules:
+The manual DMI-R15 BOM was supplied after 0.5.0. It uses the new blank template, with the sheet renamed "OLM DMI-R15 BOM". Two design rules apply:
 - **RF support structures are not calculated.** The design also contains RF (coax) plant: an amplifier, an RF power supply, a tap, a terminator, an end-of-line marker, 3 poles, strand, an anchor and a riser.
 - **Grant/Non-Grant:** Non-Grant = everything inside the Non-Grant boundaries; Grant = total − Non-Grant.
 
@@ -137,12 +137,12 @@ The manual DMI-R15 BOM was supplied after 0.5.0. It uses the new blank template,
 | D1 | Aerial footage | 0 | 512 ft on 3 strand labels | The strand carries no fiber: there are no aerial fiber cables in DMI at all. It is RF strand on the amplifier/power-supply poles. Strand now counts only with an aerial fiber cable within 75 ft; NMK is unchanged, since all 30 of its strand labels are within 53 ft of aerial fiber. | **Fixed, matches** |
 | D2 | Vault CBV-HGIB2436 | 8 (7/1) | 9 drawn | Vault 3CC8B7 is 31 ft from the RF amplifier, with no fiber splice within 309 ft. It is RF support. Rule: RF device within 50 ft and no splice within 100 ft. RF power supplies don't count as evidence, because the coax-powered OLM hub vault sits beside one. NMK is unaffected. | **Fixed, matches** |
 | D3 | FC024 | 147,111 | 140,644 (= splice reports) | "DMI-14001G TO DMI-15204G FC024" is labelled twice with identical values (6,467 ft). The manual BOM summed both labels; the reports list the cable once. | **Manual BOM error (+6,467 ft)** |
-| D4 | XGS SFP+ | 1 / 3 | was 2 / 3 | The manual BOM follows the SME rule: Non-Grant = ROUNDUP(155/64) = 3 (template formula), Grant = ROUNDUP(222/64) − 3 = 1. This is now the default. On NMK it gives 15 SFP = 15 designed PONs; the Credit River BOM's per-column rounding gave 18. | **Fixed, matches** |
+| D4 | XGS SFP+ | 1 / 3 | was 2 / 3 | The manual BOM follows the design standard: Non-Grant = ROUNDUP(155/64) = 3 (template formula), Grant = ROUNDUP(222/64) − 3 = 1. This is now the default. On NMK it gives 15 SFP = 15 designed PONs; the Credit River BOM's per-column rounding gave 18. | **Fixed, matches** |
 | D5 | Splitters 1x32 | 3 / 4 | 3 / 4 | Grant = ROUNDUP(67/32) = 3, Non-Grant = 7 designed − 3. Both approved BOMs compute Grant first for splitters, so this stays the exception to the Non-Grant-first rule. | Matches |
 | D6 | MAX10 +4 kits | 0 / 9 | was 0 / 0 (need-based) | The manual BOM keeps the template formula I23 = I19: one kit per Non-Grant MAX10. This is now the default. | **Fixed, matches** |
 | D7 | Ground wire kit | blank | was 77 / 49 | Left blank, although the template carries the hand-count note. It is no longer written; the audit keeps the count. | **Fixed, matches** |
 | D8 | Passings | 67 / 142, 0 / 13 | identical | The Non-Grant-inside rule gives exactly the same split in DMI. In NMK, 25 served addresses on the plain Address layer lie outside every Non-Grant polygon, and the Credit River BOM follows the layer. So the passings rule stays layer-based, and the new WARN ADDRESS_LAYER_VS_BOUNDARY lists every disagreement. | Matches |
-| D9 | Drop footage | NG 35,941, G blank | 36,117 total: G 10,194 / NG 25,923 | The whole drop footage went into the Non-Grant column. Credit River put only Non-Grant drops there. The SME rule (Non-Grant inside, Grant = total − Non-Grant) gives 10,194 / 25,923, which is the new default. The other two are options (`total_nongrant`, `nongrant_only`). | **Conflict, to confirm** |
+| D9 | Drop footage | NG 35,941, G blank | 36,117 total: G 10,194 / NG 25,923 | The whole drop footage went into the Non-Grant column. Credit River put only Non-Grant drops there. The design standard (Non-Grant inside, Grant = total − Non-Grant) gives 10,194 / 25,923, which is the new default. The other two are options (`total_nongrant`, `nongrant_only`). | **Conflict, to confirm** |
 | D10 | UG footage | 165,584 / 51,957 | 169,182 / 52,335 | −1.8%. The Non-Grant gap is exactly two labels (250 + 128 ft). One 2,374 ft trench label has no fiber cable within 1,200 ft (INFO TRENCH_NO_FIBER; policy `fiber_bearing`). The rest can't be reproduced because label-to-trench matching is ambiguous. | Open |
 | D11 | Row 6 "Total Route Mileage" | 165,584 / 51,957 | 32.14 / 9.91 mi | The manual BOM typed footage into the mileage row; row 7 holds the miles (31.36 / 9.84). | **Manual BOM unit error** |
 | D12 | D trays FE0-R579575 | 5 | 4 | DMI-15001G has 234 splices → 5 trays; DMI-15019 has 93 → 2. That is 7 trays → 4 kits of 2. No splice-count rule gives 5, and Credit River R03 goes the other way (4 against 5). | Open |
@@ -151,7 +151,7 @@ The manual DMI-R15 BOM was supplied after 0.5.0. It uses the new blank template,
 
 **Score:** 72/90 → **75/90** cells and 34/45 → **38/45** network totals.
 
-**Effect on NMK:** the new defaults for SFP, MAX10 +4 and drops follow the SME rule and the DMI BOM, not the Credit River practice. This costs 8 NMK cells (SFP Grant 3, MAX10 +4 Non-Grant 3, Grant drops 2). Nothing else changes. Each old convention is still an option, and `--learn` picks whichever the approved BOMs support.
+**Effect on NMK:** the new defaults for SFP, MAX10 +4 and drops follow the design standard and the DMI BOM, not the Credit River practice. This costs 8 NMK cells (SFP Grant 3, MAX10 +4 Non-Grant 3, Grant drops 2). Nothing else changes. Each old convention is still an option, and `--learn` picks whichever the approved BOMs support.
 
 ## Per-line table (0.5.0 run against the Credit River approved BOM)
 
@@ -168,7 +168,7 @@ The run covered 368 area cells and 184 network totals: **298 cells and 160 netwo
 | Residential Count | VERIFIED | sum HC of CX1-COUNT (minus MDU units); grant = FMRESADD2 on GRANTADDRESS layer; cross-checked with address list | 227 / 230 / 209 / 178 | 227 / 230 / 209 / 178 | 8/8 cells, 4/4 totals | High | none |
 | Commercial Count | VERIFIED | sum CC of CX1-COMCNT (+unused MDUC) minus MDU commercial units; grant = FMCOMADD2 outside Non-Grant polygons | 2 / 12 / 3 / 7 | 2 / 12 / 3 / 7 | 8/8 cells, 4/4 totals | High | none |
 | MDU Count | VERIFIED | FMMULTIADD RESIDENTIAL_COUNT + COMMERCIAL_COUNT by area | 0 / 4 / 4 / 4 | 0 / 4 / 4 / 4 | 8/8 cells, 4/4 totals | High | none |
-| CBP-Z14SS0720002BK | VERIFIED | 1 Z-14 housing per ground-mounted OLM; SME: OLM items always in Grant unless the OLM area has no grant passings | 1 / 1 / 1 / 1 | 1 / 1 / 1 / 1 | 8/8 cells, 4/4 totals | High | none |
+| CBP-Z14SS0720002BK | VERIFIED | 1 Z-14 housing per ground-mounted OLM; design standard: OLM items always in Grant unless the OLM area has no grant passings | 1 / 1 / 1 / 1 | 1 / 1 / 1 / 1 | 8/8 cells, 4/4 totals | High | none |
 | CBP-MAX10DSM24 | VERIFIED_TOTAL | count of CX1-MAX10 blocks by location (Non-Grant polygons) | 59 / 51 / 80 / 70 | 59 / 51 / 80 / 70 | 6/8 cells, 4/4 totals | High (totals) / Medium (split) | Network total matches (51). One MAX10 is classified Grant by the current Non-Grant polygons but Non-Grant in the reference - ped near a polygon edge. |
 | CBP-MAX5DSM24 | VERIFIED_TOTAL | count of CX1-MAX5 blocks by location (Non-Grant polygons) | 147 / 183 / 136 / 127 | 147 / 183 / 136 / 127 | 0/8 cells, 4/4 totals | High (totals) / Medium (split) | Network totals match exactly in all four networks. Grant/Non-Grant split differs by 2-3 peds in R02-R04 and 8 in R05: peds near Non-Grant polygon edges; R05 also shows larger Non-Grant extents in the reference (vault, 450B, cable and route all shift the sam... |
 | CBP-GFP103160002874 | NOT_DETECTED | no GOAT ped symbol defined in the drawing conventions; reference 0 | 0 / 0 / 0 / 0 | – / – / – / – | 8/8 cells, 4/4 totals | n/a | none |
@@ -192,13 +192,13 @@ The run covered 368 area cells and 184 network totals: **298 cells and 160 netwo
 | FE0-FOSC450B66NT0B3V | VERIFIED | splice reports with Enclosure Type FOSC 450B, area by splice location | 0 / 1 / 1 / 3 | 0 / 1 / 1 / 3 | 6/8 cells, 4/4 totals | High | Network total matches (3). Reference books one 450B as Non-Grant; NMK-05131 sits 23 ft from a Non-Grant polygon edge. |
 | FE0-FOSC450C66NT0B3V | VERIFIED | splice reports with Enclosure Type FOSC 450C | – / – / – / – | 0 / 0 / 0 / 0 | 8/8 cells, 4/4 totals | High | none |
 | FE0-FOSC450D66NT0T3V | VERIFIED | splice reports with Enclosure Type FOSC 450D, area by splice location | 2 / 2 / 2 / 4 | 2 / 2 / 2 / 4 | 8/8 cells, 4/4 totals | High | none |
-| FE0-R863927 | INFERRED | SME walkthrough: trays per 450B location = ROUNDUP(fusion splices/24); packages (2 trays) = ROUNDUP(sum of trays/2) per column - spare tray reused at another location | – / 1 / 1 / 2 | 0 / 1 / 1 / 2 | 6/8 cells, 4/4 totals | Medium | SME rule with pooled packages: R03 1, R04 1, R05 3 trays -> 2 packages (exact network totals). R05 cell split differs only because NMK-05131 is 23 ft from a Non-Grant edge. |
-| FE0-R579575 | INFERRED | SME walkthrough: trays per 450D location = ROUNDUP(fusion splices/48) (NMK-02001G 242 -> 6); packages (2 trays) = ROUNDUP(sum of trays/2) per column | 4 / 4 / 4 / 5 | 4 / 5 / 4 / 5 | 7/8 cells, 3/4 totals | Medium | SME rule: trays per location ROUNDUP(splices/48), 2-tray packages pooled per column. R02 7 trays -> 4, R04 7 -> 4, R05 9 -> 5 (all exact). R03: 03001G 255 -> 6 + 03004 100 -> 3 = 9 trays -> 5 vs reference 4; the reference appears to have counted 03004 as <=... |
+| FE0-R863927 | INFERRED | design standard: trays per 450B location = ROUNDUP(fusion splices/24); packages (2 trays) = ROUNDUP(sum of trays/2) per column - spare tray reused at another location | – / 1 / 1 / 2 | 0 / 1 / 1 / 2 | 6/8 cells, 4/4 totals | Medium | design standard with pooled packages: R03 1, R04 1, R05 3 trays -> 2 packages (exact network totals). R05 cell split differs only because NMK-05131 is 23 ft from a Non-Grant edge. |
+| FE0-R579575 | INFERRED | design standard: trays per 450D location = ROUNDUP(fusion splices/48) (NMK-02001G 242 -> 6); packages (2 trays) = ROUNDUP(sum of trays/2) per column | 4 / 4 / 4 / 5 | 4 / 5 / 4 / 5 | 7/8 cells, 3/4 totals | Medium | design standard: trays per location ROUNDUP(splices/48), 2-tray packages pooled per column. R02 7 trays -> 4, R04 7 -> 4, R05 9 -> 5 (all exact). R03: 03001G 255 -> 6 + 03004 100 -> 3 = 9 trays -> 5 vs reference 4; the reference appears to have counted 03004 as <=... |
 | FE0-R89279 | VERIFIED | 0 - the FOSC450-D6-6-NT-0-T3V closure ships with its tall slack basket ('T' in the part code, CommScope ordering guide); the approved BOM orders 0 | – / – / – / – | 0 / 0 / 0 / 0 | 8/8 cells, 4/4 totals | High | none |
-| FM0-FF11002 | SUGGESTED | SME: burns & heat shrink are not updated in the BOM; audit shows fusion splices only | – / – / – / – | 571 / 699 / 633 / 574 | 0/8 cells, 0/4 totals | Low | SME: burns & heat shrink are not updated in the BOM. Audit shows fusion-splice count only. |
+| FM0-FF11002 | SUGGESTED | design standard: burns & heat shrink are not updated in the BOM; audit shows fusion splices only | – / – / – / – | 571 / 699 / 633 / 574 | 0/8 cells, 0/4 totals | Low | design standard: burns & heat shrink are not updated in the BOM. Audit shows fusion-splice count only. |
 | IHM-04584865 | VERIFIED | 1 MDU enclosure per FMMULTIADD building | – / 1 / 1 / 1 | 0 / 1 / 1 / 1 | 8/8 cells, 4/4 totals | High | none |
 | FM0-3HG01676AB | VERIFIED | 1 SF-8M bundle per CX1_OLM block | 1 / 1 / 1 / 1 | 1 / 1 / 1 / 1 | 8/8 cells, 4/4 totals | High | none |
-| FM0-3FE47548AD | VERIFIED | SME walkthrough: ROUNDUP(Jumper Calculator splitters required / 2) per column = ROUNDUP(ROUNDUP(passings/32)/2) | 5 / 5 / 4 / 4 | 5 / 5 / 4 / 4 | 8/8 cells, 4/4 totals | High | SME: SFP = ROUNDUP(Jumper Calculator 'Splitters Required' / 2) per column, regardless of the splitter actually designed. |
+| FM0-3FE47548AD | VERIFIED | design standard: ROUNDUP(Jumper Calculator splitters required / 2) per column = ROUNDUP(ROUNDUP(passings/32)/2) | 5 / 5 / 4 / 4 | 5 / 5 / 4 / 4 | 8/8 cells, 4/4 totals | High | design standard: SFP = ROUNDUP(Jumper Calculator 'Splitters Required' / 2) per column, regardless of the splitter actually designed. |
 | FE0-F1PLC32 | VERIFIED | used when the design's PLC couplers are 1x32: network = ROUNDUP(passings/32), Grant = ROUNDUP(grant passings/32) | – / – / – / – | 0 / 0 / 0 / 0 | 8/8 cells, 4/4 totals | High | none |
 | FE0-F1PLC64 | VERIFIED | network = ROUNDUP(passings/64) (= splice-report PLC COUPLER 64 rows = address-list PONs); Grant = ROUNDUP(grant passings/64), Non-Grant = remainder | 4 / 4 / 4 / 3 | 4 / 4 / 4 / 3 | 8/8 cells, 4/4 totals | High | none |
 | CP0-XM31L903HP120H2SFPAPPS | VERIFIED | 1 power supply per OLM | 1 / 1 / 1 / 1 | 1 / 1 / 1 / 1 | 8/8 cells, 4/4 totals | High | none |

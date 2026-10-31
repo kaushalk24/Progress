@@ -13,9 +13,9 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Non-Grant area | Every polygon on `Boundary - Designed Not Built` (SpatialNet proxy LWPolygons decoded from proxy graphics, plus LWPOLYLINEs), except ones labelled as network or transport boundaries. Unlabelled polygons count too: this was needed to reproduce the commercial/MDU splits. | VERIFIED |
 | Grant classification of infrastructure | By **location** (insertion point inside or outside the Non-Grant polygons). A service-based alternative (by addresses served) was tested and rejected: R02 MAX10 gave 24/35 vs 55/4 in the reference. | VERIFIED |
 
-## Grant / Non-Grant rule (SME) and where it applies
+## Grant / Non-Grant rule (design standard) and where it applies
 
-**SME rule:** Non-Grant = everything inside the Non-Grant boundaries; Grant = total − Non-Grant.
+**Rule:** Non-Grant = everything inside the Non-Grant boundaries; Grant = total − Non-Grant.
 
 | Line | How the rule is applied | Evidence |
 |---|---|---|
@@ -23,11 +23,11 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Cables | Routed spans by majority area; Grant = TOTAL − Non-Grant spans | Best of 8 hypotheses on NMK; DMI 8/10 cells |
 | Route footage (rows 6–10) | Route labels inside the Non-Grant polygons; Grant = rest | CalcFTG method |
 | XGS SFP+ | Non-Grant = ROUNDUP(NG passings / 64); Grant = ROUNDUP(total / 64) − Non-Grant | DMI exact; NMK total = designed PONs |
-| Drops | Non-Grant = drops of Non-Grant addresses; Grant = total − Non-Grant | SME rule; the approved BOMs differ (policy `drop_columns`) |
+| Drops | Non-Grant = drops of Non-Grant addresses; Grant = total − Non-Grant | design standard; the approved BOMs differ (policy `drop_columns`) |
 | **Exception: splitters** | Grant = ROUNDUP(grant passings / ratio); Non-Grant = designed − Grant | Both approved BOMs |
 | **Exception: passings** | Grant = served addresses on GRANTADDRESS; Non-Grant = total − Grant | Both approved BOMs; the deep check lists addresses whose layer and boundary disagree |
 
-## RF (coax) plant: not calculated (SME)
+## RF (coax) plant: not calculated (design standard)
 
 - **Vaults and L-boxes:** one is RF support when an RF device is within 50 ft and no fiber splice is within 100 ft. RF devices are the DES_AMPS / TAPS / EOL / TERM / SPLITS blocks and CX1_TRIPAM / HGDULA.
   - RF power supplies are not evidence: the coax-powered OLM hub vault sits beside one.
@@ -52,7 +52,7 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Cable Grant/Non-Grant | Route each segment through the cable polylines (graph shortest path from A to B splice), split at splices and structures, classify each span by majority area, then apportion TOTAL by span length | Cells: FC072/FC144 8/8, FC048 6/8, FC096 4/8, FC024 0/8 (all within a few spans; R03 FC048 exact) |
 | FOSC 450A-D | Splice reports `Enclosure Type`, area by splice location | Totals 4/4; 450B cells 6/8 (NMK-05131 is 23 ft from an edge), 450D 8/8 |
 | Splitter 1x32 / 1x64 | Ratio from splice-report `PLC COUPLER` rows (fallback: address list). Network = ROUNDUP(passings/ratio). Grant = ROUNDUP(grant/ratio); Non-Grant = rest | 8/8 exact; matches report coupler count and address-list PONs |
-| XGS SFP+ | ROUNDUP(ROUNDUP(column passings/32)/2) per column (SME: Jumper Calculator / 2; superseded the 0.1 rule) | 8/8 exact (18 SFP for 15 PONs; flagged) |
+| XGS SFP+ | ROUNDUP(ROUNDUP(column passings/32)/2) per column (design standard: Jumper Calculator / 2; superseded the 0.1 rule) | 8/8 exact (18 SFP for 15 PONs; flagged) |
 | MDU enclosure | 1 per `FMMULTIADD` building | exact |
 | OLM bundle, XM3.1 PSU, battery kit | 1 per `CX1_OLM`; Z-14 ped + ground enclosure + pedestal support per ground OLM; pole enclosure per aerial OLM (within 15 ft of an aerial pole) | exact |
 | Batteries | 3 x OLM (3-battery enclosure) | exact |
@@ -60,7 +60,7 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Jumper Calculator | Houses passed per column (sheet formulas do the rest) | 930/64/8/32/3 identical |
 | Route miles / UG / aerial footage | Σ `CX1-FTG-N2` FTG labels on `RTE_UGTRENCH` / `RTE_AESTRAND` | INFERRED. Reference rows 6-10 are typed in and use a different method per network. |
 
-## Rules added from the AutoCAD routines and the SME walkthrough (0.3.0)
+## Rules added from the AutoCAD routines and the design standard (0.3.0)
 
 | BOM line | Rule | Evidence |
 |---|---|---|
@@ -68,9 +68,9 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Route footage (rows 6-10) | `CalcFTG.lsp`: sum of `CX1-FTG-N2` FTG on `RTE_UGTRENCH` (or `GRANT FTG` / `NON-GRANT FTG`) inside the boundary | R02/R03/R05 network totals exact |
 | 450B/450D trays | Trays per location ROUNDUP(fusion splices / 24 or 48); packages = ROUNDUP(sum of trays / 2) per column | 6 of 7 reference network totals |
 | MAX10 +4 upgrade | One kit per 4 passings a MAX ped feeds above 4 (none in these designs) | No ped feeds more than 2 |
-| SFP | ROUNDUP(ROUNDUP(passings/32)/2) per column (SME: Jumper Calculator / 2) | 8/8 |
-| Splitters | Designed count (splice reports). Grant = ROUNDUP(grant/ratio), the rest Non-Grant (SME). The template's per-column ROUNDUP(/64) is overridden. | 8/8 |
-| OLM equipment | Grant column unless the OLM has no grant passings (SME) | 8/8 |
+| SFP | ROUNDUP(ROUNDUP(passings/32)/2) per column (design standard: Jumper Calculator / 2) | 8/8 |
+| Splitters | Designed count (splice reports). Grant = ROUNDUP(grant/ratio), the rest Non-Grant (design standard). The template's per-column ROUNDUP(/64) is overridden. | 8/8 |
+| OLM equipment | Grant column unless the OLM has no grant passings (design standard) | 8/8 |
 
 ## Rules added by the forensic review (0.5.0)
 
@@ -130,7 +130,7 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 
 ## Not reproducible from the supplied data (left blank, flagged)
 
-* **Heat-shrink sleeves:** the SME says they aren't updated in the BOM; the audit shows the fusion-splice count.
+* **Heat-shrink sleeves:** the design standard says they aren't updated in the BOM; the audit shows the fusion-splice count.
 * **GOAT peds, peds with taps, FTP/FST/MST/OTE taps, plenum lateral:** these designs have no symbol for them.
 * **Route Grant/Non-Grant split (rows 6–10):** point, window and trench-length methods all fail to reproduce the reference; see FORENSIC_FINDINGS.md F6.
 

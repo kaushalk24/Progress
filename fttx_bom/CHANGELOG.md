@@ -1,14 +1,14 @@
 # Changelog
 
-## 0.6.0 - Melcher-Dallas approved BOM: SME Grant/Non-Grant rule, RF plant left out
+## 0.6.0 - Melcher-Dallas approved BOM: Grant/Non-Grant standard, RF plant left out
 
 Reconciled against the manual DMI-R15 BOM (see FORENSIC_FINDINGS.md "Melcher-Dallas"): 72 → 75 of 90 cells, 34 → 38 of 45 totals.
 
-- **RF (coax) support structures are not calculated (SME):**
+- **RF (coax) support structures are not calculated (design standard):**
   - vaults/L-boxes at an RF device with no fiber splice nearby are left out (DMI: 1 vault, now 8 = approved);
   - aerial strand with no aerial fiber cable is left out (DMI: 512 ft, now 0 = approved);
   - RF devices are never reported as unmapped materials.
-- **SME Grant/Non-Grant rule** (Non-Grant inside the boundaries, Grant = total − Non-Grant):
+- **Grant/Non-Grant standard** (Non-Grant inside the boundaries, Grant = total − Non-Grant):
   - SFP Non-Grant = ROUNDUP(NG/64), Grant = ROUNDUP(total/64) − Non-Grant. This is the new default; it reproduces DMI exactly and gives NMK 15 SFP for 15 designed PONs (the per-column option gave 18).
   - Drops: the new default is "both" (Grant = total − Non-Grant), with new option `total_nongrant` (the DMI BOM's convention). **Please confirm.**
 - **MAX10 +4 kits:** the default is now the blank-template formula, one kit per Non-Grant MAX10 (reproduces DMI 0 / 9).
@@ -23,7 +23,7 @@ Reconciled against the manual DMI-R15 BOM (see FORENSIC_FINDINGS.md "Melcher-Dal
   - FC024 is double-counted (+6,467 ft, a duplicated drawing label);
   - row 6 has footage typed into the mileage row;
   - the bonding jumper and ped bonding kit inherit the template's inconsistent column formulas.
-- **Credit River effect:** 8 cells now follow the SME rule and the DMI convention instead of the Credit River practice (SFP Grant 3, MAX10 +4 3, Grant drops 2).
+- **Credit River effect:** 8 cells now follow the design standard and the DMI convention instead of the Credit River practice (SFP Grant 3, MAX10 +4 3, Grant drops 2).
 - **Tests:** 88 (87 without the slow end-to-end test).
 
 ## 0.5.0 - forensic review, independent code review, research-backed rules
@@ -86,7 +86,7 @@ Reconciled against the manual DMI-R15 BOM (see FORENSIC_FINDINGS.md "Melcher-Dal
 - **Auto-detection** (`auto` command): classifies DWG/DXF, address lists, both splice-report layouts, blank templates and completed BOMs by content. Zips are extracted safely, including nested ones (zip-slip blocked).
 - **Batch** (`batch` command): one job per sub-folder, with `BATCH_SUMMARY.xlsx`.
 - **Deep check**: about 40 checks with severity, affected BOM lines, fix instructions and coordinates. Results go to the `Deep Check` audit sheet, `*_ISSUES.csv` and `*_ISSUES.scr` (an AutoCAD script that circles each issue with object snaps off).
-- **Policies**: every open convention is computed every way. With an approved BOM, each option is scored per cell; `--learn` stores the evidence in `config/policies.json` and selects the best. On a tie, the documented SME / AutoCAD-routine method wins over the lower total error. The Credit River calibration confirms all current defaults.
+- **Policies**: every open convention is computed every way. With an approved BOM, each option is scored per cell; `--learn` stores the evidence in `config/policies.json` and selects the best. On a tie, the documented design standard / AutoCAD-routine method wins over the lower total error. The Credit River calibration confirms all current defaults.
 - **Splice Guide report layout** ("Fiber Optic Splice Guide") is parsed. Before this, three NMK-R03 reports were read as blank enclosures with 0 splices.
 - `pipeline.run_job()` is shared by the CLI, batch and the app. The CLI has `run` / `auto` / `batch` / `app` sub-commands; the old flag form still works.
 
@@ -105,7 +105,7 @@ Reconciled against the manual DMI-R15 BOM (see FORENSIC_FINDINGS.md "Melcher-Dal
 - A per-network value that was not computed now stays blank instead of 0.
 - NMK reconciliation: 292/360 cells, 156/180 network totals.
 
-## 0.2.0 - rules from the SME BOM walkthrough (see SME_MEETING_NOTES.md)
+## 0.2.0 - design standards (see DESIGN_STANDARDS.md)
 - Splice trays (450B/450D) now computed: per location ROUNDUP(ROUNDUP(fusion splices / 24 or 48) / 2) packages. NMK: R02, R04 exact; R03/R05 one package higher than the reference (reference pools small locations).
 - SFP = ROUNDUP(Jumper Calculator splitters / 2) per column (identical on NMK; DMI-R15 now 5 instead of 8).
 - OLM equipment booked to Grant unless the OLM area has no grant passings.

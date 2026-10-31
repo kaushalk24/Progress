@@ -100,7 +100,7 @@ What it checks:
 - workbook verification;
 - which policies change the totals.
 
-## 6. Policies: accurate results without waiting for an SME
+## 6. Policies: accurate results without waiting for manual confirmation
 
 Some conventions can't be read from the drawing, so the tool computes **every option** on every run:
 
@@ -120,7 +120,7 @@ The audit's *Policies* sheet shows every option's numbers side by side.
 
 When you include an **approved BOM**, every option is scored against it cell by cell. With *Learn* (`--learn`), the best options are saved to `config/policies.json` and used for every new BOM. Each approved BOM you feed in adds evidence, so the tool keeps following your company's actual practice.
 
-The current defaults are the SME walkthrough rules and your AutoCAD routines (FX_DROPS, CalcFTG). On the Credit River BOM, the default option scores at least as well as every alternative on every policy.
+The current defaults are the design standards and your AutoCAD routines (FX_DROPS, CalcFTG). On the Credit River BOM, the default option scores at least as well as every alternative on every policy.
 
 ## 7. Outputs
 
@@ -156,4 +156,4 @@ python -m pytest -q -m "not slow"
 FTTX_TEST_DATA=/path/to/project/files python -m pytest -q
 ```
 
-See `BOM_RULES.md` (rules and DWG→BOM chains), `FORENSIC_FINDINGS.md` (line-by-line reconstruction of the approved BOM), `RESEARCH.md` (sources), `SME_MEETING_NOTES.md`, `PROGRESS_AND_ISSUES.md`, `CHANGELOG.md` and `RESEARCH_RECOVERY.md` (work checkpoint).
+See `BOM_RULES.md` (rules and DWG→BOM chains), `FORENSIC_FINDINGS.md` (line-by-line reconstruction of the approved BOM), `RESEARCH.md` (sources), `DESIGN_STANDARDS.md`, `PROGRESS_AND_ISSUES.md`, `CHANGELOG.md` and `RESEARCH_RECOVERY.md` (work checkpoint).

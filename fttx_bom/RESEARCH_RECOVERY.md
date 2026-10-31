@@ -55,7 +55,7 @@ The scripts are in `$S/forensic/`. Each takes the package path as `argv[1]`, and
 
 ## 5. Unresolved hypotheses
 
-- Route footage definition (rows 6–10): the reference uses a different method in each network. Not reproducible; needs an SME decision. The tool computes both options as policies.
+- Route footage definition (rows 6–10): the reference uses a different method in each network. Not reproducible; needs a design decision. The tool computes both options as policies.
 - MAX10 +4 upgrades: the reference gives 44/63 as a blanket rule; need-based gives 0. Policy options exist.
 - R04 FC024 to FC048: a 5,187 ft move in the reference that both the drawing and the splice reports contradict. Treated as a reference error.
 - The R05 Non-Grant boundary probably changed after the reference BOM.
@@ -82,7 +82,7 @@ The scripts are in `$S/forensic/`. Each takes the package path as `argv[1]`, and
 
 - **Late fix:** each ped-splice is tied to its nearest housing and FOSC-closure splices are excluded. This removed 4 false MAX5 hits (the OLM hub splices). The rule is now "no MAX5 on a cable above 48F, any role".
 - **Next actionable tasks (only if the user asks):**
-  - SME decisions G1–G4 (PROGRESS_AND_ISSUES.md);
+  - design decisions G1–G4 (PROGRESS_AND_ISSUES.md);
   - allow the vendor hosts in network settings and verify the current CommScope tray limits;
   - check the LibreDWG version bundled in `@mlightcad/libredwg-web@0.8.0`;
   - review finding 18 (scope learned evidence per project).
@@ -232,3 +232,63 @@ Outputs are in `$S/out7`, and every run passed workbook verification (FAIL=0, re
 - D trays (5 against 4);
 - the remaining UG route gap;
 - fixing the template's bonding formulas.
+
+---
+
+# Task 3 (started 2026-10-31): professional refinement, new drawing DMF-R04, reference material re-study
+
+What the user asked for:
+1. Make the tool simple and professional. **No wording that refers to where the design knowledge came from** in the tool, docs or outputs.
+2. Plan and implement a professional UI.
+3. Highlight cells without confidence in the extracted BOM.
+4. Re-study the design-standard reference material and reverse-engineer it in depth. Correct values matter more than matching a manual BOM, which may contain errors.
+5. New drawing `$S/inputs/dmf/386029_South_Des_Moines_FTTH_DMF-R04_DWG.dwg`. It contains existing HFC plant and fiber networks that were not designed by us. Our designs use M5/M10 peds with a bulkhead for the enclosure. Only our design counts.
+
+Assets: the design reference material in the session workspace. The exact paths are in the private recovery log in the scratchpad.
+
+Plan:
+- A: design-standard study → scratchpad research notes.
+- B: DMF-R04 forensic.
+- C: rule fixes.
+- D: remove source-reference wording.
+- E: confidence highlighting.
+- F: UI redesign.
+- G: tests, regenerate, commit.
+
+## Task 3 checkpoint 1
+
+- **Design reference:** re-read. A background agent is studying the reference screens and writes its findings to the scratchpad.
+- **Rule change from the notes:** SFP is per column, ROUNDUP(splitters/2) (10:47–13:30). Revert the default to jumper_half; total_minus_ng stays an option.
+- **DMF-R04: Non-Grant polygons recovered.** They are SNMPOLYGON custom entities that the converter dropped. `tools/dwg2json.mjs` now emits every UNKNOWN_ENT with its preview graphics as ACAD_PROXY_ENTITY. That gives 8 polygons on "Boundary - Designed Not Built", 7 labelled NON GRANT 1–7 and 1 unlabelled. The cache key now includes the converter hash.
+- **DMF-R04 networks:**
+  - existing HFC: DES_* devices, coax DES_\d+P/T layers, CX1-PED4, poles, anchors, CX1_NODE;
+  - other fiber (not ours): CX1_4PT_MST on DES_FIBER_SPL, with splices DMF-04002..04025 at MSTs. Cables FC144 04001→04021, FC072 04001→DMF-P21-A (HFC node) and FC024 04008→04010;
+  - ours: MAX5/MAX10 splices DMF-04028..04043G; FC024 04001→04026 (aerial), 04026→04027, 04027→04043G, 04027→04036G and the laterals.
+- **Next:** define and implement the "our design" filter (splice housed in an MST or HFC ped means foreign; a cable is foreign when either end is foreign or an HFC node; structures must be on our cable paths).
+
+## Task 3 checkpoint 2 (code not yet committed)
+
+**Design scope** (`takeoff.design_scope`, `exclude`; conventions `foreign_fiber_blocks`, `hfc_*`, `coax_layer_regex`):
+- splices at MST terminals are foreign;
+- cables ending at a foreign splice or an HFC node are foreign;
+- structures must be on our route (within 40 ft) or at our splice (within 50 ft);
+- trench along coax with none of our fiber is RF;
+- count blocks at HFC/MST/RF-tap plant are excluded;
+- without an address list, address blocks count only when their nearest housing is our ped.
+
+**DMF-R04 result:**
+- passings 18;
+- MAX10 6 / MAX5 10;
+- vaults 7, with 1 L-box excluded;
+- FC024 27,095 ft (9,217 UG + 17,878 aerial);
+- route UG 15,615 / 2,119, aerial 15,671;
+- excluded: FC144 1,830, FC072 2,075 (to HFC node), FC024 149 and 27 trench labels; 12 RF trench and 5 RF strand labels.
+
+**NMK/DMI regression check against 0.6.0:** only SFP (back to per-column, as in the reference material) and NMK R04 UG −684 ft (RF trench) changed.
+
+**Next:**
+- remove the source-reference wording;
+- confidence highlighting;
+- UI;
+- integrate the reference material agent's findings;
+- tests, regenerate, commit.

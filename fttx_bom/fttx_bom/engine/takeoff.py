@@ -12,7 +12,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from ..extract.model import Drawing, Insert, Point
+from ..extract.model import Drawing, Insert, Point, Polyline
 from ..inputs.address_list import AddressList
 from ..inputs.splice_reports import SpliceReport, network_from_splice_name
 from .geometry import dist, length_inside, point_segment_distance, polyline_length
@@ -190,7 +190,7 @@ def fiber_cables(d, conv, which=("underground", "aerial")) -> list:
 
 def rf_support_test(d, conv):
     """Callable(point) -> reason or None: a support structure (vault, L-box) that serves the RF (coax)
-    plant, not the fiber. RF plant is not part of the FTTH BOM (SME). A structure is RF when an RF
+    plant, not the fiber. RF plant is not part of the FTTH BOM. A structure is RF when an RF
     device (amplifier, tap, splitter, terminator, end-of-line) is within rf_support_radius_ft and no
     fiber splice point is within rf_support_splice_ft. RF power supplies are not used as evidence:
     the coax-powered OLM sits beside one in the fiber hub vault."""
@@ -211,6 +211,52 @@ def rf_support_test(d, conv):
     return test
 
 
+# ----------------------------------------------------------------- design scope
+def design_scope(d, conv, tk: Takeoff) -> dict:
+    """Which objects belong to networks this design does not own.
+
+    A drawing can also carry an existing HFC (coax) plant and fiber networks designed by others.
+    This design is built with MAX5/MAX10 pedestals and bulkheads. Fiber of another network is
+    recognised by its terminals (MST-type blocks, `foreign_fiber_blocks`): a splice point housed
+    at such a terminal belongs to that network, and so does every cable that ends there or at an
+    HFC node (CX1_NODE tag)."""
+    terminals = [i for i in d.inserts if i.name in set(conv.get("foreign_fiber_blocks", []))]
+    peds = [i.pt for k in ("ped_max10", "ped_max5") for i in _blocks(d, conv, k)]
+    r = conv.get("foreign_terminal_ft", 35.0)
+    foreign = {}
+    if terminals:
+        for ins in _blocks(d, conv, "splice_point"):
+            nm = (ins.attr("NAME") or "").strip().upper()
+            dt, blk = min(((dist(ins.pt, t.pt), t.name) for t in terminals), key=lambda x: x[0])
+            dp = min((dist(ins.pt, q) for q in peds), default=1e18)
+            if nm and dt <= r and dt < dp:
+                foreign[nm] = f"housed at {blk} {dt:.0f} ft away (terminal of another fiber network)"
+    nodes = set()
+    for ins in d.inserts:
+        if ins.name in set(conv.get("hfc_node_blocks", [])):
+            tag = (ins.attr("AMPTAG") or ins.attr("NAME") or "").strip().upper()
+            if tag:
+                nodes.add(re.sub(r"-0+$", "", tag))
+    scope = {"foreign_splices": foreign, "hfc_nodes": nodes, "excluded": []}
+    tk.extra["scope"] = scope
+    return scope
+
+
+def _foreign_end(a: str, b: str, scope: dict) -> str | None:
+    for end in (a.upper(), b.upper()):
+        if end in scope["foreign_splices"]:
+            return f"{end} {scope['foreign_splices'][end]}"
+        if end in scope["hfc_nodes"]:
+            return f"{end} is an HFC node"
+    return None
+
+
+def exclude(tk: Takeoff, category: str, what: str, qty: str, reason: str, pt=None) -> None:
+    """Record an object that is in the drawing but not part of this design's BOM."""
+    tk.extra.setdefault("scope", {"foreign_splices": {}, "hfc_nodes": set(), "excluded": []})["excluded"].append(
+        (category, what, qty, reason, pt))
+
+
 def count_blocks(d, conv, cls, tk, key, qkey=None, unit="EA"):
     qkey = qkey or key
     names = conv["blocks"][key]["names"]
@@ -223,14 +269,27 @@ def count_blocks(d, conv, cls, tk, key, qkey=None, unit="EA"):
     tk.ensure(qkey, unit, f"count of block {names}")
     if key in conv.get("rf_support_keys", []):
         is_rf = rf_support_test(d, conv)
+        ours, others = tk.extra.get("our_paths"), tk.extra.get("foreign_paths")
+        fs = tk.extra.get("scope", {}).get("foreign_splices", {})
+        our_splices = [i.pt for i in _blocks(d, conv, "splice_point") if (i.attr("NAME") or "").strip().upper() not in fs]
         kept = []
         for ins in found:
             why = is_rf(ins.pt)
             if why:
                 tk.extra.setdefault("rf_structures", []).append((qkey, ins.handle, ins.pt, why))
                 tk.check(f"RF support structure {qkey}", False, f"{ins.name} {ins.handle}: {why} - RF plant, not counted", warn=True)
-            else:
-                kept.append(ins)
+                continue
+            if others is not None and ours is not None:
+                d_o, d_f = ours.nearest(ins.pt, 100.0), others.nearest(ins.pt, 100.0)
+                on_ours = (d_o is not None and d_o <= 40.0) or any(dist(ins.pt, q) <= 50.0 for q in our_splices)
+                if not on_ours and d_f is not None and (d_o is None or d_f < d_o):
+                    exclude(tk, "Other fiber network", f"{ins.name} {ins.handle}", "1", f"on another network's fiber route ({d_f:.0f} ft)", ins.pt)
+                    continue
+                if not on_ours and d_o is None:
+                    exclude(tk, "Existing / other plant", f"{ins.name} {ins.handle}", "1",
+                            "not on a fiber route of this design (existing or other plant)", ins.pt)
+                    continue
+            kept.append(ins)
         found = kept
     for ins in found:
         net, area = _locate(cls, ins, tk)
@@ -275,11 +334,26 @@ def passings(d, conv, cls, tk: Takeoff, address_lists: dict[str, AddressList]):
     """
     sums = defaultdict(float)
     ev = defaultdict(list)
+    # count blocks of other plant (HFC taps / pedestals, other networks' terminals) are not this design's
+    # passings: a count block belongs to the nearest housing within count_block_assoc_ft
+    other = [i.pt for i in d.inserts if i.name in set(conv.get("foreign_fiber_blocks", []) + conv.get("hfc_ped_blocks", []))
+             or i.layer in set(conv.get("rf_tap_layers", []))]
+    peds = [i.pt for k in ("ped_max10", "ped_max5") for i in _blocks(d, conv, k)]
+    assoc = conv.get("count_block_assoc_ft", 60.0)
     for key, tag in (("house_count", "HC"), ("com_count", "CC"), ("mdu_count", "MDUC")):
         for ins in _blocks(d, conv, key):
             # strict: passings outside every boundary are not served by any network
             net = cls.network_of(ins.pt, f"{ins.name}:{ins.handle}", strict=True)
             v = num(ins.attr(tag)) or 0
+            if other and net is not None:
+                d_o = min((dist(ins.pt, q) for q in other), default=1e18)
+                d_p = min((dist(ins.pt, q) for q in peds), default=1e18)
+                # an HFC aerial tap hangs on a pole: count blocks around it are HFC passings
+                if (d_o <= assoc or (d_o <= 2.5 * assoc and d_p > assoc)) and d_o < d_p:
+                    if v:
+                        exclude(tk, "Existing / other plant", f"{ins.name} {ins.handle}", f"{tag} {v:g}",
+                                f"count block of another network's terminal or HFC plant ({d_o:.0f} ft)", ins.pt)
+                    continue
             if net is None:
                 if v and not cls.foreign_of(ins.pt, strict=True):
                     tk.unassigned.append(f"{ins.name} {ins.handle} {tag}={v:g} outside all networks")
@@ -297,21 +371,33 @@ def passings(d, conv, cls, tk: Takeoff, address_lists: dict[str, AddressList]):
         tk.check("address block not in address list", False, f"{net} {what} '{number} {street}' not served - excluded from grant count", warn=True)
         return False
 
+    def ours(net, ins) -> bool:
+        """Without an address list, an address belongs to this design only when its nearest housing is one of
+        this design's pedestals (the drawing may also hold HFC plant or another fiber network)."""
+        if not other or (net in address_lists and address_lists[net].served):
+            return True
+        d_p = min((dist(ins.pt, q) for q in peds), default=1e18)
+        if d_p > min((dist(ins.pt, q) for q in other), default=1e18):
+            exclude(tk, "Existing / other plant", f"{ins.name} {ins.handle}", "address",
+                    "nearest housing is not a pedestal of this design", ins.pt)
+            return False
+        return True
+
     mdu = defaultdict(list)  # net -> [(res, com, area, handle)]
     for ins in _blocks(d, conv, "mdu_address"):
         net, area = cls.network_of(ins.pt, ins.handle, strict=True), cls.area_of(ins.pt)
-        if net:
+        if net and ours(net, ins):
             mdu[net].append((num(ins.attr("RESIDENTIAL_COUNT")) or 0, num(ins.attr("COMMERCIAL_COUNT")) or 0, area, ins.handle))
     res_grant = defaultdict(list)
     for ins in _blocks(d, conv, "res_address"):
         if ins.layer == conv["grant_address_layer"]:
             net = cls.network_of(ins.pt, f"{ins.name}:{ins.handle}", strict=True)
-            if net and is_served(net, ins.attr("STREET_NUMBER"), ins.attr("STREET_NAME"), "grant address"):
+            if net and ours(net, ins) and is_served(net, ins.attr("STREET_NUMBER"), ins.attr("STREET_NAME"), "grant address"):
                 res_grant[net].append(ins.handle)
     com_grant = defaultdict(list)
     for ins in _blocks(d, conv, "com_address"):
         net, area = cls.network_of(ins.pt, ins.handle, strict=True), cls.area_of(ins.pt)
-        if net and area == GRANT and is_served(net, ins.attr("BUILDING_ADDRESS"), ins.attr("BUILDING_NAME"), "grant commercial address"):
+        if net and area == GRANT and ours(net, ins) and is_served(net, ins.attr("BUILDING_ADDRESS"), ins.attr("BUILDING_NAME"), "grant commercial address"):
             com_grant[net].append(ins.handle)
 
     for key in ("pass_res", "pass_com", "pass_mdu"):
@@ -373,7 +459,7 @@ def route_footage(d, conv, cls, tk: Takeoff):
     """Rows 6-10 (CalcFTG): sum of CX1-FTG-N2 route labels inside the boundary.
 
     Aerial strand counts only where an aerial fiber cable is lashed to it (within
-    fiber_bearing_strand_ft); strand of the RF (coax) plant is not FTTH route (SME: RF support
+    fiber_bearing_strand_ft); strand of the RF (coax) plant is not FTTH route (design standard: RF support
     structures are not calculated). UG trench with no fiber cable within TRENCH_NO_FIBER_FT is
     counted (the Credit River BOM counts it) but listed, and the `fiber_bearing` policy drops it."""
     names = set(conv["blocks"]["route_footage"]["names"])
@@ -382,6 +468,9 @@ def route_footage(d, conv, cls, tk: Takeoff):
     aerial_fiber = SegIndex(fiber_cables(d, conv, ("aerial",)))
     any_fiber = SegIndex(fiber_cables(d, conv))
     strand_ft = conv.get("fiber_bearing_strand_ft", 75.0)
+    ours, others = tk.extra.get("our_paths"), tk.extra.get("foreign_paths")
+    coax_lines = [p for p in d.polylines if re.match(conv.get("coax_layer_regex", r"^DES_\d+[PT]\d+[AU]$"), p.layer)]
+    coax = SegIndex(coax_lines) if coax_lines else None
     tk.extra.setdefault("trench_no_fiber", [])
     for key, layers in groups.items():
         tk.ensure(key, "FT", f"sum of {sorted(names)} FTG labels on {layers}")
@@ -398,6 +487,20 @@ def route_footage(d, conv, cls, tk: Takeoff):
                         tk.check("RF support structure strand", False, f"strand label {ins.handle} ({v:g} ft) carries no fiber "
                                  f"(no aerial fiber cable within {strand_ft:g} ft) - RF strand, not counted", warn=True)
                     continue
+                if key == "route_ug_ft" and coax is not None:
+                    d_c = coax.nearest(ins.pt, 40.0)
+                    if d_c is not None and (ours is None or ours.nearest(ins.pt, 75.0) is None):
+                        tk.extra.setdefault("rf_structures", []).append(("route_ug_ft", ins.handle, ins.pt,
+                                                                         f"{v:g} ft trench along RF coax ({d_c:.0f} ft), no fiber of this design"))
+                        tk.check("RF support structure trench", False, f"trench label {ins.handle} ({v:g} ft) carries RF coax and no fiber "
+                                 "of this design - not counted", warn=True)
+                        continue
+                if key != "route_ugdrop_ft" and others is not None:
+                    d_o, d_f = ours.nearest(ins.pt, 75.0), others.nearest(ins.pt, 75.0)
+                    if d_f is not None and (d_o is None or d_f < d_o):
+                        exclude(tk, "Other fiber network", f"route label {ins.handle}", f"{v:g} ft",
+                                f"trench/strand of another network's fiber ({d_f:.0f} ft)", ins.pt)
+                        continue
                 net, area = _locate(cls, ins, tk)
                 if net:
                     tk.add(key, net, area, v, "FT", f"sum of FTG labels on {layers}", [ins.handle])
@@ -557,6 +660,8 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
     leaders = d.leaders
     netset = {n.upper(): n for n in net_names}
     known = {**{n.upper(): n for n in cls.foreign}, **netset}
+    scope = tk.extra.get("scope") or design_scope(d, conv, tk)
+    foreign_paths: list = []
     seen: dict[str, tuple] = {}
     for ins in labels:
         segname = ins.attr("SEGNUM")
@@ -592,6 +697,17 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
         if net is None and foreign:
             # another network of the same drawing: not this job's material, kept for topology (end of line)
             tk.foreign_cables.append((a, b, foreign, segname.upper()))
+            continue
+        other = _foreign_end(a, b, scope)
+        if other:
+            exclude(tk, "Other fiber network", segname, f"{total:g} ft", other, ins.pt)
+            pa_, pb_ = _resolve_endpoint(a, pos), _resolve_endpoint(b, pos)
+            if pa_ and pb_:
+                na_, _ = graph.nearest(pa_)
+                nb_, _ = graph.nearest(pb_)
+                fp = graph.path(na_, nb_) if na_ and nb_ else None
+                if fp:
+                    foreign_paths.append(Polyline(f"x{ins.handle}", "foreign", fp))
             continue
         seg = CableSegment(ins.handle, segname, a, b, int(ttl), ins.attr("CON").upper(), num(ins.attr("FTG")) or 0,
                            num(ins.attr("SLK")) or 0, total, net)
@@ -630,6 +746,9 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
             tk.check("cable route", False, f"{segname}: route between {a} and {b} not found in cable polylines; whole segment classified at label", warn=True)
         tk.cables.append(seg)
 
+    tk.extra["our_paths"] = SegIndex([Polyline(c.handle, "ours", c.path) for c in tk.cables if c.path and len(c.path) > 1])
+    tk.extra["foreign_paths"] = SegIndex(foreign_paths) if foreign_paths else None
+
     # cables present in the splice reports but carrying no DWG cable label
     # (e.g. the 100 ft OLM -> first splice FC024 tail). Real cable: include + flag.
     labelled = {c.name.upper() for c in tk.cables} | {f[3] for f in tk.foreign_cables}
@@ -646,6 +765,8 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
         a = mm.group(1) if mm else ""
         if r.network in cls.foreign:
             tk.foreign_cables.append((a, mm.group(2) if mm else "", r.network, name))
+            continue
+        if _foreign_end(a, mm.group(2) if mm else "", scope):
             continue
         net = r.network if r.network in tk.networks else None
         pa = _resolve_endpoint(a, pos) if a else None
@@ -759,7 +880,7 @@ def enclosures(d, conv, cls, tk: Takeoff, reports: list[SpliceReport]):
             tk.add(k + "_splices", net, area, r.fusion_splices, "EA", "fusion splices in enclosure", [r.name])
             cap = TRAY_CAPACITY.get(m.group(1).upper())
             if cap:
-                # SME walkthrough: trays per splice location = ROUNDUP(splices / tray capacity);
+                # Design standard: trays per splice location = ROUNDUP(splices / tray capacity);
                 # packages of 2 trays are pooled per column (spare tray of a package goes to another location)
                 trays = math.ceil(r.fusion_splices / cap) if r.fusion_splices else 0
                 tk.extra["enclosures"].append((net, area, m.group(1).upper(), r.fusion_splices, r.name))
@@ -780,7 +901,7 @@ def derived(d, conv, cls, tk: Takeoff, reports, address_lists):
         net, _loc = _locate(cls, ins, tk)
         if not net:
             continue
-        # SME: OLM equipment is always booked to Grant (1 per OLM) unless the whole OLM area is Non-Grant
+        # Design standard: OLM equipment is always booked to Grant (1 per OLM) unless the whole OLM area is Non-Grant
         area = GRANT if tk.get("passings", net, GRANT, 0) > 0 else NONGRANT
         tk.extra["olms"].append((net, _loc, any(dist(ins.pt, p) <= 15 for p in poles), ins.handle))
         aerial = any(dist(ins.pt, p) <= 15 for p in poles)
@@ -810,7 +931,7 @@ def derived(d, conv, cls, tk: Takeoff, reports, address_lists):
         tk.q[(f"splitter_1x{ratio}", n, NONGRANT)] = Qty(f"splitter_1x{ratio}", n, NONGRANT, need - g, "EA", f"ROUNDUP(network passings/{ratio}) - grant", [])
         for a in AREAS:
             p = tk.get("passings", n, a, 0)
-            # SME: SFP = ROUNDUP(Jumper Calculator 'Splitters Required' / 2), where the calculator uses
+            # Design standard: SFP = ROUNDUP(Jumper Calculator 'Splitters Required' / 2), where the calculator uses
             # ROUNDUP(passings/32) whatever splitter is actually designed
             tk.q[("pon_ports", n, a)] = Qty("pon_ports", n, a, math.ceil(math.ceil(p / 32) / 2) if p else 0, "EA",
                                             "ROUNDUP(ROUNDUP(passings/32)/2) (Jumper Calculator / 2)", [])
@@ -1041,11 +1162,12 @@ def build_takeoff(d: Drawing, conv: dict, cls: Classifier, networks: list[str],
                   policies: dict[str, str] | None = None) -> Takeoff:
     tk = Takeoff(networks)
     resolve_report_networks(d, conv, cls, tk, reports)
+    design_scope(d, conv, tk)
     passings(d, conv, cls, tk, address_lists)
+    cable_footage(d, conv, cls, tk, networks, reports)  # first: structures and route are judged against its paths
     for key in ("ped_max10", "ped_max5", "vault", "ug_lbox"):
         count_blocks(d, conv, cls, tk, key)
     route_footage(d, conv, cls, tk)
-    cable_footage(d, conv, cls, tk, networks, reports)
     enclosures(d, conv, cls, tk, reports)
     derived(d, conv, cls, tk, reports, address_lists)
     tray_packages(tk)

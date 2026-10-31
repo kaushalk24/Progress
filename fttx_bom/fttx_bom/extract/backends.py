@@ -65,7 +65,8 @@ def dwg_to_json(dwg: Path, cache_dir: Path) -> tuple[Path, list[str]]:
             f"DWG reader not installed. Run:  cd {TOOLS_DIR} && npm install --ignore-scripts"
         )
     cache_dir.mkdir(parents=True, exist_ok=True)
-    out = cache_dir / f"{dwg.stem}.{_file_hash(dwg)}.dwg.json"
+    # the key includes the converter script, so a converter fix re-reads cached drawings
+    out = cache_dir / f"{dwg.stem}.{_file_hash(dwg)}.{_file_hash(TOOLS_DIR / 'dwg2json.mjs')[:8]}.dwg.json"
     log = out.with_suffix(".log")
     if not out.exists():
         proc = subprocess.run(

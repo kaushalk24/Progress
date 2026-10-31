@@ -168,7 +168,28 @@
     "CX1_NONSPS",
     "CX1_PWRINS",
     "CX1-POWANC1",
-    "CX1-CTVANC1"
+    "CX1-CTVANC1",
+    "CX1_2PT_MST",
+    "CX1_4PT_MST",
+    "CX1_6PT_MST",
+    "CX1_8PT_MST",
+    "CX1_12PT_MST",
+    "CX1-PED4",
+    "CX1_NODE",
+    "CX1_LE",
+    "CX1_DC",
+    "CX1_STERM",
+    "CX1_3WYSPL",
+    "CX1_HOTDOT",
+    "CX1_AMPINF_HighSplit",
+    "CX1_8PTTAP_EQPAD",
+    "DES_FIBER",
+    "MC_BUILDING",
+    "CX1-JPOL",
+    "CX1-JPOLTR",
+    "CX1-MSPAN",
+    "CX1-OHGUY",
+    "Simple_Anno_Left"
   ],
   "_ignore_comment": "ignore_blocks: symbols that are never BOM materials (terminal node markers, labels, counts) - not reported as unmapped",
   "rf_device_layers": [
@@ -188,7 +209,12 @@
     "CX1_TERM",
     "CX1_EQ",
     "CX1_2WYSPL",
-    "CX1_SPLICE"
+    "CX1_SPLICE",
+    "CX1_8PTTAP_EQPAD",
+    "CX1_STERM",
+    "CX1_3WYSPL",
+    "CX1_LE",
+    "CX1_DC"
   ],
   "rf_support_keys": [
     "vault",
@@ -197,5 +223,25 @@
   "rf_support_radius_ft": 50,
   "rf_support_splice_ft": 100,
   "fiber_bearing_strand_ft": 75,
-  "_rf_comment": "RF (coax/HFC) plant is not part of the FTTH BOM (SME). rf_device_*: RF devices on the DES_* design layers (amplifiers, taps, splitters, terminators, end-of-line). A vault/L-box within rf_support_radius_ft of an RF device and with no fiber splice within rf_support_splice_ft is RF support and not counted. Aerial strand counts only with an aerial fiber cable within fiber_bearing_strand_ft. RF power supplies (DES_POWER) are not evidence: the coax-powered OLM sits beside one."
+  "_rf_comment": "RF (coax/HFC) plant is not part of the FTTH BOM. rf_device_*: RF devices on the DES_* design layers (amplifiers, taps, splitters, terminators, end-of-line). A vault/L-box within rf_support_radius_ft of an RF device and with no fiber splice within rf_support_splice_ft is RF support and not counted. Aerial strand counts only with an aerial fiber cable within fiber_bearing_strand_ft. RF power supplies (DES_POWER) are not evidence: the coax-powered OLM sits beside one.",
+  "foreign_fiber_blocks": [
+    "CX1_2PT_MST",
+    "CX1_4PT_MST",
+    "CX1_6PT_MST",
+    "CX1_8PT_MST",
+    "CX1_12PT_MST"
+  ],
+  "hfc_ped_blocks": [
+    "CX1-PED4"
+  ],
+  "hfc_node_blocks": [
+    "CX1_NODE"
+  ],
+  "rf_tap_layers": [
+    "DES_TAPS"
+  ],
+  "foreign_terminal_ft": 35,
+  "count_block_assoc_ft": 60,
+  "_scope_comment": "This design uses MAX5/MAX10 pedestals with bulkheads. Drawings can also hold an existing HFC plant (DES_* devices, coax layers, CX1-PED4 pedestals, CX1_NODE nodes) and fiber designed by others (MST terminals: foreign_fiber_blocks). Splices housed at those terminals, cables ending there or at an HFC node, structures and route on their routes, and count blocks at their terminals are excluded and listed in the audit.",
+  "coax_layer_regex": "^DES_\\d+[PT]\\d+[AU]$"
 }

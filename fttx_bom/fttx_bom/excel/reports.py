@@ -182,6 +182,10 @@ def write_audit(path: Path, tk: Takeoff, rules: list[Rule], res: WriteResult, ve
     sev = Counter(i.severity for i in (issues or []))
     ws.append(["Deep check: ERROR / WARN / INFO", f"{sev.get('ERROR', 0)} / {sev.get('WARN', 0)} / {sev.get('INFO', 0)} (see 'Deep Check' sheet)"])
     ws.append(["Policies in use", ", ".join(f"{k}={v}" for k, v in tk.policy_used.items())])
+    nlow = sum(1 for f in res.flags.values() if f.level == "LOW")
+    ws.append(["Cells to check (highlighted in the BOM)", f"{nlow} low confidence (red), {len(res.flags) - nlow} review (amber) - see 'Review' sheet"])
+    excl = tk.extra.get("scope", {}).get("excluded", []) + [("RF plant", h, k, w, p) for k, h, p, w in tk.extra.get("rf_structures", [])]
+    ws.append(["Objects excluded from this design", f"{len(excl)} (other fiber network, existing / HFC plant) - see 'Excluded' sheet"])
     ws.append([])
     ws.append(["Status meanings", "VERIFIED = reproduces the NMK reference from independent sources; VERIFIED_TOTAL = network totals verified, "
                "Grant/Non-Grant split inferred; INFERRED = defensible rule, not proven against an approved BOM; UNRESOLVED / NOT_DETECTED = "
@@ -196,6 +200,18 @@ def write_audit(path: Path, tk: Takeoff, rules: list[Rule], res: WriteResult, ve
                    round(i.x, 2) if i.x is not None else None, round(i.y, 2) if i.y is not None else None])
         ws.cell(ws.max_row, 2).fill = sev_fill.get(i.severity, FILLS["WARN"])
     ws.auto_filter.ref = f"A1:J{max(2, ws.max_row)}"
+
+    ws = _sheet(wb, "Review", ["BOM line", "Network", "Area", "Value", "Confidence", "Why"], {1: 26, 6: 120})
+    lvl_fill = {"LOW": PatternFill("solid", fgColor="FFC7CE"), "REVIEW": PatternFill("solid", fgColor="FFEB9C")}
+    for (key, net, area), f in sorted(res.flags.items(), key=lambda kv: (kv[1].level != "LOW", kv[0])):
+        ws.append([key, net, "Grant" if area == "G" else "Non-Grant", f.value, f.level, "; ".join(f.reasons)])
+        ws.cell(ws.max_row, 5).fill = lvl_fill[f.level]
+    ws.auto_filter.ref = f"A1:F{max(2, ws.max_row)}"
+
+    ws = _sheet(wb, "Excluded", ["Category", "Object", "Quantity", "Reason", "X", "Y"], {1: 26, 2: 40, 4: 90})
+    for cat, what, qty, why, pt in excl:
+        ws.append([cat, what, qty, why, round(pt[0], 2) if pt else None, round(pt[1], 2) if pt else None])
+    ws.auto_filter.ref = f"A1:F{max(2, ws.max_row)}"
 
     cols = tk.columns
     ws = _sheet(wb, "BOM Lines", ["Row", "Part Number", "Description", "Status", "Written to BOM", "Rule / basis", "Source"]

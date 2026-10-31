@@ -102,7 +102,8 @@ def verify(res: WriteResult, expected: dict[tuple[str, str], float | None], work
     out = res.path
     v.add("output file exists", out.exists() and out.stat().st_size > 0, str(out))
     got = _load(out)
-    v.add("worksheets preserved", res.template_sheets == got.sheetnames, f"template {res.template_sheets} vs output {got.sheetnames}")
+    want = res.template_sheets + res.added_sheets
+    v.add("worksheets preserved", want == got.sheetnames, f"template {want} vs output {got.sheetnames}")
     gs = grid(got[res.sheet])
     struct_diff = []
     for coord, a in res.template_snapshot.items():

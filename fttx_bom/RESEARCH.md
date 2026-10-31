@@ -70,7 +70,7 @@ All primary sources opened on raw.githubusercontent.com:
 - **Snippet only:**
   - 1:32 loses about 17–18 dB and 1:64 about 20.5–21.5 dB.
   - The XGS-PON N1 budget is 29 dB.
-- **Inference:** one PON port, one SFP+ and one splitter per tree. This is consistent with the SME's SFP rule and with the designed splitter counts the tool uses.
+- **Inference:** one PON port, one SFP+ and one splitter per tree. This is consistent with the design standard's SFP rule and with the designed splitter counts the tool uses.
 
 ## Research findings that changed the code
 

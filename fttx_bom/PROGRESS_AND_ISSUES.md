@@ -22,7 +22,7 @@ _Last updated: 2026-10-31, build 0.6.0_
 
 **Fixed:**
 - RF strand and the RF vault are no longer counted (aerial 0; vaults 8);
-- SFP 1 / 3 and MAX10 +4 0 / 9 now come from the SME rule and the template formula;
+- SFP 1 / 3 and MAX10 +4 0 / 9 now come from the design standard and the template formula;
 - ground kits are left blank, as in the BOM.
 
 **Manual-BOM errors found:**
@@ -40,7 +40,7 @@ See FORENSIC_FINDINGS.md D1–D14.
 
 ## NMK reconciliation (reference = manual Credit River BOM)
 
-**0.6.0:** 290 / 368 cells, 156 / 184 totals. The 8 cells fewer than 0.5.0 are where the defaults now follow the SME rule and the DMI BOM instead of the Credit River practice: SFP Grant 3, MAX10 +4 Non-Grant 3, Grant drops 2. Nothing else changed. The table below is the 0.5.0 history.
+**0.6.0:** 290 / 368 cells, 156 / 184 totals. The 8 cells fewer than 0.5.0 are where the defaults now follow the design standard and the DMI BOM instead of the Credit River practice: SFP Grant 3, MAX10 +4 Non-Grant 3, Grant drops 2. Nothing else changed. The table below is the 0.5.0 history.
 
 
 | Measure | 0.5.0 | 0.4.0 |
@@ -69,7 +69,7 @@ See FORENSIC_FINDINGS.md D1–D14.
 - FC024 and FC048 in R04 (reference error, F8);
 - drops (R02 and R04 have no drop lines);
 - MAX10 +4 (blanket policy in the reference);
-- heat shrink (not filled in, per the SME).
+- heat shrink (not filled in, per the design standard).
 
 See FORENSIC_FINDINGS.md for the line-by-line table.
 
@@ -78,7 +78,7 @@ See FORENSIC_FINDINGS.md for the line-by-line table.
 0. **Drop-footage columns: decision needed.** The two approved BOMs disagree:
    - Credit River puts Non-Grant drops only in the Non-Grant column.
    - Melcher-Dallas puts the whole drop footage there.
-   - The SME rule (Non-Grant inside, Grant = total − Non-Grant) gives the split. It is the new default; the other two are options.
+   - The design standard (Non-Grant inside, Grant = total − Non-Grant) gives the split. It is the new default; the other two are options.
 1. **Route / UG footage split (rows 6–10).**
    - Network totals follow CalcFTG.
    - The reference Grant/Non-Grant split can't be reproduced by any geometric method (FORENSIC_FINDINGS F4).
@@ -111,6 +111,6 @@ See FORENSIC_FINDINGS.md for the line-by-line table.
 - integration on the real NMK / DMI files;
 - the end-to-end CLI run.
 
-## Pending from the SME meeting
+## Related deliverables
 
-- Grant address validation report: a separate deliverable, not built yet (SME_MEETING_NOTES.md #13).
+- Grant address validation report: a separate deliverable, not built yet (DESIGN_STANDARDS.md).

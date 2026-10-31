@@ -101,10 +101,9 @@ def test_olm_and_power(nmk):
 def test_splitters_and_sfp(nmk):
     tk = nmk[2]
     assert cols(tk, "splitter_1x64") == [1, 3, 1, 3, 1, 3, 2, 1]
-    # SME rule (Melcher-Dallas BOM): Non-Grant = ROUNDUP(NG/64), Grant = ROUNDUP(total/64) - Non-Grant
-    assert cols(tk, "pon_ports") == [0, 4, 0, 4, 1, 3, 1, 2]
-    assert sum(cols(tk, "pon_ports")) == 15 == sum(tk.extra["designed_pons"].values())  # one SFP per designed PON
-    assert cols(tk, "pon_ports@jumper_half") == [1, 4, 1, 4, 1, 3, 2, 2]  # Credit River BOM: rounded per column (18)
+    # design standard: per column ROUNDUP(Jumper Calculator splitters required / 2) - reproduces the approved BOM
+    assert cols(tk, "pon_ports") == [1, 4, 1, 4, 1, 3, 2, 2]
+    assert cols(tk, "pon_ports@total_minus_ng") == [0, 4, 0, 4, 1, 3, 1, 2]  # option: total - Non-Grant (15 = designed PONs)
     assert all(c.status == "PASS" for c in tk.checks if c.name.startswith("splitters vs"))
 
 
@@ -116,7 +115,7 @@ def test_enclosures(nmk):
 
 
 def test_splice_trays_sme_rule(nmk):
-    # SME: trays per location ROUNDUP(splices/48 or /24); 2-tray packages pooled per column.
+    # Design standard: trays per location ROUNDUP(splices/48 or /24); 2-tray packages pooled per column.
     # Reproduces reference 450D R02 4, R04 4, R05 5 (R03 5 vs 4) and 450B 1/1/2 exactly.
     tk = nmk[2]
     assert nettot(tk, "trays_450d") == [7, 9, 7, 9]
@@ -175,8 +174,10 @@ def test_dmi_internal_consistency(dmi):
     assert tk.get("pass_res", n, GRANT) == 67  # all GRANTADDRESS blocks served (incl. unnumbered)
     assert tk.total("pass_com", n) == 13
     assert tk.total("splitter_1x32", n) == 7 and tk.total("splitter_1x64", n) == 0  # design uses 1x32
-    # SME rule (approved DMI BOM): Non-Grant ROUNDUP(155/64) = 3, Grant ROUNDUP(222/64) - 3 = 1
-    assert (tk.get("pon_ports", n, GRANT), tk.get("pon_ports", n, NONGRANT)) == (1, 3)
+    # design standard: per column ROUNDUP(splitters required / 2): Grant ROUNDUP(3/2) = 2, Non-Grant ROUNDUP(5/2) = 3
+    # (the manual DMI BOM typed Grant 1 = total - Non-Grant)
+    assert (tk.get("pon_ports", n, GRANT), tk.get("pon_ports", n, NONGRANT)) == (2, 3)
+    assert (tk.get("pon_ports@total_minus_ng", n, GRANT), tk.get("pon_ports@total_minus_ng", n, NONGRANT)) == (1, 3)
     assert any(c.name == f"SFP vs designed PONs {n}" and c.status == "WARN" for c in tk.checks)
     assert tk.total("olm", n) == 1
     assert [c for c in tk.checks if c.status == "FAIL"] == []
@@ -331,7 +332,7 @@ def test_dmi_approved_bom_reconciliation(dmi):
     cfg, rules = load_rules()
     ref = read_reference(path, cfg["sheet"], rules)  # sheet is named "OLM DMI-R15 BOM"
     tk = dmi[2]
-    want = {"FM0-3FE47548AD": "pon_ports", "FE0-F1PLC32": "splitter_1x32", "CBV-HGIB2436": "vault",
+    want = {"FE0-F1PLC32": "splitter_1x32", "CBV-HGIB2436": "vault",
             "FE0-MAX10EXP4": "max10_upgrades", "CBP-MAX10DSM24": "ped_max10", "Residential Count": "pass_res"}
     for part, key in want.items():
         for a in (GRANT, NONGRANT):

@@ -328,7 +328,7 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
                       lbl.pt[0] if lbl else None, lbl.pt[1] if lbl else None))
 
     # ---------------------------------------------------------------- Grant address layer vs Non-Grant boundary
-    # Grant / Non-Grant passings follow the GRANTADDRESS layer (both approved BOMs); the SME rule "Non-Grant =
+    # Grant / Non-Grant passings follow the GRANTADDRESS layer (both approved BOMs); the design standard "Non-Grant =
     # inside the Non-Grant boundaries" agrees only when every served address sits on the matching side.
     for n in tk.networks:
         if n not in address_lists or not address_lists[n].served:
@@ -346,6 +346,12 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
                           f"Served address {a.attr('STREET_NUMBER')} {a.attr('STREET_NAME')} is on layer {a.layer} but {where}",
                           "Grant / Non-Grant passings, splitters, SFP",
                           "Move the address to the right layer (GRANTADDRESS = BEAD location) or fix the Non-Grant boundary", a.pt[0], a.pt[1]))
+
+    # ---------------------------------------------------------------- plant that is not part of this design
+    excl = Counter(cat for cat, *_x in tk.extra.get("scope", {}).get("excluded", []))
+    for cat, cnt in sorted(excl.items()):
+        add(Issue("INFO", "Scope", "EXCLUDED_PLANT", "", f"{cnt} objects excluded as '{cat}' (listed on the audit's Excluded sheet)",
+                  "All drawing quantities", "None - check the list if this design should include any of them"))
 
     # ---------------------------------------------------------------- route footage without fiber (one note per network)
     by_net = defaultdict(list)

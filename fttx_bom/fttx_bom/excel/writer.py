@@ -50,6 +50,8 @@ class WriteResult:
     formula_repairs: list[str] = field(default_factory=list)
     formulas_replaced: list[str] = field(default_factory=list)
     total_col: str = "G"  # 'Total Quantity' column; area columns follow it
+    flags: dict = field(default_factory=dict)  # (rule key, net, area) -> confidence Flag of a written cell
+    added_sheets: list[str] = field(default_factory=list)
 
 
 def area_label(net: str, area: str) -> str:
@@ -145,7 +147,8 @@ def find_rows(ws, rules: list[Rule], header_row: int) -> tuple[dict[str, int], l
     return rows, issues
 
 
-def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: dict, project: dict) -> WriteResult:
+def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: dict, project: dict,
+              flags: dict | None = None) -> WriteResult:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         wb = openpyxl.load_workbook(template, keep_links=True)
@@ -250,6 +253,8 @@ def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: di
             res.written[(rule.key, L)] = cell.value
         res.rule_values[rule.key] = vals
 
+    if flags:
+        _highlight(wb, ws, res, rules, flags)
     _write_transport(wb, tk, cfg, cols, res)
     _write_jumpers(wb, tk, cfg, cols, res)
     _restore_validation(wb)
@@ -260,6 +265,54 @@ def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: di
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out)
     return res
+
+
+def _highlight(wb, ws, res: WriteResult, rules: list[Rule], flags: dict) -> None:
+    """Colour the quantity cells that need checking, explain each in a cell comment, and list them all
+    on a 'BOM Review' sheet at the end of the workbook."""
+    from openpyxl.comments import Comment
+    from openpyxl.styles import Font, PatternFill
+
+    from .confidence import FILL, FONT, LOW, REVIEW_SHEET
+
+    desc = {}
+    for r, part, d in res.template_rows:
+        desc[r] = (part, d)
+    rows = []
+    for rule in rules:
+        r = res.rows.get(rule.key)
+        if r is None:
+            continue
+        for col, L in res.columns.items():
+            f = flags.get((rule.key, *col))
+            if f is None:
+                continue
+            cell = ws[f"{L}{r}"]
+            cell.fill = PatternFill("solid", fgColor=FILL[f.level])
+            cell.font = Font(bold=True, color=FONT[f.level])
+            text = ("LOW CONFIDENCE - check before ordering" if f.level == LOW else "REVIEW") + ":\n- " + "\n- ".join(f.reasons)
+            cell.comment = Comment(text[:1500], "FTTx BOM tool", width=420, height=min(60 + 30 * len(f.reasons), 300))
+            res.flags[(rule.key, *col)] = f
+            rows.append((f"{L}{r}", rule.key, (desc.get(r) or ("", ""))[1], col[0], "Grant" if col[1] == "G" else "Non-Grant",
+                         cell.value, f.level, "; ".join(f.reasons)))
+    rv = wb.create_sheet(REVIEW_SHEET)
+    rv.append(["BOM review: quantity cells that need checking before ordering"])
+    rv.append(["LOW = no confidence (input missing, not computed, or blocking design issue).",
+               "REVIEW = check (inferred rule, unsettled convention, or design warning)."])
+    rv.append([])
+    rv.append(["Cell", "Line", "Description", "Network", "Area", "Value", "Confidence", "Why"])
+    for row in sorted(rows, key=lambda x: (x[6] != LOW, x[0])):
+        rv.append(list(row))
+    rv.column_dimensions["A"].width, rv.column_dimensions["B"].width, rv.column_dimensions["C"].width = 9, 24, 48
+    rv.column_dimensions["H"].width = 110
+    for i, row in enumerate(rv.iter_rows(min_row=5, max_row=rv.max_row), start=5):
+        lvl = rv.cell(i, 7).value
+        if lvl in FILL:
+            rv.cell(i, 7).fill = PatternFill("solid", fgColor=FILL[lvl])
+    rv.cell(1, 1).font = Font(bold=True, size=12)
+    for c in range(1, 9):
+        rv.cell(4, c).font = Font(bold=True)
+    res.added_sheets.append(REVIEW_SHEET)
 
 
 def _write_transport(wb, tk, cfg, cols, res):
