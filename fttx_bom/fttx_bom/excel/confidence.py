@@ -59,6 +59,14 @@ ISSUE_EFFECT = {
     "PASSINGS_NEGATIVE": ("passings", LOW), "BLOCK_NOT_DEFINED": ("peds structures", LOW),
 }
 NEAR_EDGE_BLOCK = {"CX1-MAX10": r"ped_max10", "CX1-MAX5": r"ped_max5", "CX1-VAULT": r"vault"}
+# why a value could not be derived, in plain words (by takeoff key pattern)
+NOT_COMPUTED = [
+    (r"drop_ft\w*", "no drop lines in the drawing - run FXAUTO (FX_DROPS) in AutoCAD and save"),
+    (r"fosc450\w*|tray_450\w*|trays_450\w*|basket_d", "no splice reports supplied - closures and trays come from the splice reports"),
+    (r"ped_max\w*|vault|ug_lbox", "the block is not defined in this drawing (renamed symbol?)"),
+    (r"pass_\w*|passings", "passings could not be derived"),
+    (r"cable_\d{3}", "no cable labels found"),
+]
 # conventions whose evidence is not settled: flag the cell when the alternatives give another number
 UNSETTLED = {"drop_columns", "max10_upgrade", "route_footage"}
 
@@ -99,18 +107,33 @@ def assess(rules: list[Rule], tk: Takeoff, issues=(), address_lists=None, report
     by_net: dict[str, list] = {}
     for i in issues:
         by_net.setdefault(i.network, []).append(i)
+    unmapped_peds = [i for i in issues if i.code == "UNMAPPED_BLOCK"]
     for rule in rules:
+        if rule.hand_count and rule.value:
+            for n in tk.networks:
+                for a in AREAS:
+                    v, _note = evaluate(rule, tk, n, a)
+                    flag(rule, n, a, LOW, "hand count required (template note)" + (f"; the drawing gives {v:g} by the note's criteria" if v is not None else ""), v)
+            continue
         if not rule.write or not rule.value:
+            continue
+        if rule.value.strip() == "0":
+            if unmapped_peds:
+                for n in tk.networks:
+                    for a in AREAS:
+                        flag(rule, n, a, REVIEW, "written 0 by the design standard, but the drawing has unmapped blocks: "
+                             + "; ".join(i.message[:80] for i in unmapped_peds[:3]), 0)
             continue
         groups = _group(rule.value)
         for n in tk.networks:
             for a in AREAS:
                 v, note = evaluate(rule, tk, n, a)
                 if v is None:
-                    flag(rule, n, a, LOW, f"not computed - {note}")
+                    why = next((w for rx, w in NOT_COMPUTED if re.search(rx, rule.value)), "could not be derived from the inputs")
+                    flag(rule, n, a, LOW, f"not computed: {why}")
                     continue
                 if rule.status == "INFERRED":
-                    flag(rule, n, a, REVIEW, "rule inferred from the design data, not confirmed by an approved BOM", v)
+                    flag(rule, n, a, REVIEW, "derived by an inferred rule (not yet confirmed against an approved BOM)", v)
                 if "passings" in groups and not (n in address_lists and address_lists[n].served):
                     flag(rule, n, a, LOW, "no address list - passings from drawing count blocks", v)
                 if "splitters" in groups and not (n in address_lists and address_lists[n].served) and not reports:
@@ -132,7 +155,7 @@ def assess(rules: list[Rule], tk: Takeoff, issues=(), address_lists=None, report
                 for i in by_net.get(n, []) + by_net.get("", []):
                     eff = ISSUE_EFFECT.get(i.code)
                     if eff and (eff[0] == "*" or groups & set(eff[0].split())):
-                        flag(rule, n, a, eff[1], f"{i.code}: {i.message[:140]}", v)
+                        flag(rule, n, a, eff[1], i.message[:160], v)
                     if i.code == "NEAR_GRANT_EDGE":
                         for blk, rx in NEAR_EDGE_BLOCK.items():
                             if blk in i.message and re.fullmatch(rx, rule.value or ""):

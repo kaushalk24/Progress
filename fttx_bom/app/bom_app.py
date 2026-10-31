@@ -1,7 +1,13 @@
-"""FTTx BOM Tool - local browser app.
+"""FTTx BOM Tool - local browser application.
 
-Start:  python -m fttx_bom app     (or windows\\run_app.bat)
-Everything runs on this computer; files never leave it.
+Start:  python -m fttx_bom app     (Windows: windows\\run_app.bat)
+Everything runs on this computer; no file leaves it.
+
+Pages
+  New BOM            1 inputs (upload or folders, detected-file table, project) -> 2 generate -> 3 results
+  Batch              one BOM set per job folder + summary
+  Design standards   how every BOM line is derived
+  Settings           conventions that the drawing cannot settle
 """
 from __future__ import annotations
 
@@ -22,18 +28,30 @@ if str(ROOT) not in sys.path:
 
 from fttx_bom import __version__  # noqa: E402
 from fttx_bom.engine import policies as pol  # noqa: E402
-from fttx_bom.engine.rules import CONFIG_DIR, load_rules  # noqa: E402
+from fttx_bom.engine.rules import load_rules  # noqa: E402
 from fttx_bom.inputs.detect import detect  # noqa: E402
 from fttx_bom.jobs import params_from_detected, run_batch  # noqa: E402
-from fttx_bom.pipeline import run_job  # noqa: E402
+from fttx_bom.pipeline import project_from_filename, run_job  # noqa: E402
 
 WORK = Path.home() / "FTTx_BOM_Jobs"
 SYSTEMS = ["", "Coastal West", "Coastal East", "Capital West", "Capital East"]
-SEV_MARK = {"ERROR": "🔴 ERROR", "WARN": "🟡 WARN", "INFO": "🔵 INFO"}
+LEVEL = {"LOW": "● Low confidence", "REVIEW": "● Review", "": "✓"}
+SEVERITY = {"ERROR": "● Error", "WARN": "● Warning", "INFO": "● Info"}
+PAGES = ["New BOM", "Batch", "Design standards", "Settings"]
 
-st.set_page_config(page_title="FTTx BOM Tool", page_icon=":bar_chart:", layout="wide")
+st.set_page_config(page_title="FTTx BOM Tool", page_icon=":material/fiber_manual_record:", layout="wide")
+st.markdown("""
+<style>
+  .block-container {padding-top: 1.6rem; max-width: 1400px;}
+  h1, h2, h3 {letter-spacing: -0.01em;}
+  .step {font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: #6b7280;}
+  .legend span {display: inline-block; padding: 2px 10px; border-radius: 4px; margin-right: 8px; font-size: .85rem;}
+  .low {background: #FFC7CE; color: #9C0006;} .review {background: #FFEB9C; color: #7F6000;} .ok {background: #E2EFDA; color: #375623;}
+</style>
+""", unsafe_allow_html=True)
 
 
+# --------------------------------------------------------------------------- helpers
 def _save_uploads(files, dest: Path) -> list[Path]:
     dest.mkdir(parents=True, exist_ok=True)
     out = []
@@ -44,7 +62,7 @@ def _save_uploads(files, dest: Path) -> list[Path]:
     return out
 
 
-def _zip_outputs(paths: list[Path]) -> bytes:
+def _zip(paths) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for p in paths:
@@ -53,191 +71,229 @@ def _zip_outputs(paths: list[Path]) -> bytes:
     return buf.getvalue()
 
 
-def _issues_df(issues) -> pd.DataFrame:
-    return pd.DataFrame([{"Severity": SEV_MARK.get(i.severity, i.severity), "_sev": i.severity, "Category": i.category, "Code": i.code, "Network": i.network,
-                          "Problem": i.message, "BOM lines affected": i.affects, "How to fix": i.fix,
-                          "X": round(i.x, 1) if i.x is not None else None, "Y": round(i.y, 1) if i.y is not None else None}
-                         for i in issues])
+def _detected_table(det) -> pd.DataFrame:
+    rows = [{"File": p.name, "Recognised as": role} for role, ps in (
+        ("Drawing", det.drawings), ("Address list", det.address_lists), ("Splice report", det.splice_reports),
+        ("BOM template", det.bom_templates), ("Approved BOM (reference)", det.bom_completed)) for p in ps]
+    rows += [{"File": p.name, "Recognised as": f"Not used - {why}"} for p, why in det.unknown]
+    return pd.DataFrame(rows)
 
 
-def show_result(res, notes):
-    st.success(f"Done in {res.elapsed:.0f} s - {len(res.groups)} BOM file(s).")
+def _legend():
+    st.markdown('<div class="legend"><span class="low">Low confidence - check before ordering</span>'
+                '<span class="review">Review</span><span class="ok">Derived by the design standard</span></div>',
+                unsafe_allow_html=True)
+
+
+# --------------------------------------------------------------------------- results
+def show_results(res, notes):
+    low = sum(g.flag_counts.get("LOW", 0) for g in res.groups)
+    review = sum(g.flag_counts.get("REVIEW", 0) for g in res.groups)
     sev = res.issue_counts
-    c = st.columns(5)
-    c[0].metric("Networks", len(res.networks))
-    c[1].metric("Passings", int(sum(res.totals.get("passings", {}).values())))
-    c[2].metric("Errors", sev.get("ERROR", 0))
-    c[3].metric("Warnings", sev.get("WARN", 0))
-    c[4].metric("Info", sev.get("INFO", 0))
+    wb_ok = all(not g.workbook_failures for g in res.groups)
+    st.markdown('<div class="step">Step 3 · Results</div>', unsafe_allow_html=True)
+    st.subheader(f"{len(res.groups)} BOM file(s) for {', '.join(res.networks)}")
+    k = st.columns(6)
+    k[0].metric("Passings", int(sum(res.totals.get("passings", {}).values())))
+    k[1].metric("Low-confidence cells", low)
+    k[2].metric("Cells to review", review)
+    k[3].metric("Design errors", sev.get("ERROR", 0))
+    k[4].metric("Design warnings", sev.get("WARN", 0))
+    k[5].metric("Workbook check", "Passed" if wb_ok else "Failed")
     for n in notes:
-        st.caption("note: " + n)
+        st.caption(n)
+    if not all(g.recalculated for g in res.groups):
+        st.caption("Formulas were not recalculated (LibreOffice not installed); the workbook structure was verified.")
+
     for g in res.groups:
-        st.subheader("BOM " + ", ".join(g.networks))
+        name = ", ".join(g.networks)
+        st.markdown(f"#### {name}")
         if g.ref_cells:
-            st.write(f"Against the approved BOM: **{g.ref_cells[0]}/{g.ref_cells[1]}** area cells and "
-                     f"**{g.ref_totals[0]}/{g.ref_totals[1]}** network totals match.")
-        if g.workbook_failures:
-            st.error("Workbook verification failed: " + "; ".join(f"{x[0]}: {x[2]}" for x in g.workbook_failures))
-        elif not g.recalculated:
-            st.warning("Formulas were not recalculated (LibreOffice not found) - the workbook structure was verified only.")
-        files = [g.bom, g.audit, g.discrepancies, g.issues_csv, g.issues_scr]
-        cols = st.columns(len([f for f in files if f]) + 1)
-        k = 0
-        for f in files:
-            if f:
-                cols[k].download_button(Path(f).name.split("_", 1)[-1], Path(f).read_bytes(), file_name=Path(f).name,
-                                        key=f"dl-{f}")
-                k += 1
-        cols[k].download_button("All files (zip)", _zip_outputs(files), file_name=f"{g.bom.stem}_all.zip", key=f"zip-{g.bom}")
-        df = _issues_df(g.issues)
-        if df.empty:
-            st.info("Deep check found no problems.")
-        else:
-            f1, f2 = st.columns(2)
-            sevs = f1.multiselect("Severity", ["ERROR", "WARN", "INFO"], default=["ERROR", "WARN"], key=f"sev-{g.bom}")
-            cats = f2.multiselect("Category", sorted(df["Category"].unique()), key=f"cat-{g.bom}")
-            view = df[df["_sev"].isin(sevs)]
-            if cats:
-                view = view[view["Category"].isin(cats)]
-            st.dataframe(view.drop(columns=["_sev"]), width="stretch", hide_index=True)
-            st.caption("In AutoCAD: type SCRIPT and pick the ISSUES.scr file - every located problem is circled on "
-                       "layers BOM_CHECK_ERROR / _WARN / _INFO.")
-    with st.expander("Key quantities by network"):
-        st.dataframe(pd.DataFrame(res.totals).T, width="stretch")
-    if res.calibration:
-        with st.expander("Policy calibration against the approved BOM", expanded=True):
-            st.dataframe(pd.DataFrame(res.calibration)[["policy", "option", "matched", "cells", "abs_error", "best", "selected"]],
-                         width="stretch", hide_index=True)
-            if res.learned:
-                st.success(f"Learned and saved: {res.learned}")
-    st.caption("Policies used: " + ", ".join(f"{k}={v}" for k, v in res.policies_used.items()))
+            st.caption(f"Compared with the approved BOM: {g.ref_cells[0]}/{g.ref_cells[1]} cells and "
+                       f"{g.ref_totals[0]}/{g.ref_totals[1]} network totals equal.")
+        tabs = st.tabs(["BOM preview", "Cells to check", "Design check", "Excluded plant", "Downloads"])
+        lines = pd.DataFrame(g.lines)
+        with tabs[0]:
+            _legend()
+            if lines.empty:
+                st.info("No quantities written.")
+            else:
+                view = lines.assign(Status=lines["confidence"].map(LEVEL))
+                view = view.pivot_table(index=["line", "description"], columns=["network", "area"], values="value",
+                                        aggfunc="first", dropna=False).reset_index()
+                view.columns = [" ".join(c).strip() if isinstance(c, tuple) else c for c in view.columns]
+                worst = lines.assign(rank=lines["confidence"].map({"LOW": 2, "REVIEW": 1, "": 0})).groupby("line")["rank"].max()
+                view.insert(0, "Status", view["line"].map(lambda x: {2: LEVEL["LOW"], 1: LEVEL["REVIEW"], 0: LEVEL[""]}[worst.get(x, 0)]))
+                st.dataframe(view, width="stretch", hide_index=True, height=520)
+        with tabs[1]:
+            _legend()
+            chk = lines[lines["confidence"] != ""] if not lines.empty else lines
+            if chk.empty:
+                st.success("Every quantity is derived by the design standard from complete inputs.")
+            else:
+                lv = st.radio("Show", ["All", "Low confidence only"], horizontal=True, key=f"lv-{g.bom}")
+                if lv != "All":
+                    chk = chk[chk["confidence"] == "LOW"]
+                st.dataframe(chk.assign(confidence=chk["confidence"].map(LEVEL))
+                             .rename(columns={"line": "Line", "description": "Description", "network": "Network", "area": "Area",
+                                              "value": "Value", "confidence": "Confidence", "why": "Why"}),
+                             width="stretch", hide_index=True, height=480)
+                st.caption("The same cells are coloured in the BOM workbook, explained in a cell comment, and listed on its 'BOM Review' sheet.")
+        with tabs[2]:
+            df = pd.DataFrame([{"Severity": SEVERITY.get(i.severity, i.severity), "_s": i.severity, "Area": i.category, "Code": i.code,
+                                "Network": i.network, "Problem": i.message, "Affects": i.affects, "How to fix": i.fix}
+                               for i in g.issues])
+            if df.empty:
+                st.success("No design problems found.")
+            else:
+                pick = st.multiselect("Severity", ["ERROR", "WARN", "INFO"], default=["ERROR", "WARN"], key=f"sev-{g.bom}")
+                st.dataframe(df[df["_s"].isin(pick)].drop(columns=["_s"]), width="stretch", hide_index=True, height=420)
+                st.caption("In AutoCAD, run SCRIPT on the ISSUES.scr file: every located problem is circled on layers "
+                           "BOM_CHECK_ERROR / _WARN / _INFO.")
+        with tabs[3]:
+            ex = pd.DataFrame([{"Category": c, "Object": o, "Quantity": q, "Reason": r} for c, o, q, r, _p in res.excluded])
+            if ex.empty:
+                st.info("Nothing was excluded: the drawing holds only this design.")
+            else:
+                st.caption("Objects in the drawing that are not part of this design (existing / HFC plant, other fiber networks).")
+                st.dataframe(ex, width="stretch", hide_index=True, height=380)
+        with tabs[4]:
+            files = [(g.bom, "BOM workbook"), (g.audit, "Audit workbook"), (g.discrepancies, "Comparison with approved BOM"),
+                     (g.issues_csv, "Design check (CSV)"), (g.issues_scr, "AutoCAD issue script")]
+            for path, label in files:
+                if path and Path(path).exists():
+                    st.download_button(label, Path(path).read_bytes(), file_name=Path(path).name, key=f"dl-{path}")
+            st.download_button("Everything (zip)", _zip([p for p, _ in files]), file_name=f"{Path(g.bom).stem}_all.zip",
+                               key=f"zip-{g.bom}", type="primary")
 
 
-def page_run():
-    st.header("Run a BOM job")
-    st.write("Drop **everything** for one OLM job or one combined drawing: the DWG/DXF, address list(s), splice reports "
-             "(files or zip), the blank BOM template, and optionally a completed/approved BOM to compare and learn from. "
-             "The tool works out which file is which.")
-    how = st.radio("Inputs", ["Upload files", "Use folders on this computer"], horizontal=True)
+# --------------------------------------------------------------------------- pages
+def page_new():
+    st.title("New BOM")
+    st.caption("Generate the OLM BOM from the design drawing and its inputs.")
+    st.markdown('<div class="step">Step 1 · Inputs</div>', unsafe_allow_html=True)
+    source = st.segmented_control("Source", ["Upload files", "Folders on this computer"], default="Upload files")
     uploads, paths = [], []
-    if how == "Upload files":
-        uploads = st.file_uploader("Files (.dwg .dxf .xlsx .zip)", type=["dwg", "dxf", "xlsx", "zip"], accept_multiple_files=True)
-    else:
-        txt = st.text_area("One file or folder path per line")
+    if source == "Folders on this computer":
+        txt = st.text_area("Files or folders, one per line", placeholder=r"C:\Jobs\DMI-R15")
         paths = [Path(x.strip().strip('"')) for x in txt.splitlines() if x.strip()]
-    with st.expander("Options"):
-        c1, c2, c3 = st.columns(3)
-        pname = c1.text_input("Project name (e.g. Melcher-Dallas, IA)")
-        pnum = c2.text_input("Project number")
-        system = c3.selectbox("System", SYSTEMS)
-        learn = st.checkbox("Learn policies from the approved BOM (if one is included)", value=False)
-        recalc = st.checkbox("Recalculate formulas with LibreOffice (slower, recommended)", value=shutil.which("soffice") is not None)
-    if st.button("Run", type="primary", disabled=not (uploads or paths)):
+    else:
+        uploads = st.file_uploader("Drawing (DWG/DXF), address list, splice reports, BOM template; optionally an approved BOM to compare with. "
+                                   "Zip files are fine.", type=["dwg", "dxf", "xlsx", "zip"], accept_multiple_files=True)
+    guess = project_from_filename(uploads[0].name) if uploads else {"name": "", "number": ""}
+    c1, c2, c3 = st.columns(3)
+    pname = c1.text_input("Project name", value=guess.get("name", ""))
+    pnum = c2.text_input("Project number", value=guess.get("number", ""))
+    system = c3.selectbox("System", SYSTEMS)
+    with st.expander("Advanced"):
+        recalc = st.toggle("Recalculate formulas with LibreOffice", value=shutil.which("soffice") is not None)
+        learn = st.toggle("Learn conventions from the approved BOM (when one is included)", value=False)
+
+    st.markdown('<div class="step">Step 2 · Generate</div>', unsafe_allow_html=True)
+    if st.button("Generate BOM", type="primary", disabled=not (uploads or paths)):
         job = WORK / dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         inputs = _save_uploads(uploads, job / "in") if uploads else paths
         missing = [str(p) for p in inputs if not Path(p).exists()]
         if missing:
             st.error("Not found: " + ", ".join(missing))
             return
-        log_box = st.empty()
-        lines: list[str] = []
-
-        def log(msg):
-            lines.append(str(msg))
-            log_box.code("\n".join(lines[-14:]))
-
-        with st.spinner("Detecting inputs ..."):
+        with st.status("Generating the BOM ...", expanded=True) as status:
             det = detect(inputs, job / "extracted", exclude=[job / "out"])
-        st.write("Detected: " + ", ".join(f"**{v}** {k}" for k, v in det.summary().items()))
-        try:
-            params, notes = params_from_detected(det, job / "out", project_name=pname or None, project_number=pnum or None,
-                                                 system=system, learn=learn, recalc=recalc, cache=WORK / ".cache")
-        except ValueError as exc:
-            st.error(str(exc))
-            return
-        with st.spinner("Building the BOM (1-3 minutes) ..."):
+            st.dataframe(_detected_table(det), width="stretch", hide_index=True)
             try:
-                res = run_job(params, log)
-            except Exception as exc:  # show the error instead of a blank page
+                params, notes = params_from_detected(det, job / "out", project_name=pname or None, project_number=pnum or None,
+                                                     system=system, learn=learn, recalc=recalc, cache=WORK / ".cache")
+            except ValueError as exc:
+                status.update(label="Inputs incomplete", state="error")
+                st.error(str(exc))
+                return
+            line = st.empty()
+            try:
+                res = run_job(params, lambda m: line.write(str(m)))
+            except Exception as exc:  # show the problem instead of a blank page
+                status.update(label="Generation failed", state="error")
                 st.exception(exc)
                 return
+            status.update(label=f"BOM generated in {res.elapsed:.0f} s", state="complete", expanded=False)
         st.session_state["last"] = (res, notes)
     if "last" in st.session_state:
-        show_result(*st.session_state["last"])
+        st.divider()
+        show_results(*st.session_state["last"])
 
 
 def page_batch():
-    st.header("Batch: many networks")
-    st.write("Point at a folder with **one sub-folder per network/job** (each with its drawing, address list, splice "
-             "reports - zips are fine). Each job gets its own BOM, audit and deep check, plus one BATCH_SUMMARY.xlsx.")
+    st.title("Batch")
+    st.caption("One BOM set per job folder: each sub-folder holds one network's drawing, address list and splice reports.")
     root = st.text_input("Jobs folder")
-    tpl = st.text_input("Template to use when a job folder has none (optional)")
-    out = st.text_input("Output folder", value=str(WORK / "batch"))
-    recalc = st.checkbox("Recalculate formulas with LibreOffice", value=False, key="b-recalc")
+    c1, c2 = st.columns(2)
+    tpl = c1.text_input("Template for folders without one (optional)")
+    out = c2.text_input("Output folder", value=str(WORK / "batch"))
+    recalc = st.toggle("Recalculate formulas with LibreOffice", value=False, key="b-recalc")
     if st.button("Run batch", type="primary", disabled=not root):
-        lines: list[str] = []
-        box = st.empty()
-
-        def log(msg):
-            lines.append(str(msg))
-            box.code("\n".join(lines[-16:]))
-
-        with st.spinner("Running jobs ..."):
+        with st.status("Running jobs ...", expanded=True) as status:
+            line = st.empty()
             try:
-                path = run_batch(Path(root), Path(out), template=Path(tpl) if tpl else None, log=log, recalc=recalc,
-                                 cache=WORK / ".cache")
+                path = run_batch(Path(root), Path(out), template=Path(tpl) if tpl else None, log=lambda m: line.write(str(m)),
+                                 recalc=recalc, cache=WORK / ".cache")
             except Exception as exc:
+                status.update(label="Batch failed", state="error")
                 st.exception(exc)
                 return
+            status.update(label="Batch complete", state="complete", expanded=False)
         st.dataframe(pd.read_excel(path), width="stretch", hide_index=True)
-        st.download_button("BATCH_SUMMARY.xlsx", path.read_bytes(), file_name=path.name)
+        st.download_button("Batch summary", path.read_bytes(), file_name=path.name, type="primary")
 
 
-def page_guide():
-    st.header("BOM guide - how every line is calculated")
+def page_standards():
+    st.title("Design standards")
+    st.caption("How every BOM line is derived. Lines without a rule are not used by these designs and stay blank.")
+    doc = ROOT / "DESIGN_STANDARDS.md"
+    if doc.exists():
+        with st.expander("Standards document", expanded=False):
+            st.markdown(doc.read_text())
     _cfg, rules = load_rules()
-    inv = json.loads((CONFIG_DIR / "investigations.json").read_text())
-    rows = [{"BOM line": r.key, "Status": r.status, "Written to BOM": "yes" if r.write else "no",
-             "How it is calculated": r.basis, "Source": r.source, "Notes from reconciliation": inv.get(r.key, "")}
+    rows = [{"BOM line": r.key, "Written": "yes" if r.write else "no", "Status": r.status, "How it is derived": r.basis, "Source": r.source}
             for r in rules]
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, height=600)
-    st.markdown("**Status:** VERIFIED = reproduces the approved Credit River BOM from independent sources. "
-                "VERIFIED_TOTAL = network totals verified; Grant/Non-Grant split inferred from the boundaries. "
-                "INFERRED = defensible rule, not proven against an approved BOM. TEMPLATE_FORMULA = kept from the template. "
-                "NOT_DETECTED = no drawing symbol for it; left blank. SUGGESTED = shown in the audit only. "
-                "Template lines without a rule (taps, ONU, ...) are not used by these designs and stay blank.")
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True, height=620)
+    st.caption("VERIFIED: reproduces an approved BOM from independent inputs. VERIFIED_TOTAL: totals verified, Grant/Non-Grant from the "
+               "boundaries. INFERRED: rule derived from the design data, highlighted for review. TEMPLATE_FORMULA: kept from the template.")
 
 
-def page_policies():
-    st.header("Policies - conventions the drawing alone cannot settle")
-    st.write("Each policy is computed every way on every run. The option selected here is written to the BOM; the others "
-             "are shown in the audit's Policies sheet. Running against an approved BOM with **Learn** ticked scores every "
-             "option and selects the best automatically.")
+def page_settings():
+    st.title("Settings")
+    st.caption("Conventions the drawing cannot settle. Every option is computed on every run and shown in the audit; the "
+               "selection below is written to the BOM.")
     data = json.loads(pol.CONFIG.read_text()) if pol.CONFIG.exists() else {}
-    sel = data.get("selected", {})
-    ev = data.get("evidence", {})
+    sel, ev = data.get("selected", {}), data.get("evidence", {})
     new = {}
     for p in pol.POLICIES:
         opts = list(p.options)
         cur = sel.get(p.name, p.default)
         c1, c2 = st.columns([1, 2])
         new[p.name] = c1.selectbox(p.title, opts, index=opts.index(cur) if cur in opts else 0,
-                                   format_func=lambda o, p=p: o + (" (default)" if o == p.default else ""), key=f"pol-{p.name}")
+                                   format_func=lambda o, p=p: o.replace("_", " ") + (" (standard)" if o == p.default else ""),
+                                   key=f"pol-{p.name}")
         c2.caption(p.options[new[p.name]])
         if ev.get(p.name):
-            c2.caption("Evidence: " + "; ".join(
-                f"{o}: {sum(j['matched'] for j in jobs.values())}/{sum(j['cells'] for j in jobs.values())} cells"
+            c2.caption("Evidence from approved BOMs: " + "; ".join(
+                f"{o.replace('_', ' ')} {sum(j['matched'] for j in jobs.values())}/{sum(j['cells'] for j in jobs.values())} cells"
                 for o, jobs in ev[p.name].items()))
-    if st.button("Save policy selection"):
+    b1, b2 = st.columns([1, 5])
+    if b1.button("Save", type="primary"):
         data["selected"] = new
         pol.CONFIG.write_text(json.dumps(data, indent=2))
-        st.success("Saved to config/policies.json - used for every new BOM.")
+        st.success("Saved. Used for every new BOM.")
+    if b2.button("Restore standard settings"):
+        data["selected"] = {}
+        pol.CONFIG.write_text(json.dumps(data, indent=2))
+        st.success("Standard settings restored.")
 
 
-st.sidebar.title("FTTx BOM Tool")
-st.sidebar.caption(f"version {__version__} - runs locally")
-page = st.sidebar.radio("Go to", ["Run a job", "Batch", "BOM guide", "Policies"])
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Before running:** in AutoCAD run **FXAUTO** (FX_DROPS.lsp) and save, so the drawing has drop lines.")
-st.sidebar.caption(f"Job files are kept in {WORK}")
-{"Run a job": page_run, "Batch": page_batch, "BOM guide": page_guide, "Policies": page_policies}[page]()
+with st.sidebar:
+    st.markdown("### FTTx BOM Tool")
+    st.caption(f"Version {__version__} · runs on this computer")
+    page = st.radio("Navigation", PAGES, label_visibility="collapsed")
+    st.divider()
+    st.caption("Before generating: run FXAUTO (FX_DROPS) in AutoCAD and save, so the drawing carries the drop lines.")
+    st.caption(f"Job files: {WORK}")
+{"New BOM": page_new, "Batch": page_batch, "Design standards": page_standards, "Settings": page_settings}[page]()

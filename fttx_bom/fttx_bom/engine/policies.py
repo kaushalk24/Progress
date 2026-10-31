@@ -69,7 +69,8 @@ POLICIES = [
         "fiber_bearing": "route labels, minus UG trench with no fiber cable within 200 ft",
     }),
     Policy("cable_split", "Cable Grant / Non-Grant split", r"cable_\d{3}", "span", {
-        "span": "routed cable split at splices/structures, each span by majority area",
+        "span": "routed cable split at splices/structures; each span in the area of the ped / splice it feeds",
+        "span_majority": "routed cable split at splices/structures; each span by the area holding most of its length",
         "length": "routed cable length inside the Non-Grant polygons",
     }),
     Policy("ground_kits", "Ground wire kits (FE0-07264810)", r"grounding_points", "template_note", {
@@ -147,20 +148,26 @@ def compute_variants(tk: Takeoff) -> None:
     # cable split by length
     cable_keys = {k for k, _n, _a in tk.q if re.fullmatch(r"cable_\d{3}", k)}
     cable_keys |= {f"cable_{c.fibers:03d}" for c in tk.cables if c.network in nets}
-    for k in sorted(cable_keys):
-        for n in nets:
-            for a in AREAS:
-                _put(tk, f"{k}@length", n, a, 0, "FT", "routed length inside Non-Grant polygons")
-    for c in tk.cables:
-        if c.network not in nets:
-            continue
-        f = c.ng_fraction_length if c.ng_fraction_length is not None else (c.ng_fraction or 0)
-        k = f"cable_{c.fibers:03d}@length"
-        tk.q[(k, c.network, NONGRANT)].value += c.total_ft * f
-        tk.q[(k, c.network, GRANT)].value += c.total_ft * (1 - f)
-    for (k, n, a), q in tk.q.items():
-        if k.endswith("@length") and k.startswith("cable_"):
-            q.value = round(q.value)
+    for opt, attr in (("length", "ng_fraction_length"), ("span_majority", "ng_fraction_majority")):
+        for k in sorted(cable_keys):
+            for n in nets:
+                for a in AREAS:
+                    _put(tk, f"{k}@{opt}", n, a, 0, "FT", BY_NAME["cable_split"].options[opt])
+        for c in tk.cables:
+            if c.network not in nets:
+                continue
+            f = getattr(c, attr)
+            f = f if f is not None else (c.ng_fraction or 0)
+            k = f"cable_{c.fibers:03d}@{opt}"
+            tk.q[(k, c.network, NONGRANT)].value += c.total_ft * f
+            tk.q[(k, c.network, GRANT)].value += c.total_ft * (1 - f)
+        for (k, n, a), q in tk.q.items():
+            if k.endswith("@" + opt) and k.startswith("cable_") and a == NONGRANT:
+                g = tk.q.get((k, n, GRANT))
+                total = round(q.value + (g.value if g else 0))
+                q.value = round(q.value)
+                if g:
+                    g.value = total - q.value
     # ground kits
     for n in nets:
         for a in AREAS:

@@ -150,9 +150,13 @@ def test_cable_network_totals(nmk):
 
 
 def test_cable_span_split_regression(nmk):
-    # span-based allocation reproduces the reference R03 FC048 split exactly
+    # design standard: each splice-to-splice span is in the area of the ped / splice it feeds (a span entering a
+    # Non-Grant area is Non-Grant from its start). Majority-by-span stays an option and reproduces R03 FC048 exactly.
     tk = nmk[2]
-    assert (tk.get("cable_048", "NMK-R03", GRANT), tk.get("cable_048", "NMK-R03", NONGRANT)) == (23785, 9460)
+    assert (tk.get("cable_048@span_majority", "NMK-R03", GRANT), tk.get("cable_048@span_majority", "NMK-R03", NONGRANT)) == (23785, 9460)
+    assert (tk.get("cable_048", "NMK-R03", GRANT), tk.get("cable_048", "NMK-R03", NONGRANT)) == (24215, 9030)
+    for k in ("cable_048", "cable_048@span_majority", "cable_048@length"):  # every option keeps the network totals
+        assert tk.total(k, "NMK-R03") == 33245
 
 
 def test_cable_labels_agree_with_splice_reports(nmk):
@@ -337,6 +341,26 @@ def test_dmi_approved_bom_reconciliation(dmi):
     for part, key in want.items():
         for a in (GRANT, NONGRANT):
             assert (ref.values[part][("DMI-R15", a)] or 0) == tk.get(key, "DMI-R15", a), (part, a)
+
+
+def test_dmf_design_scope_with_hfc_and_other_fiber(tmp_path_factory):
+    # DMF-R04: existing HFC plant + a fiber network designed by others (MST terminals) + this design (MAX5/MAX10)
+    path = DATA / "dmf/386029_South_Des_Moines_FTTH_DMF-R04_DWG.dwg"
+    if not path.exists():
+        pytest.skip("DMF-R04 drawing not in FTTX_TEST_DATA/dmf")
+    d = load_drawing(path, tmp_path_factory.mktemp("cache"))
+    assert sum(1 for p in d.polylines if p.layer == CONV["nongrant_layer"]) == 8  # SNMPOLYGONs recovered from their graphics
+    nets = sorted(build_classifier(d, CONV, []).foreign)
+    assert nets == ["DMF-R04"]  # network taken from the drawing when there is no address list
+    cls = build_classifier(d, CONV, nets)
+    tk = build_takeoff(d, CONV, cls, nets, {}, [], policies={})
+    n = "DMF-R04"
+    assert (tk.total("ped_max10", n), tk.total("ped_max5", n)) == (6, 10)
+    assert tk.total("cable_024", n) == 27095 and tk.total("cable_144", n) == 0 and tk.total("cable_072", n) == 0
+    excluded = {what for _c, what, *_x in tk.extra["scope"]["excluded"]}
+    assert {"DMF-04001 TO DMF-04021 FC144", "DMF-04001 TO DMF-P21-A FC072", "DMF-04008 TO DMF-04010 FC024"} <= excluded
+    assert tk.total("vault", n) == 7  # hub vault kept (our splice); L-box off every route of this design excluded
+    assert tk.total("passings", n) < 30  # count blocks at HFC pedestals / MSTs / RF taps excluded (~300 in the boundary)
 
 
 def test_splice_guide_format_parsed():

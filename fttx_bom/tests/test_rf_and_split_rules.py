@@ -18,6 +18,7 @@ class Cls:
     """Everything in N-R01, x >= 1000 is Non-Grant."""
     networks = {NET: None}
     foreign: dict = {}
+    nongrant: list = []
     nearest_assigned: list = []
     tolerance = 0.0
 

@@ -24,6 +24,7 @@ class Rule:
     write: bool
     basis: str
     source: str
+    hand_count: bool = False  # not written: an engineer counts it; the BOM cell is highlighted with the tool's count
 
     @property
     def key(self) -> str:
@@ -34,7 +35,7 @@ def load_rules(path: str | Path | None = None) -> tuple[dict, list[Rule]]:
     cfg = json.loads(Path(path or CONFIG_DIR / "bom_rules.json").read_text())
     rules = [
         Rule(r.get("part"), r.get("label"), r.get("value"), r.get("unit", "EA"), r["status"],
-             bool(r.get("write", False)), r.get("basis", ""), r.get("source", ""))
+             bool(r.get("write", False)), r.get("basis", ""), r.get("source", ""), bool(r.get("hand_count", False)))
         for r in cfg["rows"]
     ]
     return cfg, rules

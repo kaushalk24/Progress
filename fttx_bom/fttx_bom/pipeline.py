@@ -62,6 +62,11 @@ class GroupResult:
     recalculated: bool
     ref_cells: tuple[int, int] | None = None  # (matched, compared)
     ref_totals: tuple[int, int] | None = None
+    lines: list[dict] = field(default_factory=list)  # every written BOM cell with its confidence (for the app)
+
+    @property
+    def flag_counts(self) -> Counter:
+        return Counter(x["confidence"] for x in self.lines if x["confidence"])
 
 
 @dataclass
@@ -74,6 +79,7 @@ class JobResult:
     policies_used: dict = field(default_factory=dict)
     totals: dict = field(default_factory=dict)  # key -> {network: total}
     elapsed: float = 0.0
+    excluded: list[tuple] = field(default_factory=list)  # (category, object, quantity, reason, point)
 
     @property
     def exit_code(self) -> int:
@@ -123,15 +129,19 @@ def run_job(p: JobParams, log: Callable[[str], None] = print) -> JobResult:
     reports = read_splice_reports(p.splice_reports, report_errors) if p.splice_reports else []
     for msg in report_errors:
         log(f"WARNING: splice report not read: {msg}")
-    networks = p.networks or sorted(address_lists)
-    if not networks:
-        raise ValueError("no networks: supply address lists (their sheet names are the network names) or --networks")
-    for n in networks:
-        if n not in address_lists:
-            log(f"WARNING: no address list for {n}")
-
     log(f"reading drawing {p.dwg.name} ...")
     drawing = load_drawing(p.dwg, p.cache or p.out / ".cache")
+    networks = p.networks or sorted(address_lists)
+    if not networks:
+        # no address list: the networks are the labelled boundaries in the drawing
+        networks = sorted(build_classifier(drawing, conv, []).foreign)
+        if networks:
+            log(f"NOTE: no address list - networks taken from the drawing boundaries: {', '.join(networks)}")
+    if not networks:
+        raise ValueError("no networks: supply the address list(s), name the network (--networks), or label its boundary in the drawing")
+    for n in networks:
+        if n not in address_lists:
+            log(f"WARNING: no address list for {n} - passings come from the drawing count blocks (low confidence)")
     cls = build_classifier(drawing, conv, networks)
     selection = pol.load_selection(p.policies)
     tk = build_takeoff(drawing, conv, cls, networks, address_lists, reports, policies=selection)
@@ -162,6 +172,8 @@ def run_job(p: JobParams, log: Callable[[str], None] = print) -> JobResult:
         log("WARNING: learning needs an approved (completed) BOM as reference - nothing learned")
     tk.extra["calibration"] = res_job.calibration
     res_job.policies_used = dict(tk.policy_used)
+    res_job.excluded = list(tk.extra.get("scope", {}).get("excluded", [])) + [
+        ("RF plant", h, k, w, pt) for k, h, pt, w in tk.extra.get("rf_structures", [])]
     res_job.totals = {k: {n: tk.total(k, n) for n in networks} for k in SUMMARY_KEYS if any(kk == k for kk, _n, _a in tk.q)}
 
     for group in groups:
@@ -223,6 +235,16 @@ def _write_group(p: JobParams, networks, tk, drawing, cls, reports, rules, cfg, 
                           cls, reports, ref, comp, res.template_rows, issues)
     g = GroupResult(networks, bom_path, audit_path, disc_path, csv_path, scr_path, issues, summary["coverage"],
                     ver.failed, ver.recalculated)
+    desc = {r: d for r, _p, d in res.template_rows}
+    for rule in rules:
+        r = res.rows.get(rule.key)
+        if r is None or not (rule.write or rule.hand_count):
+            continue
+        for col, (v, note) in res.rule_values.get(rule.key, {}).items():
+            f = res.flags.get((rule.key, *col))
+            g.lines.append({"line": rule.key, "description": desc.get(r, ""), "network": col[0],
+                            "area": "Grant" if col[1] == "G" else "Non-Grant", "value": v,
+                            "confidence": f.level if f else "", "why": "; ".join(f.reasons) if f else (note or rule.basis[:160])})
     if comp is not None:
         cells = [x for x in comp if x["area"] != "TOTAL"]
         tots = [x for x in comp if x["area"] == "TOTAL"]

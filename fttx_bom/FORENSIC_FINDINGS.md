@@ -153,6 +153,45 @@ The manual DMI-R15 BOM was supplied after 0.5.0. It uses the new blank template,
 
 **Effect on NMK:** the new defaults for SFP, MAX10 +4 and drops follow the design standard and the DMI BOM, not the Credit River practice. This costs 8 NMK cells (SFP Grant 3, MAX10 +4 Non-Grant 3, Grant drops 2). Nothing else changes. Each old convention is still an option, and `--learn` picks whichever the approved BOMs support.
 
+## South Des Moines (DMF-R04): a drawing with other plant (0.7.0)
+
+DMF-R04 contains three networks. Only one is this design:
+
+| Plant | How it shows in the drawing | Treatment |
+|---|---|---|
+| Existing HFC | <ul><li>Amplifiers, taps (63), power supplies, terminators and end-of-line markers on the DES_* layers</li><li>Coax on DES_500/625/750/875P*/T* layers</li><li>60 CX1-PED4 RF pedestals, 101 poles, 54 anchors</li><li>HFC nodes (CX1_NODE, e.g. DMF-P21-A)</li></ul> | Not counted. RF strand (5 labels) and RF trench (12 labels) are left out of the route rows. |
+| Fiber by others | <ul><li>38 CX1_4PT_MST terminals ("FTP 200'") at HFC pedestals</li><li>Splices DMF-04002…04025, each 16 ft from an MST</li><li>FC144 04001→04021, FC072 04001→DMF-P21-A (HFC node), FC024 04008→04010</li></ul> | Not counted, along with 27 trench labels on its routes. 86+ count blocks at HFC / MST / RF-tap plant are left out of passings. |
+| **This design** | <ul><li>6 MAX10 and 10 MAX5 pedestals with splices DMF-04028…04043G</li><li>FC024 cables from the hub DMF-04001: aerial via DMF-04026/04027, then underground</li><li>Laterals to the G peds</li></ul> | Counted. |
+
+Results:
+- **Non-Grant polygons:** stored as SpatialNet SNMPOLYGON objects, which the DWG reader skipped. All 8 are recovered from their entity graphics (7 labelled "DMF-R04 NON GRANT 1–7").
+- **Quantities:**
+  - MAX10 6 (Grant), MAX5 5 / 5;
+  - 7 vaults (the hub vault is kept; an L-box on no route of this design is left out);
+  - FC024 27,095 ft (9,217 ft UG, 17,878 ft aerial);
+  - FC144 / FC072 0;
+  - route UG 15,615 / 2,119 ft, aerial 15,671 ft;
+  - OLM 1.
+- **No address list, splice reports or drop lines.** Passings come from count blocks at this design's pedestals, and closures, trays and drops can't be derived. All of these are red (low confidence) in the BOM.
+
+## Design-standard cross-check (0.7.0)
+
+The design-standard material was re-studied line by line. Its rules were compared with the tool and with the approved Credit River values shown in it.
+
+| Line | Standard | Tool |
+|---|---|---|
+| MAX10 / MAX5 | Count inside the OLM boundary, by the Non-Grant polygons; a ped on the boundary counts as Grant | By location; on the boundary (< 5 ft inside) = Grant |
+| Vaults | New only; existing are not counted; any size | New vaults on this design's routes |
+| Cable | Design length = route + slack (3,590 + 300 = 3,890); split along the cable where it enters the Non-Grant polygon, the span into the Non-Grant ped counted Non-Grant with its slack loop | Span by span, each span in the area of the ped it feeds (NMK cable error 26,142 → 19,366 ft) |
+| GOAT peds, ped with tap | 0, because MAX peds carry bulkheads (highlighted rows filled with 0) | Written 0 |
+| SFP | ROUNDUP(Jumper Calculator splitters required / 2) per column: Credit River 1, 4, 1, 4, 1, 3, 2, 2 | Per column (standard) |
+| Splitters | Only the designed ratio's row; Grant = ROUNDUP(grant / ratio), Non-Grant = remainder | Same |
+| Trays | Per location ROUNDUP(splices / 48 or 24); 2 per package; spare trays reused (450B: 2 closures → 1 package) | Pooled per column |
+| OLM, power | 1 per OLM in Grant (`=IF(H18=1,1,0)` for the enclosures) | Same |
+| MDU enclosure | 1 per MDU building | Same |
+| Ground wire kit | Hand count (template note) | Highlighted blank cell showing the drawing's count |
+| Heat shrink, ONU | Not filled | Blank |
+
 ## Per-line table (0.5.0 run against the Credit River approved BOM)
 
 <!-- generated from the discrepancy workbook by the forensic script; do not edit by hand -->

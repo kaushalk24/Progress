@@ -243,5 +243,6 @@
   "foreign_terminal_ft": 35,
   "count_block_assoc_ft": 60,
   "_scope_comment": "This design uses MAX5/MAX10 pedestals with bulkheads. Drawings can also hold an existing HFC plant (DES_* devices, coax layers, CX1-PED4 pedestals, CX1_NODE nodes) and fiber designed by others (MST terminals: foreign_fiber_blocks). Splices housed at those terminals, cables ending there or at an HFC node, structures and route on their routes, and count blocks at their terminals are excluded and listed in the audit.",
-  "coax_layer_regex": "^DES_\\d+[PT]\\d+[AU]$"
+  "coax_layer_regex": "^DES_\\d+[PT]\\d+[AU]$",
+  "boundary_structure_tolerance_ft": 5
 }

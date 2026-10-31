@@ -38,14 +38,24 @@ python -m fttx_bom app
 
 A browser page opens. Everything runs on your computer.
 
-- **Run a job:** drop *everything* in one go: the DWG, address list(s), splice reports (files or zip), the blank BOM template and, optionally, an approved BOM. The tool identifies each file from its content. You get:
-  - the BOM: one file per OLM when the template holds one OLM;
-  - the audit;
-  - the deep-check issue list;
-  - an AutoCAD script that circles every located problem.
-- **Batch:** a folder with one sub-folder per network. Each one gets its own outputs, plus a `BATCH_SUMMARY.xlsx`.
-- **BOM guide:** how every BOM line is calculated, its status, and what reconciliation found.
-- **Policies:** the conventions the drawing cannot settle (see section 6).
+| Page | What it does |
+|---|---|
+| **New BOM** | Runs in three steps. **Inputs:** upload everything at once, or give folders; the drawing, address lists, splice reports and blank template are recognised by content. **Generate:** shows a status. **Results:** KPIs and tabs for *BOM preview*, *Cells to check*, *Design check*, *Excluded plant* and *Downloads*. |
+| **Batch** | A folder with one sub-folder per network. Each gets its own outputs, plus `BATCH_SUMMARY.xlsx`. |
+| **Design standards** | How every BOM line is derived. |
+| **Settings** | Conventions the drawing cannot settle (section 6). |
+
+### Confidence in the BOM
+
+Every quantity in the generated BOM is rated:
+- **Red (low confidence):** do not order without checking.
+- **Amber (review):** check before ordering.
+
+Each flagged cell has a comment explaining why, and the *BOM Review* sheet at the end of the workbook lists them all. Typical reasons are a missing address list or splice reports, no drop lines, an inferred rule, an unsettled convention, or a design warning on that line.
+
+### Drawings with other plant
+
+A drawing can also hold existing HFC plant or a fiber network designed by others. Only this design is counted: MAX5/MAX10 pedestals with bulkheads. Everything else is left out and listed with its reason on the audit's *Excluded* sheet and the app's *Excluded plant* tab.
 
 ## 4. Command line
 
@@ -100,20 +110,20 @@ What it checks:
 - workbook verification;
 - which policies change the totals.
 
-## 6. Policies: accurate results without waiting for manual confirmation
+## 6. Settings: conventions the drawing cannot settle
 
 Some conventions can't be read from the drawing, so the tool computes **every option** on every run:
 
 | Policy | Options |
 |---|---|
-| SFP | Non-Grant first: Grant = network total − Non-Grant (default); per-column Jumper Calculator ÷ 2; split ratio; or designed PONs |
+| SFP | per column, Jumper Calculator splitters ÷ 2 rounded up (standard); network total − Non-Grant; split ratio; or designed PONs |
 | Splitter Grant split | Grant first, or per column |
 | Tray packages | pooled, per location, or fully pooled |
 | MAX10 upgrade | template formula, one kit per Non-Grant MAX10 (default); need-based; or all MAX10 |
 | Drop columns | both, Grant = total − Non-Grant (default); Non-Grant only; or all drops in Non-Grant |
 | Route footage | route labels, as CalcFTG (default); cable totals; or fiber-bearing trench only |
-| Cable split | by span, or by length |
-| Ground wire kits | audit only (both approved BOMs leave it blank): template note, G suffix only, or not ordered |
+| Cable split | span by span, each in the area of the ped it feeds (standard); span majority; or length inside the polygons |
+| Ground wire kits | hand count, highlighted with the drawing's count: template-note criteria, G suffix only, or not ordered |
 | OLM column | Grant if any grant passings, or by location |
 
 The audit's *Policies* sheet shows every option's numbers side by side.
@@ -126,8 +136,8 @@ The current defaults are the design standards and your AutoCAD routines (FX_DROP
 
 | File | Content |
 |---|---|
-| `*_FINAL_BOM.xlsx` | Template with quantities in the Grant / Non-Grant columns. Formulas, part numbers, formatting, comments and links are kept; inconsistent template formulas are repaired and logged. |
-| `*_BOM_AUDIT.xlsx` | Summary and coverage, Deep Check, every BOM line with its rule and status, Policies (all options), the full takeoff with CAD handles as evidence, cables, splice enclosures, checks, network assignment, and CAD census. |
+| `*_FINAL_BOM.xlsx` | Template with quantities in the Grant / Non-Grant columns. Formulas, part numbers, formatting, comments and links are kept; inconsistent template formulas are repaired and logged. Cells to check are coloured red / amber with a comment and listed on the *BOM Review* sheet. |
+| `*_BOM_AUDIT.xlsx` | Summary and coverage, Deep Check, Review (flagged cells), Excluded (plant not in this design), every BOM line with its rule and status, Policies (all options), the full takeoff with CAD handles as evidence, cables, splice enclosures, checks, network assignment, and CAD census. |
 | `*_ISSUES.csv` / `*_ISSUES.scr` | Issue list and AutoCAD circle script. |
 | `*_BOM_DISCREPANCIES.xlsx` | Only with an approved BOM: differences per cell and per network, investigated causes, and policy calibration. |
 
@@ -156,4 +166,4 @@ python -m pytest -q -m "not slow"
 FTTX_TEST_DATA=/path/to/project/files python -m pytest -q
 ```
 
-See `BOM_RULES.md` (rules and DWG→BOM chains), `FORENSIC_FINDINGS.md` (line-by-line reconstruction of the approved BOM), `RESEARCH.md` (sources), `DESIGN_STANDARDS.md`, `PROGRESS_AND_ISSUES.md`, `CHANGELOG.md` and `RESEARCH_RECOVERY.md` (work checkpoint).
+See `DESIGN_STANDARDS.md` (the standard for every BOM line), `UI_DESIGN.md` (interface), `BOM_RULES.md` (rules and DWG→BOM chains), `FORENSIC_FINDINGS.md` (line-by-line reconstruction of the approved BOMs), `RESEARCH.md` (sources), `DESIGN_STANDARDS.md`, `PROGRESS_AND_ISSUES.md`, `CHANGELOG.md` and `RESEARCH_RECOVERY.md` (work checkpoint).

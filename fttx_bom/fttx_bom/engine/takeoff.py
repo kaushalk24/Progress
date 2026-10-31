@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from ..extract.model import Drawing, Insert, Point, Polyline
 from ..inputs.address_list import AddressList
 from ..inputs.splice_reports import SpliceReport, network_from_splice_name
-from .geometry import dist, length_inside, point_segment_distance, polyline_length
+from .geometry import dist, length_inside, point_polyline_distance, point_segment_distance, polyline_length
 from .network import AREAS, GRANT, NONGRANT, Classifier
 
 FT_RE = re.compile(r"-?\d+(?:\.\d+)?")
@@ -62,6 +62,7 @@ class CableSegment:
     split_method: str = ""
     path: list = field(default_factory=list)
     spans: list = field(default_factory=list)  # (length_ft, area)
+    ng_fraction_majority: float | None = None
 
 
 class Takeoff:
@@ -291,8 +292,16 @@ def count_blocks(d, conv, cls, tk, key, qkey=None, unit="EA"):
                     continue
             kept.append(ins)
         found = kept
+    tol = conv.get("boundary_structure_tolerance_ft", 5.0)
     for ins in found:
         net, area = _locate(cls, ins, tk)
+        if net and area == NONGRANT and tol > 0:
+            # a structure on the Non-Grant boundary counts as Grant (design standard)
+            edge = min((point_polyline_distance(ins.pt, r.poly, True) for r in cls.nongrant if r.contains(ins.pt)), default=1e18)
+            if edge < tol:
+                area = GRANT
+                tk.check(f"structure on Non-Grant boundary {qkey}", True, f"{ins.name} {ins.handle} is {edge:.1f} ft inside a "
+                         "Non-Grant edge - counted Grant (on the boundary)")
         if net:
             tk.add(qkey, net, area, 1, unit, f"count of block {names}", [ins.handle])
 
@@ -611,9 +620,12 @@ def _resolve_endpoint(name: str, pos: dict[str, Point]) -> Point | None:
     return None
 
 
-def _spans(path, breaks, cls, tol=3.0):
-    """Split a routed path at splice / structure points; classify each span by
-    the area holding the majority of its length."""
+def _spans(path, breaks, cls, tol=3.0, mode: str = "downstream"):
+    """Split a routed path (A end -> B end) at splice / structure points and classify each span.
+
+    downstream  the area of the span's downstream end, i.e. the ped / splice it feeds: a span
+                entering a Non-Grant area is Non-Grant from its start (design standard)
+    majority    the area holding the majority of the span's length"""
     cuts = [0]
     for i in range(1, len(path) - 1):
         p = path[i]
@@ -628,8 +640,11 @@ def _spans(path, breaks, cls, tol=3.0):
         L = polyline_length(piece)
         if L <= 0:
             continue
-        inside = length_inside(piece, cls.nongrant)
-        out.append((L, NONGRANT if inside > L / 2 else GRANT))
+        if mode == "downstream":
+            out.append((L, cls.area_of(path[i1])))
+        else:
+            inside = length_inside(piece, cls.nongrant)
+            out.append((L, NONGRANT if inside > L / 2 else GRANT))
     return out
 
 
@@ -722,11 +737,12 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
             plen = polyline_length(path)
             seg.path_ft = plen
             seg.path = path
-            seg.spans = _spans(path, breaks, cls)
+            seg.spans = _spans(path, breaks, cls, mode="downstream")
             seg.ng_fraction_length = length_inside(path, cls.nongrant) / plen if plen else 0.0
+            seg.ng_fraction_majority = sum(L for L, ar in _spans(path, breaks, cls, mode="majority") if ar == NONGRANT) / plen if plen else 0.0
             if split_mode == "span":
                 ng_len = sum(L for L, ar in seg.spans if ar == NONGRANT)
-                seg.split_method = "route spans (splice to splice) by majority area"
+                seg.split_method = "route spans (splice to splice), each in the area of the ped / splice it feeds"
             else:
                 ng_len = length_inside(path, cls.nongrant)
                 seg.split_method = "route length inside Non-Grant polygons"

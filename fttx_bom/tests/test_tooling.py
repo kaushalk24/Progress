@@ -135,10 +135,14 @@ def test_app_pages_load():
     at = AppTest.from_file(str(APP), default_timeout=60)
     at.run()
     assert not at.exception
-    for page in ("Batch", "BOM guide", "Policies"):
+    assert at.title[0].value == "New BOM"
+    for page in ("Batch", "Design standards", "Settings"):
         at.sidebar.radio[0].set_value(page).run()
         assert not at.exception, page
-    assert len(at.selectbox) == len(pol.POLICIES)
+        assert at.title[0].value == page
+    assert len(at.selectbox) == len(pol.POLICIES)  # one per convention on the Settings page
+    text = " ".join(str(m.value) for m in at.markdown) + " ".join(str(c.value) for c in at.caption)
+    assert "SME" not in text and "meeting" not in text.lower()
 
 
 def test_batch_summary_counts_per_bom(tmp_path, monkeypatch):

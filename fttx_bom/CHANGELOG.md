@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.7.0 - design scope, confidence highlighting, new interface
+
+- **Drawings with other plant (DMF-R04).** Only this design is counted: MAX5/MAX10 pedestals with bulkheads.
+  - **Existing HFC plant is left out:** taps, amplifiers, power supplies, RF pedestals, coax trench and strand, and their vaults.
+  - **Fiber designed by others is left out:**
+    - splices housed at MST terminals;
+    - cables ending there or at an HFC node;
+    - structures and trench on their routes;
+    - count blocks at their terminals.
+
+    Every excluded object is listed on the audit's *Excluded* sheet and on the app's *Excluded plant* tab.
+  - **Without an address list,** passings come only from count blocks and addresses at this design's pedestals.
+- **SpatialNet Non-Grant polygons stored as custom objects** (SNMPOLYGON) were silently missing from the drawing data. They are now recovered from their entity graphics. On DMF-R04, all 8 polygons are recovered, 7 of them labelled. The drawing cache is invalidated when the reader changes.
+- **The network name comes from the drawing boundary** when no address list is supplied.
+- **Confidence highlighting in the BOM.** Every quantity cell is rated low confidence (red) or review (amber), with the reason in a cell comment. A *BOM Review* sheet lists them all, and the audit and the app show the same list.
+- **New interface:**
+  - *New BOM* is a three-step page: inputs with detected files, generate with status, then results with KPIs and tabs (BOM preview, cells to check, design check, excluded plant, downloads).
+  - The other pages are *Batch*, *Design standards* and *Settings*.
+  - The plan is in UI_DESIGN.md.
+- **Design-standard alignment:**
+  - **SFP** is per column, ROUNDUP(Jumper Calculator splitters required / 2). On the Credit River BOM this gives 1/4/1/4/1/3/2/2.
+  - **Cable split:** each span belongs to the ped or splice it feeds. NMK absolute cable error falls from 26,142 to 19,366 ft against the approved BOM.
+  - **Boundaries:** pedestals and vaults on the Non-Grant boundary count as Grant.
+  - **Fixed zeros:** GOAT and ped-with-tap rows are 0, because MAX peds use bulkheads.
+  - **Ground wire kit** is a highlighted hand-count cell showing the drawing's count.
+- **RF trench** (trench along coax with no fiber of this design) is no longer counted as route footage. NMK R04 UG goes down 684 ft.
+- **Professional wording** throughout. DESIGN_STANDARDS.md documents every BOM line.
+- **Tests:** 93 (92 without the slow end-to-end run). New: confidence, design scope (DMF-R04) and app pages.
+
 ## 0.6.0 - Melcher-Dallas approved BOM: Grant/Non-Grant standard, RF plant left out
 
 Reconciled against the manual DMI-R15 BOM (see FORENSIC_FINDINGS.md "Melcher-Dallas"): 72 → 75 of 90 cells, 34 → 38 of 45 totals.

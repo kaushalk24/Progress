@@ -7,6 +7,8 @@ These are the rules the tool applies to every line of the OLM BOM template, one 
 - **Non-Grant** is whatever lies inside the Non-Grant boundaries.
 - **Grant** is the network total minus Non-Grant.
 - **OLM equipment** (Z-14 ped, OLM bundle, power supply, enclosures, batteries) is booked to Grant, 1 per OLM. When the whole OLM area is Non-Grant, it all moves to Non-Grant.
+- **Structures on the boundary:** a pedestal or vault on the Non-Grant boundary (less than 5 ft inside the edge) counts as Grant.
+- **Cable** is split at its splice and structure points. Each span belongs to the area of the ped or splice it feeds, so a span entering a Non-Grant area is Non-Grant from its start. The slack loops at that ped go with it.
 
 ## Scope: what belongs to this design
 
@@ -26,20 +28,30 @@ These are the rules the tool applies to every line of the OLM BOM template, one 
 | Footage | Total drop footage | FX_DROPS drop lines (ped edge to the address PED, rounded to the foot). Not counted in the route rows. |
 | Passings | Residential, commercial, MDU | Served addresses from the address list. Grant = served addresses on the GRANTADDRESS layer (commercial / MDU: outside the Non-Grant boundaries). |
 | UG structures | Z-14 OLM ped | 1 per OLM, in Grant. |
-| UG structures | MAX10 / MAX5 peds | Count of pedestals inside the OLM boundary, split by location. |
+| UG structures | MAX10 / MAX5 peds | Count of pedestals inside the OLM boundary, split by location (on the boundary = Grant). |
+| UG structures | GOAT peds, MAX / GOAT ped with tap | 0: the design uses MAX peds with fiber bulkheads. |
 | UG structures | Vaults | Count of new vaults on the routes of this design, any size, split by location. |
 | UG structures | Bonding jumper, ped bonding kit, ped splice tray | Template formulas (2, 1 and 1 per ped). Inconsistent template formulas are repaired from the first area column. |
 | UG structures | MAX10 +4 upgrade | Template formula: one kit per Non-Grant MAX10. |
-| Fiber cable | 24 ... 288 count | Cable design length (route + slack loops = splice-report design length), split by where the cable runs, slack included at its location. Totals per fiber count must equal the splice-report design length. |
+| Fiber cable | 24 ... 288 count | Cable design length (route + slack loops, e.g. 3,590 + 300 = 3,890 = splice-report design length). Split span by span: each span belongs to the area of the ped or splice it feeds. Totals per fiber count must equal the splice-report design length. |
 | Splice cases | FOSC 450B / 450D | From the splice reports' enclosure type, by splice location. |
 | Splice trays | 450B / 450D trays | Closures ship without trays. Per splice location, trays = ROUNDUP(splices / 24 for 450B or / 48 for 450D), counting every splice (homes, power port, transport fibers, splitter legs). Packages = ROUNDUP(trays / 2), because each package holds 2 trays and a spare tray can serve another location. |
 | Splice trays | D basket | 0. The T3V 450D ships with its basket. |
-| Not updated | Burns and heat shrink, ONU, ground wire kits | Left blank. The audit shows the counts. |
+| Not updated | Burns and heat shrink, ONU | Left blank. |
+| Hand count | Ground wire kit | Counted by the engineer per the template note (splices named ...G, first in line, name ending in 0, end of line). The cell is left blank and highlighted with the drawing's count. |
 | OLM equipment | OLM bundle | 1 per OLM, Grant. |
 | OLM equipment | XGS SFP+ | Per column: ROUNDUP(Jumper Calculator "Splitters Required" / 2), whatever splitter is used. |
-| OLM equipment | Splitters | Designed count. Grant = ROUNDUP(grant passings / split ratio); the rest are Non-Grant. |
+| OLM equipment | Splitters | Designed count, at the designed ratio (only that ratio's row is filled). Grant = ROUNDUP(grant passings / split ratio); the rest are Non-Grant. |
 | Power supply | XM3.1, enclosures, battery kit, batteries | 1 per OLM (3 batteries), Grant. Pole or ground mount follows the OLM location. |
 | Transport BOM, Jumper Calculator | — | Per-area inputs only; the sheet formulas do the rest. |
+
+## Confidence
+
+Every quantity the tool writes is rated:
+- **Low confidence (red):** the value could not be derived, a key input is missing, or a blocking design issue affects it.
+- **Review (amber):** the value comes from an inferred rule or an unsettled convention, or a design warning affects it.
+
+Flagged cells carry a comment and are listed on the workbook's *BOM Review* sheet. See UI_DESIGN.md.
 
 ## AutoCAD routines the BOM depends on
 

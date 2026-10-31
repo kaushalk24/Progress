@@ -13,6 +13,19 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Non-Grant area | Every polygon on `Boundary - Designed Not Built` (SpatialNet proxy LWPolygons decoded from proxy graphics, plus LWPOLYLINEs), except ones labelled as network or transport boundaries. Unlabelled polygons count too: this was needed to reproduce the commercial/MDU splits. | VERIFIED |
 | Grant classification of infrastructure | By **location** (insertion point inside or outside the Non-Grant polygons). A service-based alternative (by addresses served) was tested and rejected: R02 MAX10 gave 24/35 vs 55/4 in the reference. | VERIFIED |
 
+## Design scope and confidence (0.7.0)
+
+| Rule | Basis |
+|---|---|
+| A splice point within 35 ft of an MST terminal (and nearer than any MAX ped) belongs to another fiber network | DMF-R04: DMF-04002…04025 |
+| A cable ending at such a splice, or at an HFC node (CX1_NODE tag), belongs to another network | DMF-R04: FC144, FC072, FC024 excluded |
+| A vault or L-box counts only within 40 ft of this design's cable routes or 50 ft of its splices, and not when another network's route is nearer | DMF-R04: 7 vaults kept, 1 L-box excluded; NMK/DMI unchanged |
+| A trench label is RF when coax is within 40 ft and none of this design's fiber is within 75 ft; it is foreign when another network's fiber is nearer | NMK R04 −684 ft; DMF 12 RF and 27 foreign labels |
+| A count block is not this design's when an HFC pedestal, MST or RF tap is its nearest housing | DMF: 300+ in the boundary, 18 kept |
+| Cable split: span by span, each in the area of the ped or splice it feeds | Design standard; NMK error −26% |
+| A pedestal or vault on the Non-Grant boundary (< 5 ft inside) counts as Grant | Design standard |
+| Every written cell is rated low / review and highlighted | `excel/confidence.py` |
+
 ## Grant / Non-Grant rule (design standard) and where it applies
 
 **Rule:** Non-Grant = everything inside the Non-Grant boundaries; Grant = total − Non-Grant.
@@ -20,9 +33,9 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Line | How the rule is applied | Evidence |
 |---|---|---|
 | Peds, vaults, closures, OLM equipment | By location; each object is either inside or outside | Both BOMs; differences are a few objects near edited edges |
-| Cables | Routed spans by majority area; Grant = TOTAL − Non-Grant spans | Best of 8 hypotheses on NMK; DMI 8/10 cells |
+| Cables | Routed spans, each in the area of the ped / splice it feeds; Grant = TOTAL − Non-Grant spans | Design standard; NMK absolute error 19,366 ft (span majority 26,142) |
 | Route footage (rows 6–10) | Route labels inside the Non-Grant polygons; Grant = rest | CalcFTG method |
-| XGS SFP+ | Non-Grant = ROUNDUP(NG passings / 64); Grant = ROUNDUP(total / 64) − Non-Grant | DMI exact; NMK total = designed PONs |
+| XGS SFP+ | Per column ROUNDUP(Jumper Calculator splitters required / 2) | Design standard; Credit River 8/8 |
 | Drops | Non-Grant = drops of Non-Grant addresses; Grant = total − Non-Grant | design standard; the approved BOMs differ (policy `drop_columns`) |
 | **Exception: splitters** | Grant = ROUNDUP(grant passings / ratio); Non-Grant = designed − Grant | Both approved BOMs |
 | **Exception: passings** | Grant = served addresses on GRANTADDRESS; Non-Grant = total − Grant | Both approved BOMs; the deep check lists addresses whose layer and boundary disagree |
