@@ -25,6 +25,9 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Cable split: span by span, each in the area of the ped or splice it feeds | Design standard; NMK error −26% |
 | A pedestal or vault on the Non-Grant boundary (< 5 ft inside) counts as Grant | Design standard |
 | Every written cell is rated low / review and highlighted | `excel/confidence.py` |
+| A design warning marks only the cells it can change (cable: its fiber count; address layer: residential count, plus splitters or SFP only when the count would change) | `excel/confidence.py` |
+| A cable without a traced route is marked only when its label and two ends are not all in one area | `CableSegment.split_uncertain` |
+| Route footage and splice-tray rows follow the design standard (CalcFTG labels; ROUNDUP(splices/24 or /48), packages of 2) and are rated VERIFIED | `config/bom_rules.json` |
 
 ## Grant / Non-Grant rule (design standard) and where it applies
 

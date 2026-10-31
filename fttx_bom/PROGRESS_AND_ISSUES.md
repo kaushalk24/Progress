@@ -1,8 +1,17 @@
 # Progress and issues
 
-_Last updated: 2026-10-31, build 0.6.0_
+_Last updated: 2026-10-31, build 0.7.1_
 
 ## Working
+
+- **0.7.1:** confidence is targeted. A finding marks only the cells whose number it can change (CHANGELOG 0.7.1).
+- **0.7.0:**
+  - new interface (UI_DESIGN.md);
+  - confidence highlighting in the BOM (red / amber cells, *BOM Review* sheet);
+  - design scope for drawings that also hold existing HFC plant or fiber by others (DMF-R04);
+  - Map Non-Grant polygons recovered;
+  - design-standard alignment (SFP per column, cable span to the ped it feeds, boundary structures in Grant, bulkhead rows 0, ground-kit hand count);
+  - wording made neutral and professional.
 
 - **Self-service tool:** local app, `auto` and `batch` commands, deep check with an AutoCAD issue script, and policies learned from approved BOMs (0.4.0).
 - **0.5.0, forensic and review release:**
@@ -13,7 +22,28 @@ _Last updated: 2026-10-31, build 0.6.0_
 - **Template layout:** the area columns are found from the header, and a template is split into one BOM per OLM whenever its Transport BOM or Jumper Calculator can't hold more.
 - **Outputs:** every output is marked, so a rerun never treats the tool's own BOM as the approved BOM.
 
-## DMI-R15 reconciliation (reference = manual Melcher-Dallas BOM, 0.6.0)
+## DMF-R04 (South Des Moines, drawing only, 0.7.0)
+
+The drawing also holds existing HFC plant and a fiber network designed by others. Only this design is counted.
+
+| Line | Tool | How |
+|---|---|---|
+| Passings | 18 | Count blocks at this design's pedestals (no address list supplied, so the cells are marked low confidence) |
+| MAX10 / MAX5 peds | 6 / 10 (5 Grant, 5 Non-Grant) | MAX peds with bulkhead in the boundary |
+| Vaults | 7 | On this design's routes; the L-box on the other network's route is excluded |
+| FC024 | 27,095 ft (UG 9,217, aerial 17,878) | Cable labels, span split |
+| Route UG / aerial | 15,615 + 2,119 / 15,671 ft | CalcFTG labels; 12 RF and 27 other-network trench labels excluded |
+| OLM | 1 | Grant |
+
+**Excluded:** the other network's FC144, FC072 and one FC024, its splices at MST terminals, and the HFC taps, amplifiers, power supplies, RF pedestals, coax trench and strand. Each is listed on the audit's *Excluded* sheet.
+
+The only error is the missing address list. Closures, trays and splitters stay low confidence until the splice reports are supplied.
+
+## DMI-R15 reconciliation (reference = manual Melcher-Dallas BOM)
+
+**0.7.0:** 74 / 90 cells, 37 / 45 totals. That is one fewer than 0.6.0: SFP Grant now follows the per-column design standard (2), while the manual BOM typed 1.
+
+### 0.6.0
 
 | Measure | 0.6.0 | 0.5.0 |
 |---|---|---|
@@ -39,6 +69,11 @@ _Last updated: 2026-10-31, build 0.6.0_
 See FORENSIC_FINDINGS.md D1–D14.
 
 ## NMK reconciliation (reference = manual Credit River BOM)
+
+**0.7.0:** 291 / 368 cells, 159 / 184 totals. The per-OLM BOMs on the new template sum to the same numbers. Changes from 0.6.0:
+- SFP is per column (1/4/1/4/1/3/2/2);
+- the cable span goes to the ped it feeds (absolute cable error 26,142 → 19,366 ft);
+- R04 has 684 ft less RF trench.
 
 **0.6.0:** 290 / 368 cells, 156 / 184 totals. The 8 cells fewer than 0.5.0 are where the defaults now follow the design standard and the DMI BOM instead of the Credit River practice: SFP Grant 3, MAX10 +4 Non-Grant 3, Grant drops 2. Nothing else changed. The table below is the 0.5.0 history.
 
@@ -101,12 +136,13 @@ See FORENSIC_FINDINGS.md for the line-by-line table.
 8. **DMI-R15:**
    - 6 cable segments have one end without a splice symbol or splice report, so they are classified at their label;
    - there is a duplicate "2023 60TH" address block.
-9. **Learned-policy evidence** is keyed by project number and network names. Two projects with the same keys would overwrite each other's evidence (review finding 18, minor).
+9. **Template bonding formulas.** The bonding jumper and ped bonding kit formulas are inconsistent across the template's area columns. The tool repairs them from the first column and lists the repair. The template itself should be fixed.
+10. **Learned-policy evidence** is keyed by project number and network names. Two projects with the same keys would overwrite each other's evidence (review finding 18, minor).
 
 ## Tests
 
 `python -m pytest -q` (with `FTTX_TEST_DATA`):
-- 77 tests: 76 run without the slow end-to-end test, which is run before a release;
+- 97 tests: 96 run without the slow end-to-end test, which is run before a release;
 - unit, tooling, forensic-rule and review-regression tests;
 - integration on the real NMK / DMI files;
 - the end-to-end CLI run.

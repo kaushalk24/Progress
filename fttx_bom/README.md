@@ -53,6 +53,14 @@ Every quantity in the generated BOM is rated:
 
 Each flagged cell has a comment explaining why, and the *BOM Review* sheet at the end of the workbook lists them all. Typical reasons are a missing address list or splice reports, no drop lines, an inferred rule, an unsettled convention, or a design warning on that line.
 
+A warning only marks the cells whose number it can change:
+- A cable warning marks the row of the fiber count it names, in its network.
+- A cable whose route is not traced is marked only when its label and two ends are not all in the same area.
+- An address on a layer that disagrees with the Non-Grant boundary marks the residential count. It marks splitters and SFP only where moving the address would change them.
+- Unmapped symbols mark the rows written as 0 (GOAT peds, peds with tap) only when they sit on the pedestal layer.
+
+Repeated reasons are shown once, with a count.
+
 ### Drawings with other plant
 
 A drawing can also hold existing HFC plant or a fiber network designed by others. Only this design is counted: MAX5/MAX10 pedestals with bulkheads. Everything else is left out and listed with its reason on the audit's *Excluded* sheet and the app's *Excluded plant* tab.

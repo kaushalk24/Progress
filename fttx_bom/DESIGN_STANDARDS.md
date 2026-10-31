@@ -51,7 +51,7 @@ Every quantity the tool writes is rated:
 - **Low confidence (red):** the value could not be derived, a key input is missing, or a blocking design issue affects it.
 - **Review (amber):** the value comes from an inferred rule or an unsettled convention, or a design warning affects it.
 
-Flagged cells carry a comment and are listed on the workbook's *BOM Review* sheet. See UI_DESIGN.md.
+A warning marks only the cells whose quantity it can change. Flagged cells carry a comment and are listed on the workbook's *BOM Review* sheet. See UI_DESIGN.md.
 
 ## AutoCAD routines the BOM depends on
 

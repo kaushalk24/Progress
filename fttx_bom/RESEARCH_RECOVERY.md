@@ -292,3 +292,30 @@ Plan:
 - UI;
 - integrate the reference material agent's findings;
 - tests, regenerate, commit.
+
+## Task 3 checkpoint 3
+
+- **Committed:** `8b1a197` (scope, polygons, confidence) and `371dca7` (0.7.0 interface and standard alignment). 92 tests pass (non-slow).
+- **Design-standard study:** complete. Rules confirmed: SFP per column, splitters by remainder, pooled trays, OLM in Grant, MDU 1 per building, bulkhead rows 0. New rules adopted: boundary peds count as Grant, and the cable span goes to the ped it feeds.
+- **Running:** the deliverable regeneration (`bash $S/regen9.sh`, writing to `$S/out9` with NMK_ref, NMK_new, DMI with reference, and DMF). After that:
+  1. update PROGRESS_AND_ISSUES with the numbers;
+  2. take browser screenshots with a tall window;
+  3. run the slow test;
+  4. commit, push, and send the files.
+
+## Task 3 checkpoint 4 (0.7.1)
+
+- **Confidence tuning:** done in `excel/confidence.py`.
+  - Cable findings now go to their own fiber-count row and network.
+  - A cable without a traced route is flagged only when its label and two ends are not all in one area (`CableSegment.split_uncertain`).
+  - An address-layer conflict flags the residential count, and splitters or SFP only when the count would change.
+  - The 0-written ped rows are flagged only for unmapped symbols on RTE_UGPOLES.
+  - Reasons are aggregated.
+  - The route and tray rules are VERIFIED (design standard); route_footage is removed from the unsettled list.
+- **Tests:** 8 confidence tests.
+- **Docs:** README, BOM_RULES, DESIGN_STANDARDS, CHANGELOG 0.7.1, PROGRESS_AND_ISSUES (0.7.0 numbers and DMF section).
+- **Next:**
+  1. integration tests (FTTX_TEST_DATA=$S/inputs);
+  2. regenerate into `$S/out10`;
+  3. compare the flag counts with out9;
+  4. commit, push and send.

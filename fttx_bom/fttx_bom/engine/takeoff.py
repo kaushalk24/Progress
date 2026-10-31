@@ -63,6 +63,15 @@ class CableSegment:
     path: list = field(default_factory=list)
     spans: list = field(default_factory=list)  # (length_ft, area)
     ng_fraction_majority: float | None = None
+    # route not traced: areas of the label point and of each end found in the drawing. When they all agree
+    # the Grant / Non-Grant split does not depend on the route.
+    fallback_areas: tuple = ()
+
+    @property
+    def split_uncertain(self) -> bool:
+        if not ("label point" in self.split_method or "report only" in self.split_method):
+            return False
+        return len(self.fallback_areas) < 3 or len(set(self.fallback_areas)) > 1
 
 
 class Takeoff:
@@ -759,7 +768,10 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
             p = arrow if (arrow and best is not None and best < 5) else ins.pt
             seg.ng_fraction = 1.0 if cls.area_of(p) == NONGRANT else 0.0
             seg.split_method = "label point (route not found)"
-            tk.check("cable route", False, f"{segname}: route between {a} and {b} not found in cable polylines; whole segment classified at label", warn=True)
+            seg.fallback_areas = (cls.area_of(p),) + tuple(cls.area_of(e) for e in (pa, pb) if e)
+            same = len(seg.fallback_areas) == 3 and len(set(seg.fallback_areas)) == 1
+            tk.check("cable route", False, f"{segname}: route between {a} and {b} not found in cable polylines; whole segment classified at label"
+                     + (f" (label and both ends in {seg.fallback_areas[0]}: split not affected)" if same else ""), warn=True)
         tk.cables.append(seg)
 
     tk.extra["our_paths"] = SegIndex([Polyline(c.handle, "ours", c.path) for c in tk.cables if c.path and len(c.path) > 1])
@@ -786,12 +798,15 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
             continue
         net = r.network if r.network in tk.networks else None
         pa = _resolve_endpoint(a, pos) if a else None
+        pb = _resolve_endpoint(mm.group(2), pos) if mm else None
         area = cls.area_of(pa) if pa else GRANT
         c = CableSegment(handle=f"report:{r.name}", name=sg.cable, a=a, b=mm.group(2) if mm else "", fibers=sg.fibers,
                          placement="AR" if sg.placement.lower().startswith("aer") else "UG", route_ft=sg.design_length or 0,
                          slack_ft=0, total_ft=sg.design_length or 0, network=net,
                          ng_fraction=1.0 if area == NONGRANT else 0.0, ng_fraction_length=1.0 if area == NONGRANT else 0.0,
                          split_method="splice report only (no DWG cable label)")
+        if pa and pb:
+            c.fallback_areas = (area, area, cls.area_of(pb))
         tk.cables.append(c)
         tk.check("cable missing DWG label", False,
                  f"{sg.cable} ({sg.fibers}F, {sg.design_length:g} ft) is in splice report {r.name} but has no DWG cable label; included from the report",

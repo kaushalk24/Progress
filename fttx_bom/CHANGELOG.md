@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.1 - targeted confidence
+
+- **Highlighted cells are now only those whose number a finding can change.**
+  - Cable warnings mark the row of the fiber count they name, in the cable's own network. Before, they marked every cable row of every network.
+  - A duplicate cable label with identical values no longer marks anything, because it is counted once.
+  - A cable whose route is not traced is marked only when its label and its two ends are not all in the same area.
+  - An address whose layer disagrees with the Non-Grant boundary marks the residential count. It marks splitters and SFP only when moving the address would change them.
+  - Unmapped symbols mark the 0-written pedestal rows only when they sit on the pedestal layer (an aerial symbol is not a pedestal).
+  - Trench without fiber marks the UG and mileage rows, not aerial.
+  - Repeated reasons (one per address or per ped) are shown once, with a count.
+- **The route footage and splice-tray rows follow the design standard** (CalcFTG route labels; trays ROUNDUP(splices / 24 or / 48), packages of 2) and are rated VERIFIED. The route-footage convention is no longer listed as unsettled. Trench with no fiber nearby is still marked for review.
+
 ## 0.7.0 - design scope, confidence highlighting, new interface
 
 - **Drawings with other plant (DMF-R04).** Only this design is counted: MAX5/MAX10 pedestals with bulkheads.
