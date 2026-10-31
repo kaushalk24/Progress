@@ -13,6 +13,29 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Non-Grant area | Every polygon on `Boundary - Designed Not Built` (SpatialNet proxy LWPolygons decoded from proxy graphics, plus LWPOLYLINEs), except ones labelled as network or transport boundaries. Unlabelled polygons count too: this was needed to reproduce the commercial/MDU splits. | VERIFIED |
 | Grant classification of infrastructure | By **location** (insertion point inside or outside the Non-Grant polygons). A service-based alternative (by addresses served) was tested and rejected: R02 MAX10 gave 24/35 vs 55/4 in the reference. | VERIFIED |
 
+## Grant / Non-Grant rule (SME) and where it applies
+
+**SME rule:** Non-Grant = everything inside the Non-Grant boundaries; Grant = total − Non-Grant.
+
+| Line | How the rule is applied | Evidence |
+|---|---|---|
+| Peds, vaults, closures, OLM equipment | By location; each object is either inside or outside | Both BOMs; differences are a few objects near edited edges |
+| Cables | Routed spans by majority area; Grant = TOTAL − Non-Grant spans | Best of 8 hypotheses on NMK; DMI 8/10 cells |
+| Route footage (rows 6–10) | Route labels inside the Non-Grant polygons; Grant = rest | CalcFTG method |
+| XGS SFP+ | Non-Grant = ROUNDUP(NG passings / 64); Grant = ROUNDUP(total / 64) − Non-Grant | DMI exact; NMK total = designed PONs |
+| Drops | Non-Grant = drops of Non-Grant addresses; Grant = total − Non-Grant | SME rule; the approved BOMs differ (policy `drop_columns`) |
+| **Exception: splitters** | Grant = ROUNDUP(grant passings / ratio); Non-Grant = designed − Grant | Both approved BOMs |
+| **Exception: passings** | Grant = served addresses on GRANTADDRESS; Non-Grant = total − Grant | Both approved BOMs; the deep check lists addresses whose layer and boundary disagree |
+
+## RF (coax) plant: not calculated (SME)
+
+- **Vaults and L-boxes:** one is RF support when an RF device is within 50 ft and no fiber splice is within 100 ft. RF devices are the DES_AMPS / TAPS / EOL / TERM / SPLITS blocks and CX1_TRIPAM / HGDULA.
+  - RF power supplies are not evidence: the coax-powered OLM hub vault sits beside one.
+  - DMI-R15: vault 3CC8B7 at the amplifier is excluded.
+- **Aerial strand** counts only where an aerial fiber cable is within 75 ft. DMI-R15: the 512 ft of RF strand is excluded.
+- **Trench with no fiber cable within 200 ft** is still counted, because the Credit River BOM counts such trench. It is listed (INFO TRENCH_NO_FIBER), and the policy `route_footage=fiber_bearing` removes it.
+- **RF taps, amplifiers, power supplies and anchors** are never FTTH materials (they are in `ignore_blocks`).
+
 ## Quantities
 
 | BOM line | Formula | Evidence vs reference |

@@ -201,3 +201,34 @@ Status: started. The steps are to:
 - rules, investigations, and doctor checks RF_EXCLUDED and TRENCH_NO_FIBER.
 
 Tests: 76 pass.
+
+## Task 2: latest state
+
+- Code committed and pushed as `2c6d3b9` (0.6.0 code).
+- Docs updated: FORENSIC_FINDINGS (DMI section), BOM_RULES (Grant/Non-Grant rule, RF), README, CHANGELOG.
+- The deliverable runs are going: `bash $S/regen7.sh`, which writes to `$S/out7`, log `$S/out7.log`.
+
+Remaining:
+1. wait for EXIT1–3;
+2. update PROGRESS_AND_ISSUES with the numbers;
+3. run the slow test;
+4. commit and push the docs;
+5. send the files.
+
+## Task 2: done
+
+Outputs are in `$S/out7`, and every run passed workbook verification (FAIL=0, recalculated):
+
+| Run | Cells | Totals | Deep-check errors |
+|---|---|---|---|
+| DMI-R15 against the manual BOM | 75/90 | 38/45 | 0 |
+| NMK, reference template | 290/368 | 156/184 | 0 |
+| NMK, per OLM (sums to the above) | 75 + 70 + 74 + 71 | 40 + 39 + 37 + 40 | 0 |
+
+88 tests pass, including the slow one.
+
+**Open decisions for the user:**
+- the drop-column convention;
+- D trays (5 against 4);
+- the remaining UG route gap;
+- fixing the template's bonding formulas.

@@ -1,6 +1,6 @@
 # Progress and issues
 
-_Last updated: 2026-10-31, build 0.5.0_
+_Last updated: 2026-10-31, build 0.6.0_
 
 ## Working
 
@@ -13,7 +13,35 @@ _Last updated: 2026-10-31, build 0.5.0_
 - **Template layout:** the area columns are found from the header, and a template is split into one BOM per OLM whenever its Transport BOM or Jumper Calculator can't hold more.
 - **Outputs:** every output is marked, so a rerun never treats the tool's own BOM as the approved BOM.
 
+## DMI-R15 reconciliation (reference = manual Melcher-Dallas BOM, 0.6.0)
+
+| Measure | 0.6.0 | 0.5.0 |
+|---|---|---|
+| Area cells matching | **75 / 90** | 72 / 90 |
+| Network totals matching | **38 / 45** | 34 / 45 |
+
+**Fixed:**
+- RF strand and the RF vault are no longer counted (aerial 0; vaults 8);
+- SFP 1 / 3 and MAX10 +4 0 / 9 now come from the SME rule and the template formula;
+- ground kits are left blank, as in the BOM.
+
+**Manual-BOM errors found:**
+- FC024 is double-counted (+6,467 ft, a duplicated drawing label);
+- row 6 has footage typed into the mileage row;
+- the bonding jumper and ped bonding kit use the template's inconsistent column formulas.
+
+**Open:**
+- UG footage −1.8%;
+- D trays 5 against 4;
+- one MAX5 split;
+- the drop-column convention.
+
+See FORENSIC_FINDINGS.md D1–D14.
+
 ## NMK reconciliation (reference = manual Credit River BOM)
+
+**0.6.0:** 290 / 368 cells, 156 / 184 totals. The 8 cells fewer than 0.5.0 are where the defaults now follow the SME rule and the DMI BOM instead of the Credit River practice: SFP Grant 3, MAX10 +4 Non-Grant 3, Grant drops 2. Nothing else changed. The table below is the 0.5.0 history.
+
 
 | Measure | 0.5.0 | 0.4.0 |
 |---|---|---|
@@ -47,16 +75,21 @@ See FORENSIC_FINDINGS.md for the line-by-line table.
 
 ## Critical unresolved issues (deliverable G), ranked by effect on BOM correctness
 
+0. **Drop-footage columns: decision needed.** The two approved BOMs disagree:
+   - Credit River puts Non-Grant drops only in the Non-Grant column.
+   - Melcher-Dallas puts the whole drop footage there.
+   - The SME rule (Non-Grant inside, Grant = total − Non-Grant) gives the split. It is the new default; the other two are options.
 1. **Route / UG footage split (rows 6–10).**
    - Network totals follow CalcFTG.
    - The reference Grant/Non-Grant split can't be reproduced by any geometric method (FORENSIC_FINDINGS F4).
    - *Decision needed:* confirm the current Non-Grant polygons, especially R05, and which footage definition is approved.
 2. **MAX10 +4 upgrade kits.**
-   - The need-based count is 0; the reference applies a blanket policy (44 / 63).
+   - The default is now the template formula (one kit per Non-Grant MAX10), as in the DMI BOM.
+   - Credit River used a different blanket (44 / 63), and need-based gives 0.
    - *Decision needed:* which policy applies (F7).
 3. **Ground wire kits.**
-   - Now written from the template note (NMK 321, DMI 126).
-   - *Confirm:* that new BOMs should order them; the Credit River BOM left the line blank. `ground_kits=not_ordered` restores the blank.
+   - Both approved BOMs leave the line blank, including DMI on the template with the note, so it is no longer written.
+   - The audit shows the hand count (DMI 126, NMK 321).
 4. **Hub closures over tray capacity.**
    - NMK-02001G and 03001G need 6 D trays; the 2004 ordering guide gives 5 for a T3V closure.
    - *Confirm:* the closure configuration, or the current CommScope limit (vendor site blocked here).

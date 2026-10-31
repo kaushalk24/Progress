@@ -94,6 +94,7 @@ What it checks:
 - splitter design against passings and PONs, and a second split ratio in one network;
 - ped size against the cable (a MAX5 at a mid-span splice on a cable above 48F) and closure capacity (trays per FOSC 450);
 - cables that join two networks (booked to their A-end network);
+- RF (coax) support structures left out (RF vaults, strand without fiber), trench without fiber, and served addresses whose layer disagrees with the Non-Grant boundary;
 - boundaries: a job network with no boundary (its BOM is left blank), other networks in the same drawing (excluded), and boundary fallbacks;
 - template formulas that differ between columns (repaired automatically);
 - workbook verification;
@@ -105,14 +106,14 @@ Some conventions can't be read from the drawing, so the tool computes **every op
 
 | Policy | Options |
 |---|---|
-| SFP | Jumper Calculator ÷ 2, split ratio, or designed PONs |
+| SFP | Non-Grant first: Grant = network total − Non-Grant (default); per-column Jumper Calculator ÷ 2; split ratio; or designed PONs |
 | Splitter Grant split | Grant first, or per column |
 | Tray packages | pooled, per location, or fully pooled |
-| MAX10 upgrade | need-based, all MAX10, or Non-Grant MAX10 |
-| Drop columns | Non-Grant only, or both columns |
-| Route footage | route labels (CalcFTG), or cable totals |
+| MAX10 upgrade | template formula, one kit per Non-Grant MAX10 (default); need-based; or all MAX10 |
+| Drop columns | both, Grant = total − Non-Grant (default); Non-Grant only; or all drops in Non-Grant |
+| Route footage | route labels, as CalcFTG (default); cable totals; or fiber-bearing trench only |
 | Cable split | by span, or by length |
-| Ground wire kits | template note (G, first in line, ends in 0, end of line), G suffix only, or not ordered |
+| Ground wire kits | audit only (both approved BOMs leave it blank): template note, G suffix only, or not ordered |
 | OLM column | Grant if any grant passings, or by location |
 
 The audit's *Policies* sheet shows every option's numbers side by side.

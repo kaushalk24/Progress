@@ -126,6 +126,33 @@ The test is the absolute Non-Grant error over the 12 R02/R03 cells that the refe
 | FOSC 450A / 450C | 0 / blank | No such enclosure in the reports | 0 when reports exist; blank without reports |
 | GOAT peds, taps, MST, plenum lateral | 0 / blank | No symbol in the design | Blank, NOT_DETECTED |
 
+## Melcher-Dallas (DMI-R15): reconstruction of the manual BOM (0.6.0)
+
+The manual DMI-R15 BOM was supplied after 0.5.0. It uses the new blank template, with the sheet renamed "OLM DMI-R15 BOM". The SME gave two rules:
+- **RF support structures are not calculated.** The design also contains RF (coax) plant: an amplifier, an RF power supply, a tap, a terminator, an end-of-line marker, 3 poles, strand, an anchor and a riser.
+- **Grant/Non-Grant:** Non-Grant = everything inside the Non-Grant boundaries; Grant = total − Non-Grant.
+
+| # | Line | Manual BOM | Drawing / tool | Finding | Status |
+|---|---|---|---|---|---|
+| D1 | Aerial footage | 0 | 512 ft on 3 strand labels | The strand carries no fiber: there are no aerial fiber cables in DMI at all. It is RF strand on the amplifier/power-supply poles. Strand now counts only with an aerial fiber cable within 75 ft; NMK is unchanged, since all 30 of its strand labels are within 53 ft of aerial fiber. | **Fixed, matches** |
+| D2 | Vault CBV-HGIB2436 | 8 (7/1) | 9 drawn | Vault 3CC8B7 is 31 ft from the RF amplifier, with no fiber splice within 309 ft. It is RF support. Rule: RF device within 50 ft and no splice within 100 ft. RF power supplies don't count as evidence, because the coax-powered OLM hub vault sits beside one. NMK is unaffected. | **Fixed, matches** |
+| D3 | FC024 | 147,111 | 140,644 (= splice reports) | "DMI-14001G TO DMI-15204G FC024" is labelled twice with identical values (6,467 ft). The manual BOM summed both labels; the reports list the cable once. | **Manual BOM error (+6,467 ft)** |
+| D4 | XGS SFP+ | 1 / 3 | was 2 / 3 | The manual BOM follows the SME rule: Non-Grant = ROUNDUP(155/64) = 3 (template formula), Grant = ROUNDUP(222/64) − 3 = 1. This is now the default. On NMK it gives 15 SFP = 15 designed PONs; the Credit River BOM's per-column rounding gave 18. | **Fixed, matches** |
+| D5 | Splitters 1x32 | 3 / 4 | 3 / 4 | Grant = ROUNDUP(67/32) = 3, Non-Grant = 7 designed − 3. Both approved BOMs compute Grant first for splitters, so this stays the exception to the Non-Grant-first rule. | Matches |
+| D6 | MAX10 +4 kits | 0 / 9 | was 0 / 0 (need-based) | The manual BOM keeps the template formula I23 = I19: one kit per Non-Grant MAX10. This is now the default. | **Fixed, matches** |
+| D7 | Ground wire kit | blank | was 77 / 49 | Left blank, although the template carries the hand-count note. It is no longer written; the audit keeps the count. | **Fixed, matches** |
+| D8 | Passings | 67 / 142, 0 / 13 | identical | The Non-Grant-inside rule gives exactly the same split in DMI. In NMK, 25 served addresses on the plain Address layer lie outside every Non-Grant polygon, and the Credit River BOM follows the layer. So the passings rule stays layer-based, and the new WARN ADDRESS_LAYER_VS_BOUNDARY lists every disagreement. | Matches |
+| D9 | Drop footage | NG 35,941, G blank | 36,117 total: G 10,194 / NG 25,923 | The whole drop footage went into the Non-Grant column. Credit River put only Non-Grant drops there. The SME rule (Non-Grant inside, Grant = total − Non-Grant) gives 10,194 / 25,923, which is the new default. The other two are options (`total_nongrant`, `nongrant_only`). | **Conflict, to confirm** |
+| D10 | UG footage | 165,584 / 51,957 | 169,182 / 52,335 | −1.8%. The Non-Grant gap is exactly two labels (250 + 128 ft). One 2,374 ft trench label has no fiber cable within 1,200 ft (INFO TRENCH_NO_FIBER; policy `fiber_bearing`). The rest can't be reproduced because label-to-trench matching is ambiguous. | Open |
+| D11 | Row 6 "Total Route Mileage" | 165,584 / 51,957 | 32.14 / 9.91 mi | The manual BOM typed footage into the mileage row; row 7 holds the miles (31.36 / 9.84). | **Manual BOM unit error** |
+| D12 | D trays FE0-R579575 | 5 | 4 | DMI-15001G has 234 splices → 5 trays; DMI-15019 has 93 → 2. That is 7 trays → 4 kits of 2. No splice-count rule gives 5, and Credit River R03 goes the other way (4 against 5). | Open |
+| D13 | MAX5 split | 86 / 61 | 85 / 62 | Network total matches. One ped is inside a Non-Grant polygon in the current drawing. Window-selection edge tests don't reproduce it: NMK and DMI differ in opposite directions. | Boundary edit |
+| D14 | Bonding jumper / ped bonding kit | NG 0 / 140 | NG 140 / 70 | The manual BOM inherits the template's inconsistent column formulas: I28 = SUM(I21:I22) sums the GOAT peds, and I29 = SUM(I19:I20)*2. The tool repairs them to match the Grant column (2 jumpers and 1 kit per ped). **Please fix the master template.** | Template bug |
+
+**Score:** 72/90 → **75/90** cells and 34/45 → **38/45** network totals.
+
+**Effect on NMK:** the new defaults for SFP, MAX10 +4 and drops follow the SME rule and the DMI BOM, not the Credit River practice. This costs 8 NMK cells (SFP Grant 3, MAX10 +4 Non-Grant 3, Grant drops 2). Nothing else changes. Each old convention is still an option, and `--learn` picks whichever the approved BOMs support.
+
 ## Per-line table (0.5.0 run against the Credit River approved BOM)
 
 <!-- generated from the discrepancy workbook by the forensic script; do not edit by hand -->

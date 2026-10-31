@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0 - Melcher-Dallas approved BOM: SME Grant/Non-Grant rule, RF plant left out
+
+Reconciled against the manual DMI-R15 BOM (see FORENSIC_FINDINGS.md "Melcher-Dallas"): 72 → 75 of 90 cells, 34 → 38 of 45 totals.
+
+- **RF (coax) support structures are not calculated (SME):**
+  - vaults/L-boxes at an RF device with no fiber splice nearby are left out (DMI: 1 vault, now 8 = approved);
+  - aerial strand with no aerial fiber cable is left out (DMI: 512 ft, now 0 = approved);
+  - RF devices are never reported as unmapped materials.
+- **SME Grant/Non-Grant rule** (Non-Grant inside the boundaries, Grant = total − Non-Grant):
+  - SFP Non-Grant = ROUNDUP(NG/64), Grant = ROUNDUP(total/64) − Non-Grant. This is the new default; it reproduces DMI exactly and gives NMK 15 SFP for 15 designed PONs (the per-column option gave 18).
+  - Drops: the new default is "both" (Grant = total − Non-Grant), with new option `total_nongrant` (the DMI BOM's convention). **Please confirm.**
+- **MAX10 +4 kits:** the default is now the blank-template formula, one kit per Non-Grant MAX10 (reproduces DMI 0 / 9).
+- **Ground wire kits** are no longer written: both approved BOMs leave the line blank. The audit keeps the template-note count.
+- **Renamed BOM sheets:** approved BOMs and templates with a renamed OLM sheet ("OLM DMI-R15 BOM") are now read.
+- **New deep checks:**
+  - ADDRESS_LAYER_VS_BOUNDARY (WARN): a served address whose GRANTADDRESS layer disagrees with the Non-Grant polygons; NMK 25, DMI 2;
+  - TRENCH_NO_FIBER (INFO, one per network);
+  - RF_EXCLUDED (INFO).
+- **Policy fix:** the engine's own option survives when a policy default changes (regression test).
+- **Manual-BOM findings documented** (FORENSIC_FINDINGS D1–D14):
+  - FC024 is double-counted (+6,467 ft, a duplicated drawing label);
+  - row 6 has footage typed into the mileage row;
+  - the bonding jumper and ped bonding kit inherit the template's inconsistent column formulas.
+- **Credit River effect:** 8 cells now follow the SME rule and the DMI convention instead of the Credit River practice (SFP Grant 3, MAX10 +4 3, Grant drops 2).
+- **Tests:** 88 (87 without the slow end-to-end test).
+
 ## 0.5.0 - forensic review, independent code review, research-backed rules
 
 ### New rules from the forensic analysis (see FORENSIC_FINDINGS.md and BOM_RULES.md)
