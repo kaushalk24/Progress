@@ -10,6 +10,8 @@
     "Boundary - Designed Not Built"
   ],
   "network_assign_tolerance_ft": 150,
+  "network_label_regex": "\\b([A-Z]{2,5}-R\\d{2})\\b",
+  "splice_name_regex": "^([A-Z]+)-(\\d{2})\\d{3}[A-Z]?$",
   "transport_boundary_layers": [
     "Transport Boundary - Designed Not Built"
   ],

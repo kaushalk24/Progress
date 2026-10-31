@@ -47,6 +47,20 @@ class SpliceReport:
     fusion_splices: int = 0
     pass_through: int = 0
     format: str = "connections report"
+    issues: list[str] = field(default_factory=list)  # cells that could not be read
+
+
+def _number(v) -> float | None:
+    """Cell number tolerant of text exports: 1234, '1,234', '48 ct', '1234 ft'; None if not a number."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    m = re.match(r"^\s*(-?[\d,]*\.?\d+)", str(v or ""))
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
 
 
 def network_from_splice_name(name: str) -> str | None:
@@ -130,9 +144,14 @@ def read_splice_report(path: str | Path) -> SpliceReport:
         if mode == "seg" and isinstance(a, str) and a.strip():
             m = SEG_RE.match(a.strip())
             if m:
+                fibers, length = _number(r[1]), _number(r[5])
+                if fibers is None and r[1] not in (None, ""):
+                    rep.issues.append(f"{a.strip()}: fiber count '{r[1]}' not a number")
+                if length is None and r[5] not in (None, ""):
+                    rep.issues.append(f"{a.strip()}: design length '{r[5]}' not a number")
                 rep.segments.append(
-                    Segment(a.strip(), m.group(2).strip(), int(m.group(1)), m.group(3), int(r[1] or 0),
-                            str(r[2] or ""), str(r[3] or ""), float(r[5]) if r[5] not in (None, "") else None)
+                    Segment(a.strip(), m.group(2).strip(), int(m.group(1)), m.group(3), int(fibers or 0),
+                            str(r[2] or ""), str(r[3] or ""), length)
                 )
             else:
                 cm = COUPLER_RE.match(a.strip())
@@ -156,7 +175,9 @@ def read_splice_report(path: str | Path) -> SpliceReport:
     return rep
 
 
-def read_splice_reports(paths: list[str | Path]) -> list[SpliceReport]:
+def read_splice_reports(paths: list[str | Path], errors: list[str] | None = None) -> list[SpliceReport]:
+    """Read every report. A file that cannot be read is skipped and listed in `errors` (one bad
+    report must not stop the BOM); without an `errors` list the exception propagates."""
     files: list[Path] = []
     for p in paths:
         p = Path(p)
@@ -164,4 +185,12 @@ def read_splice_reports(paths: list[str | Path]) -> list[SpliceReport]:
             files += sorted(x for x in p.rglob("*.xlsx") if not x.name.startswith("~$"))
         elif p.suffix.lower() == ".xlsx":
             files.append(p)
-    return [read_splice_report(f) for f in files]
+    out = []
+    for f in files:
+        try:
+            out.append(read_splice_report(f))
+        except Exception as exc:  # corrupt / unexpected layout
+            if errors is None:
+                raise
+            errors.append(f"{f.name}: {exc.__class__.__name__}: {exc}")
+    return out

@@ -1,6 +1,7 @@
 """Rule catalogue loader / evaluator (config/bom_rules.json)."""
 from __future__ import annotations
 
+import ast
 import json
 import math
 import re
@@ -39,19 +40,39 @@ def load_rules(path: str | Path | None = None) -> tuple[dict, list[Rule]]:
     return cfg, rules
 
 
-class _Env(dict):
-    """Evaluation namespace that records names missing from the takeoff."""
+FUNCS = {"ceil": math.ceil, "floor": math.floor, "min": min, "max": max, "round": round, "abs": abs}
+_BINOPS = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b, ast.Mult: lambda a, b: a * b,
+           ast.Div: lambda a, b: a / b, ast.FloorDiv: lambda a, b: a // b, ast.Mod: lambda a, b: a % b}
+_UNOPS = {ast.UAdd: lambda a: +a, ast.USub: lambda a: -a}
 
-    def __init__(self, values: dict, known: set[str]):
-        super().__init__(values)
-        self.known = known
-        self.missing: set[str] = set()
 
-    def __missing__(self, key):
-        if key in ("ceil", "floor", "min", "max", "round"):
-            return {"ceil": math.ceil, "floor": math.floor, "min": min, "max": max, "round": round}[key]
-        self.missing.add(key)
-        return 0
+def safe_eval(expr: str, values: dict, known: set[str]) -> tuple[float, set[str]]:
+    """Evaluate an arithmetic rule expression over takeoff keys.
+
+    Only numbers, takeoff key names, + - * / // %, unary +/- and the functions in FUNCS are
+    allowed - attribute access, subscripts, comprehensions, lambdas etc. are rejected, so a rule
+    catalogue cannot run code. Returns (value, missing key names)."""
+    missing: set[str] = set()
+
+    def ev(n):
+        if isinstance(n, ast.Expression):
+            return ev(n.body)
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)) and not isinstance(n.value, bool):
+            return n.value
+        if isinstance(n, ast.Name):
+            if n.id in values:
+                return values[n.id]
+            missing.add(n.id)
+            return 0
+        if isinstance(n, ast.BinOp) and type(n.op) in _BINOPS:
+            return _BINOPS[type(n.op)](ev(n.left), ev(n.right))
+        if isinstance(n, ast.UnaryOp) and type(n.op) in _UNOPS:
+            return _UNOPS[type(n.op)](ev(n.operand))
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in FUNCS and not n.keywords):
+            return FUNCS[n.func.id](*[ev(a) for a in n.args])
+        raise ValueError(f"rule expression not allowed: {ast.dump(n)[:80]}")
+
+    return ev(ast.parse(expr, mode="eval")), missing
 
 
 def evaluate(rule: Rule, tk: Takeoff, net: str, area: str) -> tuple[float | None, str]:
@@ -64,9 +85,18 @@ def evaluate(rule: Rule, tk: Takeoff, net: str, area: str) -> tuple[float | None
             return None, f"takeoff key '{rule.value}' not computed"
         if (rule.value, net, area) not in tk.q:
             return None, f"'{rule.value}' not computed for {net}"
-        return tk.get(rule.value, net, area), ""
-    env = _Env(tk.column(net, area), known)
-    val = eval(rule.value, {"__builtins__": {}}, env)  # expressions come from the trusted rule catalogue
-    if env.missing:
-        return None, f"missing takeoff keys {sorted(env.missing)}"
-    return val, ""
+        return _no_negative(tk.get(rule.value, net, area))
+    try:
+        val, missing = safe_eval(rule.value, tk.column(net, area), known)
+    except (ValueError, SyntaxError, ZeroDivisionError, TypeError) as e:
+        return None, f"rule expression error: {e}"
+    if missing:
+        return None, f"missing takeoff keys {sorted(missing)}"
+    return _no_negative(val)
+
+
+def _no_negative(v) -> tuple[float | None, str]:
+    """A BOM quantity is never negative: a negative result means inconsistent inputs, so it is left blank."""
+    if v is not None and v < 0:
+        return None, f"computed {v:g} < 0 - inconsistent inputs (see Checks), left blank"
+    return v, ""

@@ -216,6 +216,89 @@ def test_deep_check_real_findings(nmk):
     assert len(issues) < 150  # noise guard: actionable list, not thousands of lines
 
 
+def test_single_olm_run_equals_combined_run(nmk):
+    # regression (code review BLOCKER): a per-OLM job on the combined drawing booked neighbouring networks'
+    # objects within 150 ft, the whole transport corridor and inter-network cables to the job network
+    d, _cls, tk4 = nmk
+    als = read_address_lists(sorted((DATA / "addr/Address List").glob("*.xlsx")))
+    for n in NETS:
+        reps = read_splice_reports([DATA / "splice/Splice Reports"])
+        cls1 = build_classifier(d, CONV, [n])
+        assert sorted(cls1.foreign) == [x for x in NETS if x != n]
+        tk1 = build_takeoff(d, CONV, cls1, [n], {n: als[n]}, reps, policies={})
+        keys = {k for k, nn, _a in tk4.q if nn == n and "@" not in k} | {k for k, nn, _a in tk1.q if nn == n and "@" not in k}
+        diff = [(k, a, tk4.get(k, n, a), tk1.get(k, n, a)) for k in sorted(keys) for a in (GRANT, NONGRANT)
+                if abs((tk4.get(k, n, a) or 0) - (tk1.get(k, n, a) or 0)) > 0.01]
+        assert not diff, (n, diff[:5])
+
+
+def test_ground_kits_template_note(nmk, dmi):
+    tk = nmk[2]
+    assert cols(tk, "grounding_points") == [19, 51, 23, 62, 21, 66, 56, 23]
+    first = sorted(nm for _n, _a, nm, why in tk.extra["ground"] if "first in line" in why)
+    assert first == ["NMK-02002", "NMK-02119", "NMK-02120", "NMK-03002", "NMK-03092", "NMK-03129",
+                     "NMK-04002", "NMK-04117", "NMK-04217", "NMK-05002", "NMK-05117"]
+    assert dmi[2].total("grounding_points", "DMI-R15") == 126
+
+
+def test_ped_size_design_rule(nmk, dmi):
+    # forensic finding F1: no MAX5 houses a splice on a cable above 48F in either approved design
+    from fttx_bom.engine.doctor import ped_cable_roles
+
+    for d, _cls, tk in (nmk, dmi):
+        closures = {e[4].upper() for e in tk.extra["enclosures"]}  # FOSC 450 splices are not ped splices
+        roles = ped_cable_roles(d, CONV, tk, closures)
+        assert not [1 for ped, _n, role, fib in roles if ped.name == "CX1-MAX5" and fib > 48]  # any role, closures excluded
+        assert sum(1 for ped, _n, role, fib in roles if ped.name == "CX1-MAX10" and role == "pass" and fib > 48) >= 11
+
+
+def test_d_basket_zero_with_t3v_closure(nmk):
+    # the T3V 450D includes its tall basket; the approved BOM orders 0 D baskets
+    tk = nmk[2]
+    assert cols(tk, "basket_d") == [0] * 8
+
+
+def test_mixed_split_ratios_written(dmi):
+    # code review MAJOR 5: a second split ratio was written as 0 with every check passing
+    d, cls, _tk = dmi
+    als = read_address_lists([DATA / "dmi/386021_MelcherDallas_BEAD_FTTH_DMI-R15_Address List.xlsx"])
+    reps = read_splice_reports([DATA / "dmi/splice"])
+    next(r for r in reps if r.name == "DMI-15008G").couplers += [(64, "FE0-F1PLC64"), (64, "FE0-F1PLC64")]
+    tk = build_takeoff(d, CONV, cls, ["DMI-R15"], als, reps, policies={})
+    assert tk.total("splitter_1x64", "DMI-R15") == 2 and tk.total("splitter_1x32", "DMI-R15") == 7
+    assert any(c.name.startswith("mixed split ratios") and c.status == "WARN" for c in tk.checks)
+
+
+def test_no_splice_reports_leaves_enclosures_blank(dmi):
+    # code review MAJOR 11(a): FOSC 450B/D were written as 0 without splice reports
+    d, cls, _tk = dmi
+    als = read_address_lists([DATA / "dmi/386021_MelcherDallas_BEAD_FTTH_DMI-R15_Address List.xlsx"])
+    tk = build_takeoff(d, CONV, cls, ["DMI-R15"], als, [], policies={})
+    assert not [k for k in tk.q if k[0].startswith(("fosc450", "tray_450", "trays_450"))]
+
+
+def test_cable_cells_sum_to_rounded_total(nmk):
+    # code review MINOR 19: separately rounded Grant / Non-Grant cells could lose 1 ft
+    tk = nmk[2]
+    for n in NETS:
+        for fc in sorted({c.fibers for c in tk.cables if c.network == n}):
+            want = round(sum(c.total_ft for c in tk.cables if c.network == n and c.fibers == fc))
+            assert tk.get(f"cable_{fc:03d}", n, GRANT) + tk.get(f"cable_{fc:03d}", n, NONGRANT) == want, (n, fc)
+
+
+def test_template_capacity_counts_transport_columns():
+    # code review MAJOR 9: a 2-OLM job on the blank per-OLM template lost the second OLM's Transport BOM
+    from fttx_bom.engine.rules import load_rules
+    from fttx_bom.excel.writer import template_capacity
+
+    cfg, _ = load_rules()
+    tpl = next((DATA / "template2").glob("*.xlsx"), None)
+    if tpl is None:
+        pytest.skip("blank template not in FTTX_TEST_DATA/template2")
+    assert template_capacity(tpl, cfg) == 2  # 4 main columns but 2 Transport BOM columns -> one OLM per BOM
+    assert template_capacity(DATA / "bom/386106_Credit River MN_FTTH_Combined_BOM.xlsx", cfg) == 8
+
+
 def test_splice_guide_format_parsed():
     reps = read_splice_reports([DATA / "splice/Splice Reports/NMK-R03/NMK-03129.xlsx"])
     r = reps[0]

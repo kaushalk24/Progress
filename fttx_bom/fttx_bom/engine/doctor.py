@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..extract.model import Drawing
-from .geometry import area, dist, point_polyline_distance, polyline_length
+from .geometry import area, dist, point_polyline_distance, point_segment_distance, polyline_length
 from .network import Classifier
-from .takeoff import SEG_RE, ServedIndex, Takeoff, addr_tokens, num
+from .takeoff import ON_PATH_FT, TRAY_CAPACITY, TRAYS_PER_CLOSURE, ServedIndex, Takeoff, addr_tokens, enclosure_letter, network_from_splice_name, num
 
 
 @dataclass
@@ -55,6 +55,7 @@ ENGINE_MAP = [
     ("splitters vs splice reports", "Splitters", "SPLITTER_MISMATCH", "Splitters, SFP", "Designed couplers in the splice reports differ from ROUNDUP(passings/ratio) - check the PON design"),
     ("splitters vs address-list PONs", "Splitters", "PON_MISMATCH", "Splitters, SFP", "Address-list PON count differs from the splitter design"),
     ("designed splitters", "Splitters", "SPLITTER_DESIGN_DIFF", "Splitters", "Designed splitter count used; verify against passings"),
+    ("mixed split ratios", "Splitters", "SPLIT_RATIO_MIXED", "Splitters 1x32 / 1x64, SFP", "Two split ratios designed in one network - both are written; confirm"),
     ("split ratio", "Splitters", "SPLIT_RATIO_ASSUMED", "Splitters, SFP", "No PLC COUPLER rows found - supply the splice reports or address list"),
     ("SFP vs designed PONs", "Policies", "SFP_POLICY", "XGS SFP+", "Per-column rounding gives more/fewer SFP than designed PONs - check the Policies sheet"),
     ("drop lines", "Drops", "DROPS_MISSING", "Total Drop Footage", "Run FXAUTO (FX_DROPS.lsp) in AutoCAD and save the drawing"),
@@ -63,6 +64,12 @@ ENGINE_MAP = [
     ("objects outside boundaries", "Boundaries", "OUTSIDE_BOUNDARY", "All lines of that network", "See Network Assignment sheet; extend the OLM boundary if an object belongs inside"),
     ("unassigned objects", "Boundaries", "UNASSIGNED", "All lines", "Objects outside every OLM boundary and the transport corridor are not counted"),
     ("policy", "Policies", "POLICY_UNKNOWN", "Policy lines", "Fix the option name in the policy file"),
+    ("network boundary", "Boundaries", "NETWORK_BLANK", "Every line of the network", "Draw / label the OLM boundary; the network's BOM is blank until then"),
+    ("block not defined", "Drawing", "BLOCK_NOT_DEFINED", "The line named in the message", "Block renamed in this drawing? Add its name to config/conventions.json"),
+    ("splice report unreadable", "Splice reports", "REPORT_UNREADABLE", "FOSC enclosures, trays, splitters", "Re-export the splice report"),
+    ("splice report cell", "Splice reports", "REPORT_CELL", "Cable cross-check", "Fix the cell in the export"),
+    ("splice report network", "Splice reports", "REPORT_NETWORK", "Enclosure / splitter network", "Name the splice point with the network prefix or place it in the drawing"),
+    ("enclosure type unknown", "Splice reports", "ENCLOSURE_UNMAPPED", "FOSC enclosures, trays", "Set a FOSC 450 A-D Enclosure Type, or add the type to non_bom_enclosures in conventions.json"),
     ("passings sign", "Passings", "PASSINGS_NEGATIVE", "Passing counts", "More grant address blocks than served passings - check GRANTADDRESS layer"),
 ]
 
@@ -102,13 +109,66 @@ def _near(g, p, r, cell=100.0):
                     yield it, q
 
 
+PED_SPLICE_MAX_FT = 80.0  # a ped's splice symbol is drawn 20-60 ft from the ped block (NMK/DMI)
+LARGE_CABLE = 48  # fibers
+
+
+def ped_cable_roles(d: Drawing, conv: dict, tk: Takeoff, closures: set[str] | None = None) -> list[tuple]:
+    """For every MAX ped: (ped insert, splice name, role, largest cable fibers at the splice).
+
+    role: 'branch' (a cable starts there), 'end' (cables only end there) or 'pass'
+    (cables only pass through, mid-span access). A splice belongs to a ped only when that ped is the
+    splice's nearest housing (ped, vault or L-box), and splices made in a FOSC closure (`closures`,
+    from the splice reports) are not ped splices - e.g. the OLM hub splice beside a MAX5."""
+    spl = {}
+    for i in d.inserts:
+        if i.name in conv["blocks"]["splice_point"]["names"]:
+            spl.setdefault((i.attr("NAME") or "").strip().upper(), i.pt)
+    spl.pop("", None)
+    sg = _grid([(n, p) for n, p in spl.items()])
+    seg_grid = defaultdict(list)
+    cell = 100.0
+    for c in tk.cables:
+        for a, b in zip(c.path, c.path[1:]):
+            for gx in range(int(min(a[0], b[0]) // cell), int(max(a[0], b[0]) // cell) + 1):
+                for gy in range(int(min(a[1], b[1]) // cell), int(max(a[1], b[1]) // cell) + 1):
+                    seg_grid[(gx, gy)].append((c, a, b))
+    starts, ends = defaultdict(list), defaultdict(list)
+    for c in tk.cables:
+        starts[c.a.upper()].append(c)
+        ends[c.b.upper()].append(c)
+    out = []
+    names = set(conv["blocks"]["ped_max10"]["names"] + conv["blocks"]["ped_max5"]["names"])
+    housing_names = names | set(conv["blocks"]["vault"]["names"] + conv["blocks"]["ug_lbox"]["names"])
+    hg = _grid([(i, i.pt) for i in d.inserts if i.name in housing_names])
+    for ped in (i for i in d.inserts if i.name in names):
+        near = min(((dist(ped.pt, q), n, q) for n, q in _near(sg, ped.pt, PED_SPLICE_MAX_FT)), default=None)
+        if near is None:
+            continue
+        _d, nm, q = near
+        if closures and nm in closures:
+            continue
+        home = min(((dist(q, h.pt), h.handle) for h, _p in _near(hg, q, PED_SPLICE_MAX_FT)), default=None)
+        if home and home[1] != ped.handle:
+            continue  # the splice is housed in another (nearer) ped / vault / L-box
+        through = {id(c): c for c, a, b in seg_grid.get((int(q[0] // cell), int(q[1] // cell)), [])
+                   if c.a.upper() != nm and c.b.upper() != nm and point_segment_distance(q, a, b) <= ON_PATH_FT}
+        cs = starts.get(nm, []) + ends.get(nm, []) + list(through.values())
+        role = "branch" if starts.get(nm) else ("end" if ends.get(nm) and not through else "pass")
+        out.append((ped, nm, role, max((c.fibers for c in cs), default=0)))
+    return out
+
+
 def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lists, reports, res=None, ver=None) -> list[Issue]:
     issues = _from_engine(tk)
     add = issues.append
     nets = set(tk.networks)
+    cls_pos = {i.attr("NAME").upper(): i.pt for i in d.inserts if i.name in conv["blocks"]["splice_point"]["names"]}
 
     def net_of(p):
-        return cls.network_of(p, "doctor") or ""
+        # resolve without recording: the deep check must not add rows to the classifier's assignment log
+        n = cls.resolve(p)[0] if hasattr(cls, "resolve") else cls.network_of(p, "doctor")
+        return n if n and (not nets or n in nets) else ""
 
     def in_scope(p):
         n = net_of(p)
@@ -133,7 +193,11 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
     names_present = Counter(i.name for i in d.inserts)
     for key, sev, what in (("olm", "ERROR", "OLM equipment, power"), ("cable_label", "ERROR", "Fiber cable lines"),
                            ("ped_max10", "WARN", "MAX10 peds"), ("ped_max5", "WARN", "MAX5 peds"),
-                           ("house_count", "ERROR", "Passing counts"), ("splice_point", "WARN", "Cable routing, Grant split")):
+                           ("house_count", "ERROR", "Passing counts"), ("splice_point", "WARN", "Cable routing, Grant split"),
+                           # 0 is written for these lines, so a renamed symbol would pass silently (the old block
+                           # definition often stays in drawings made from a company template)
+                           ("vault", "WARN", "Vaults (0 written)"), ("ug_lbox", "INFO", "UG L-boxes (0 written)"),
+                           ("route_footage", "ERROR", "Route footage rows 6-10"), ("res_address", "WARN", "Grant residential passings")):
         if not any(names_present.get(n) for n in conv["blocks"][key]["names"]):
             add(Issue(sev, "Drawing", "BLOCK_MISSING", "", f"No {conv['blocks'][key]['names']} blocks in the drawing", what,
                       "Wrong drawing, or a renamed block - add the name to config/conventions.json"))
@@ -150,6 +214,12 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
         if "no DWG boundary" in note or "contains several" in note:
             add(Issue("ERROR", "Boundaries", "NETWORK_BOUNDARY", "", note, "All lines",
                       "Draw / label the OLM boundary (layer 'OLM Boundary - Designed Not Built' with the network name inside)"))
+        elif note.startswith("boundary fallback"):
+            add(Issue("WARN", "Boundaries", "NETWORK_BOUNDARY_FALLBACK", "", note, "All drawing quantities",
+                      "Label the OLM boundary with the network name so objects outside it are excluded"))
+        elif "excluded from this job" in note or "corridor excluded" in note:
+            add(Issue("INFO", "Boundaries", "OTHER_NETWORKS", "", note, "All drawing quantities",
+                      "None - objects of the other networks are not counted in this BOM"))
     for n in tk.networks:
         if cls.networks and n in cls.networks and not any(cls.networks[n].contains(r.poly[0]) for r in cls.nongrant):
             add(Issue("INFO", "Boundaries", "NO_NONGRANT", n, "No Non-Grant polygon inside this network - everything counts as Grant",
@@ -197,7 +267,11 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
                       "Add the network's address list"))
             continue
         for iss in al.issues:
-            add(Issue("ERROR", "Addresses", "ADDRESS_LIST_FORMAT", n, iss, "Passing counts", "Use the standard address-list export"))
+            sev = "WARN" if iss.startswith("header differs") else "ERROR"
+            add(Issue(sev, "Addresses", "ADDRESS_LIST_FORMAT", n, iss, "Passing counts", "Use the standard address-list export"))
+        if not al.served:
+            add(Issue("ERROR", "Addresses", "ADDRESS_LIST_EMPTY", n, "The address list has no served rows (PON NAME + PON PORT)",
+                      "Passing counts, splitters, SFP", "Check the export; the drawing count blocks were used instead"))
         drawn = {addr_tokens(f"{a.attr('STREET_NUMBER') or a.attr('BUILDING_ADDRESS')} {a.attr('STREET_NAME') or a.attr('BUILDING_NAME')}")
                  for a in addr_blocks}
         missing = []
@@ -237,6 +311,13 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
             add(Issue("WARN", "Cable", "CABLE_REQ_SPARE", n, f"{seg}: REQ {req:g} + SPARE {spare:g} != TTL {ttl:g}", "Fiber cable lines",
                       "Refresh the fiber counts on the label", ins.pt[0], ins.pt[1]))
     for c in tk.cables:
+        ends = {network_from_splice_name(e.upper()) for e in (c.a, c.b)} - {None}
+        if len(ends) > 1 and c.path:
+            mid = c.path[len(c.path) // 2]
+            add(Issue("INFO", "Cable", "CABLE_CROSS_NETWORK", c.network or "", f"{c.name} joins {sorted(ends)}; booked wholly to its "
+                      f"A-end network {c.network} (convention, network totals agree with the approved BOM)", "Fiber cable lines",
+                      "None unless the cable should be split between OLM BOMs", mid[0], mid[1]))
+    for c in tk.cables:
         # splice symbols sit beside the peds, so short cables always differ a little: need both a big ratio and > 150 ft
         if c.path_ft and c.route_ft and not (0.8 <= c.path_ft / c.route_ft <= 1.25) and abs(c.path_ft - c.route_ft) > 150:
             lbl = next((i for i in d.inserts if i.handle == c.handle), None)
@@ -244,6 +325,31 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
                       f"({c.path_ft / c.route_ft:.2f}x)", "Cable Grant/Non-Grant split; possibly the footage",
                       "Check the label footage or the cable polylines (routing may follow a different cable)",
                       lbl.pt[0] if lbl else None, lbl.pt[1] if lbl else None))
+
+    # ---------------------------------------------------------------- closure capacity (FOSC 450 ordering guide)
+    for net, _area, L, splices, name in tk.extra.get("enclosures", []):
+        cap, per = TRAY_CAPACITY.get(L), TRAYS_PER_CLOSURE.get(L)
+        if cap and per and splices and -(-splices // cap) > per:
+            p = cls_pos.get(name.upper())
+            add(Issue("WARN", "Design", "CLOSURE_OVER_CAPACITY", net, f"{name}: {splices} fusion splices need {-(-splices // cap)} trays; "
+                      f"the FOSC 450 ordering guide (2004 edition) gives {per} trays ({per * cap} splices) for a 450{L} with its basket",
+                      f"FOSC 450{L}, trays", "Verify the closure configuration: two closures, or a basket that leaves more tray positions",
+                      p[0] if p else None, p[1] if p else None))
+
+    # ---------------------------------------------------------------- ped size vs cable (design rule from NMK + DMI)
+    m5 = set(conv["blocks"]["ped_max5"]["names"])
+    in_closure = {r.name.upper() for r in reports if enclosure_letter(r.enclosure)}
+    for ped, nm, role, fib in ped_cable_roles(d, conv, tk, in_closure):
+        ok, n = in_scope(ped.pt)
+        if not ok:
+            continue
+        if ped.name in m5 and fib > LARGE_CABLE:
+            add(Issue("WARN", "Design", "MAX5_ON_LARGE_CABLE", n, f"MAX5 ped at {nm} ({role}) on a {fib}F cable",
+                      "MAX10 / MAX5 ped counts", "Confirm the ped size: in the approved designs every ped splice on a cable above 48F "
+                      "is in a MAX10 (or a FOSC closure)", ped.pt[0], ped.pt[1]))
+        elif ped.name not in m5 and fib and fib <= LARGE_CABLE and role in ("pass", "end"):
+            add(Issue("INFO", "Design", "MAX10_SMALL_CABLE", n, f"MAX10 ped at {nm} ({role}) on a {fib}F cable",
+                      "MAX10 / MAX5 ped counts", "A MAX5 is normally used here - confirm the larger ped is intended", ped.pt[0], ped.pt[1]))
 
     # ---------------------------------------------------------------- drops
     drop_layers = conv["route_layers"]["ug_drop"]
@@ -283,10 +389,7 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
     for r in reports:
         if r.network not in nets:
             continue
-        known = re.search(r"450\s*[A-D]|SPLICE CASE", r.enclosure or "", re.I)
-        if r.enclosure and not known:
-            add(Issue("WARN", "Splice reports", "ENCLOSURE_UNMAPPED", r.network, f"{r.name}: enclosure type '{r.enclosure}' has no BOM rule",
-                      "FOSC enclosures", "Add a rule for this enclosure type"))
+        # unknown enclosure types are reported by the engine check 'enclosure type unknown'
         if r.name.upper() not in names_dwg:
             add(Issue("WARN", "Splice reports", "REPORT_NOT_IN_DRAWING", r.network, f"Splice report {r.name} has no MC_SPLICE point in the drawing",
                       "Enclosure Grant/Non-Grant column, cable routing", "Add / rename the splice point, or remove the stale report"))

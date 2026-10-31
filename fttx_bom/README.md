@@ -63,6 +63,14 @@ python -m fttx_bom run --dwg D.dwg --address-list "Address List" --splice-report
 
 Useful options are `--reference approved.xlsx`, `--learn`, `--project-name`, `--project-number`, `--system "Capital West"` and `--no-recalc`. The exit code is 0 when the workbook verification passed.
 
+### Running one OLM from a combined drawing
+
+Give the tool only that OLM's address list (or `--networks NMK-R02`). The other networks' boundaries are recognised and their objects are excluded. Inter-network cables go to their A-end network, and the transport corridor goes only to the network fed by the OTN cable. The result is identical to the combined run.
+
+### Re-running into the same folder
+
+Outputs carry a marker. Files named `*_FINAL_BOM.xlsx` / `*_BOM_AUDIT.xlsx` and the output folder are never read back as inputs, so a rerun cannot use its own BOM as the "approved BOM".
+
 ## 5. Deep check: test and fix your own networks
 
 Every run lists every problem. Each one has:
@@ -83,7 +91,10 @@ What it checks:
 - cable labels: FTG + SLK = TOTAL, REQ + SPARE = TTL, REQ above the cable size, duplicates, labels against the splice reports, unlabelled cables, and drawn route length against the label;
 - drops: missing, count against passings, served addresses without a drop, drops not starting at a ped, and very long drops;
 - splice reports: unknown enclosure types, reports with no splice point in the drawing, and the second report layout;
-- splitter design against passings and PONs;
+- splitter design against passings and PONs, and a second split ratio in one network;
+- ped size against the cable (a MAX5 at a mid-span splice on a cable above 48F) and closure capacity (trays per FOSC 450);
+- cables that join two networks (booked to their A-end network);
+- boundaries: a job network with no boundary (its BOM is left blank), other networks in the same drawing (excluded), and boundary fallbacks;
 - template formulas that differ between columns (repaired automatically);
 - workbook verification;
 - which policies change the totals.
@@ -101,6 +112,7 @@ Some conventions can't be read from the drawing, so the tool computes **every op
 | Drop columns | Non-Grant only, or both columns |
 | Route footage | route labels (CalcFTG), or cable totals |
 | Cable split | by span, or by length |
+| Ground wire kits | template note (G, first in line, ends in 0, end of line), G suffix only, or not ordered |
 | OLM column | Grant if any grant passings, or by location |
 
 The audit's *Policies* sheet shows every option's numbers side by side.
@@ -143,4 +155,4 @@ python -m pytest -q -m "not slow"
 FTTX_TEST_DATA=/path/to/project/files python -m pytest -q
 ```
 
-See `BOM_RULES.md`, `SME_MEETING_NOTES.md`, `PROGRESS_AND_ISSUES.md` and `CHANGELOG.md`.
+See `BOM_RULES.md` (rules and DWG→BOM chains), `FORENSIC_FINDINGS.md` (line-by-line reconstruction of the approved BOM), `RESEARCH.md` (sources), `SME_MEETING_NOTES.md`, `PROGRESS_AND_ISSUES.md`, `CHANGELOG.md` and `RESEARCH_RECOVERY.md` (work checkpoint).

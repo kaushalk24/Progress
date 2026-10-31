@@ -11,6 +11,7 @@ Zip files are extracted (safely) and their contents classified.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import warnings
 import zipfile
@@ -20,6 +21,11 @@ from pathlib import Path
 import openpyxl
 
 BOM_SHEET = "OLM SF-8M BOM"
+GENERATED_MARK = "fttx_bom generated"  # workbook keyword written into every BOM this tool produces
+GENERATED_NAME = re.compile(r"(_FINAL_BOM|_BOM_AUDIT|_BOM_DISCREPANCIES|^BATCH_SUMMARY)\.xlsx$", re.I)
+ZIP_MAX_BYTES = 20 * 1024**3  # total uncompressed size accepted from one zip
+ZIP_MAX_ENTRIES = 50_000
+ZIP_MAX_RATIO = 200  # uncompressed / compressed per member (zip-bomb guard)
 
 
 @dataclass
@@ -38,11 +44,19 @@ class Detected:
 
 
 def safe_extract(zp: Path, dest: Path) -> Path:
-    """Extract a zip without allowing paths outside `dest` (zip-slip) or absolute paths."""
+    """Extract a zip without allowing paths outside `dest` (zip-slip), absolute paths, or zip bombs."""
     dest.mkdir(parents=True, exist_ok=True)
     root = dest.resolve()
     with zipfile.ZipFile(zp) as z:
-        for info in z.infolist():
+        infos = z.infolist()
+        if len(infos) > ZIP_MAX_ENTRIES:
+            raise ValueError(f"zip {zp.name} has {len(infos)} entries (limit {ZIP_MAX_ENTRIES})")
+        if sum(i.file_size for i in infos) > ZIP_MAX_BYTES:
+            raise ValueError(f"zip {zp.name} expands to more than {ZIP_MAX_BYTES // 1024**3} GB")
+        for info in infos:
+            if info.file_size > 10 * 1024**2 and info.compress_size and info.file_size / info.compress_size > ZIP_MAX_RATIO:
+                raise ValueError(f"zip {zp.name}: {info.filename} compression ratio {info.file_size / info.compress_size:.0f}x looks like a zip bomb")
+        for info in infos:
             target = (dest / info.filename).resolve()
             if root not in target.parents and target != root:
                 raise ValueError(f"unsafe path in zip {zp.name}: {info.filename}")
@@ -64,6 +78,8 @@ def classify_xlsx(p: Path) -> str:
         return f"unknown: cannot open ({exc.__class__.__name__})"
     try:
         if BOM_SHEET in wb.sheetnames:
+            if GENERATED_MARK in (wb.properties.keywords or ""):
+                return "unknown: a BOM produced by this tool - not used as template or approved BOM"
             return "bom_completed" if _bom_has_quantities(wb[BOM_SHEET]) else "bom_template"
         ws = wb.worksheets[0]
         rows = []
@@ -92,15 +108,25 @@ def _bom_has_quantities(ws) -> bool:
     return False
 
 
-def detect(paths: list[str | Path], extract_dir: Path) -> Detected:
+def detect(paths: list[str | Path], extract_dir: Path, exclude: list[str | Path] = ()) -> Detected:
+    """Classify every file under `paths`. Directories in `exclude` (the output folder) and files this
+    tool generated are skipped, so a rerun never picks up its own FINAL_BOM as the approved BOM."""
     det = Detected()
     queue = [Path(p) for p in paths]
+    skip = [Path(x).resolve() for x in exclude]
     seen = set()
+    used_dest: set[Path] = set()
     while queue:
         p = queue.pop(0)
         if p.name.startswith(("~$", ".")) or p in seen:
             continue
         seen.add(p)
+        rp = p.resolve()
+        if any(rp == x or x in rp.parents for x in skip):
+            continue
+        if GENERATED_NAME.search(p.name):
+            det.unknown.append((p, "output of a previous run - skipped"))
+            continue
         if p.is_dir():
             queue += sorted(p.iterdir())
             continue
@@ -109,6 +135,11 @@ def detect(paths: list[str | Path], extract_dir: Path) -> Detected:
             det.drawings.append(p)
         elif suf == ".zip":
             dest = extract_dir / p.stem
+            n = 1
+            while dest in used_dest or (dest.exists() and any(dest.iterdir())):
+                n += 1
+                dest = extract_dir / f"{p.stem}_{n}"  # two zips with the same name must not merge
+            used_dest.add(dest)
             try:
                 safe_extract(p, dest)
                 queue.append(dest)

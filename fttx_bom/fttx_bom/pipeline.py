@@ -21,7 +21,7 @@ from .engine.rules import CONFIG_DIR, load_rules
 from .engine.takeoff import build_takeoff
 from .excel.reports import compare, read_reference, write_audit, write_discrepancies
 from .excel.verify import verify
-from .excel.writer import template_area_count, write_bom
+from .excel.writer import template_capacity, write_bom
 from .extract.backends import load_drawing
 from .inputs.address_list import read_address_lists
 from .inputs.splice_reports import read_splice_reports
@@ -114,8 +114,14 @@ def run_job(p: JobParams, log: Callable[[str], None] = print) -> JobResult:
     cfg, rules = load_rules(p.rules)
     if not p.template.exists():
         raise FileNotFoundError(f"template not found: {p.template}")
-    address_lists = read_address_lists(p.address_lists) if p.address_lists else {}
-    reports = read_splice_reports(p.splice_reports) if p.splice_reports else []
+    skipped: list[str] = []
+    address_lists = read_address_lists(p.address_lists, skipped) if p.address_lists else {}
+    for msg in skipped:
+        log(f"NOTE: {msg}")
+    report_errors: list[str] = []
+    reports = read_splice_reports(p.splice_reports, report_errors) if p.splice_reports else []
+    for msg in report_errors:
+        log(f"WARNING: splice report not read: {msg}")
     networks = p.networks or sorted(address_lists)
     if not networks:
         raise ValueError("no networks: supply address lists (their sheet names are the network names) or --networks")
@@ -128,14 +134,19 @@ def run_job(p: JobParams, log: Callable[[str], None] = print) -> JobResult:
     cls = build_classifier(drawing, conv, networks)
     selection = pol.load_selection(p.policies)
     tk = build_takeoff(drawing, conv, cls, networks, address_lists, reports, policies=selection)
+    for msg in report_errors:
+        tk.check("splice report unreadable", False, f"{msg} - its enclosure, splices and couplers are NOT counted")
+    for r in reports:
+        for msg in r.issues:
+            tk.check("splice report cell", False, f"{r.name}: {msg}", warn=True)
 
     proj = project_from_filename(p.dwg.name)
     project = {"name": p.project_name or proj["name"], "number": p.project_number or proj["number"], "system": p.system or ""}
     res_job = JobResult(params=p, networks=networks)
-    n_area = template_area_count(p.template, cfg["sheet"])
+    n_area = template_capacity(p.template, cfg)  # main sheet, Transport BOM and Jumper Calculator must all fit
     groups = [networks] if len(networks) * 2 <= n_area else [[n] for n in networks]
     if len(groups) > 1:
-        log(f"template has {n_area} area columns: writing one BOM per OLM ({len(networks)} files)")
+        log(f"template holds {n_area} area columns (main / Transport / Jumper): writing one BOM per OLM ({len(networks)} files)")
     ref = read_reference(p.reference, cfg["sheet"], rules) if p.reference else None
     if ref is not None:
         res_job.calibration = pol.calibrate(tk, rules, ref)

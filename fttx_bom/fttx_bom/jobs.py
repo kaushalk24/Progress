@@ -43,7 +43,7 @@ def params_from_detected(det: Detected, out: Path, template: Path | None = None,
 
 def run_auto(paths: list[Path], out: Path, template: Path | None = None, reference: Path | None = None,
              log: Callable[[str], None] = print, **kw) -> tuple[JobResult, list[str]]:
-    det = detect(paths, out / ".extracted")
+    det = detect(paths, out / ".extracted", exclude=[out])
     log("detected: " + ", ".join(f"{k} {v}" for k, v in det.summary().items()))
     params, notes = params_from_detected(det, out, template, reference, **kw)
     for n in notes:

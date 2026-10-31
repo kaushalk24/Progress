@@ -64,6 +64,11 @@ POLICIES = [
         "span": "routed cable split at splices/structures, each span by majority area",
         "length": "routed cable length inside the Non-Grant polygons",
     }),
+    Policy("ground_kits", "Ground wire kits (FE0-07264810)", r"grounding_points", "template_note", {
+        "template_note": "blank-template note: splices named ...G, first in line after the OLM, names ending in 0, end-of-line peds",
+        "g_suffix": "splices whose name ends in G only",
+        "not_ordered": "not ordered separately (0); the MAX peds already include a grounding bar and wire kit",
+    }),
     Policy("olm_column", "OLM equipment column", r"olm(_ground|_aerial)?", "grant_if_any", {
         "grant_if_any": "SME: Grant column unless the OLM area has no grant passings",
         "location": "column of the OLM block's location",
@@ -94,8 +99,10 @@ def compute_variants(tk: Takeoff) -> None:
             _put(tk, f"pon_ports@split_ratio", n, a, math.ceil(p / ratio) if p else 0, "EA", f"ROUNDUP(passings/{ratio})")
             _put(tk, f"pon_ports@designed_pons", n, a, tk.get(sk, n, a, 0), "EA", "designed splitters in the column")
             for r in (32, 64):
-                _put(tk, f"splitter_1x{r}@per_column", n, a, (math.ceil(p / r) if p else 0) if r == ratio else 0, "EA",
-                     f"ROUNDUP(column passings/{r})")
+                if r == ratio:
+                    _put(tk, f"splitter_1x{r}@per_column", n, a, math.ceil(p / r) if p else 0, "EA", f"ROUNDUP(column passings/{r})")
+                else:  # a second ratio is always the designed count (see derived())
+                    _put(tk, f"splitter_1x{r}@per_column", n, a, tk.get(f"splitter_1x{r}", n, a, 0), "EA", "designed (second ratio)")
             m10 = tk.get("ped_max10", n, a, 0)
             _put(tk, "max10_upgrades@all_max10", n, a, m10, "EA", "every MAX10")
             _put(tk, "max10_upgrades@max10_nongrant", n, a, m10 if a == NONGRANT else 0, "EA", "Non-Grant MAX10")
@@ -118,7 +125,9 @@ def compute_variants(tk: Takeoff) -> None:
                 tot = sum(encl)
                 _put(tk, f"{key}@fully_pooled", n, a, math.ceil(math.ceil(tot / caps[L]) / 2) if tot else 0, "PKG", "fully pooled")
     # cable split by length
-    for k in [k for k, _n, _a in tk.q if re.fullmatch(r"cable_\d{3}", k)]:
+    cable_keys = {k for k, _n, _a in tk.q if re.fullmatch(r"cable_\d{3}", k)}
+    cable_keys |= {f"cable_{c.fibers:03d}" for c in tk.cables if c.network in nets}
+    for k in sorted(cable_keys):
         for n in nets:
             for a in AREAS:
                 _put(tk, f"{k}@length", n, a, 0, "FT", "routed length inside Non-Grant polygons")
@@ -132,6 +141,14 @@ def compute_variants(tk: Takeoff) -> None:
     for (k, n, a), q in tk.q.items():
         if k.endswith("@length") and k.startswith("cable_"):
             q.value = round(q.value)
+    # ground kits
+    for n in nets:
+        for a in AREAS:
+            if ("grounding_points", n, a) not in tk.q:
+                continue
+            rows = [nm for (nn, aa, nm, why) in tk.extra.get("ground", []) if nn == n and aa == a]
+            _put(tk, "grounding_points@g_suffix", n, a, sum(1 for nm in rows if nm.endswith("G")), "EA", "splices named ...G")
+            _put(tk, "grounding_points@not_ordered", n, a, 0, "EA", "not ordered separately")
     # OLM by location
     for n in nets:
         for a in AREAS:
@@ -169,7 +186,9 @@ def calibrate(tk: Takeoff, rules, ref) -> list[dict]:
     """Score every policy option against an approved BOM (cells matched / compared)."""
     out = []
     for p in POLICIES:
-        rows = [r for r in rules if r.value and p.owns(r.value) and r.key in ref.values]
+        # a row left blank in every column of the approved BOM was not filled in: no evidence either way
+        rows = [r for r in rules if r.value and p.owns(r.value) and r.key in ref.values
+                and any(v is not None for v in ref.values[r.key].values())]
         if not rows:
             continue
         for opt, desc in p.options.items():

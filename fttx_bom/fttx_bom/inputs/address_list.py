@@ -55,7 +55,27 @@ def _norm(v) -> str:
     return re.sub(r"\s+", " ", str(v)).strip() if v is not None else ""
 
 
-def read_address_list(path: str | Path) -> list[AddressList]:
+REQUIRED = ["PON NAME", "PON PORT", "ADDRESS"]
+
+
+def _columns(header: list[str]) -> dict[str, int] | None:
+    """Column index per EXPECTED name, matched case-insensitively and ignoring spaces; None when a
+    required column is missing (the sheet is not an address list)."""
+    def key(h):
+        return re.sub(r"[^A-Z0-9#]", "", h.upper())
+
+    pos = {}
+    for i, h in enumerate(header):
+        k = key(h)
+        for name in EXPECTED:
+            if k == key(name) and name not in pos:
+                pos[name] = i
+    return pos if all(r in pos for r in REQUIRED) else None
+
+
+def read_address_list(path: str | Path, skipped: list[str] | None = None) -> list[AddressList]:
+    """One AddressList per sheet with an address-list header. Other sheets (notes, pivots) are
+    skipped and reported in `skipped`."""
     path = Path(path)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -65,29 +85,39 @@ def read_address_list(path: str | Path) -> list[AddressList]:
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             continue
-        hdr = [_norm(h) for h in rows[0][: len(EXPECTED)]]
-        al = AddressList(network=ws.title.strip(), path=str(path))
-        if hdr != EXPECTED:
-            al.issues.append(f"unexpected header {hdr}")
-            out.append(al)
+        hdr = [_norm(h) for h in rows[0]]
+        col = _columns(hdr)
+        if col is None:
+            if skipped is not None:
+                skipped.append(f"{path.name} sheet '{ws.title}': no PON NAME / PON PORT / ADDRESS header - not an address list, skipped")
             continue
+        al = AddressList(network=ws.title.strip(), path=str(path))
+        if [hdr[col[n]] if n in col else None for n in EXPECTED] != EXPECTED:
+            al.issues.append(f"header differs from the standard export {EXPECTED}: {hdr[:12]} (columns matched by name)")
+
+        def get(r, name):
+            i = col.get(name)
+            return r[i] if i is not None and i < len(r) else None
+
         cables = []
         for r in rows[1:]:
-            r = list(r) + [None] * (len(EXPECTED) - len(r))
-            cable = _norm(r[6])
+            r = list(r)
+            cable = _norm(get(r, "CABLE NAME"))
             if cable and cable not in cables:
                 cables.append(cable)
-            cm = re.match(r"^PLC COUPLER\s+(\d+)\s+\d+\s+COM", _norm(r[3]), re.I)
+            addr = _norm(get(r, "ADDRESS"))
+            cm = re.match(r"^PLC COUPLER\s+(\d+)\s+\d+\s+COM", addr, re.I)
             if cm:
                 al.coupler_ratios.append(int(cm.group(1)))
-            if r[0] is None or r[1] is None:
+            pon, port = get(r, "PON NAME"), get(r, "PON PORT")
+            if pon is None or port is None:
                 continue
-            addr = _norm(r[3])
             if addr.upper().startswith("POWER PORT"):
                 al.power_ports += 1
                 continue
             try:
-                al.served.append(ServedAddress(int(r[0]), int(r[1]), addr, cable, _norm(r[7]), _norm(r[8])))
+                al.served.append(ServedAddress(int(pon), int(port), addr, cable, _norm(get(r, "Fiber Tap Name")),
+                                               _norm(get(r, "Fiber Splice"))))
             except (TypeError, ValueError):
                 al.issues.append(f"non-numeric PON/port in row {r[:4]}")
         al.cables = cables
@@ -96,10 +126,10 @@ def read_address_list(path: str | Path) -> list[AddressList]:
     return out
 
 
-def read_address_lists(paths: list[str | Path]) -> dict[str, AddressList]:
+def read_address_lists(paths: list[str | Path], skipped: list[str] | None = None) -> dict[str, AddressList]:
     result: dict[str, AddressList] = {}
     for p in paths:
-        for al in read_address_list(p):
+        for al in read_address_list(p, skipped):
             if al.network in result:
                 raise ValueError(f"network {al.network} appears in more than one address list")
             result[al.network] = al

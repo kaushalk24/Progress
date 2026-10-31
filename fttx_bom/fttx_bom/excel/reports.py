@@ -49,7 +49,8 @@ def read_reference(path: Path, sheet: str, rules: list[Rule]) -> Reference:
     fgrid = grid(wf[sheet], max_col=24)
     ref = Reference(str(path))
     header_row = next(r for r in range(1, 30) if str(ws.cell(r, 2).value or "").strip().lower() == "part number")
-    for c in range(8, 8 + 16):
+    tq = next((c for c in range(1, 24) if str(ws.cell(header_row, c).value or "").strip().lower() == "total quantity"), 7)
+    for c in range(tq + 1, tq + 17):
         h = str(ws.cell(header_row, c).value or "").strip()
         m = re.match(r"^(\S+)\s+(Grant|Non\s*-?\s*Grant)$", h, re.I)
         if m:
@@ -101,6 +102,7 @@ def compare(rules: list[Rule], res: WriteResult, ref: Reference, tk: Takeoff) ->
         if rule.status == "TEMPLATE_FORMULA" or rule.key not in ref.values:
             continue
         auto_vals = res.rule_values.get(rule.key, {})
+        tol = 0.01 if rule.unit == "MI" else 0.5  # same tolerance as policy calibration (0.5 mi would hide 2,640 ft)
         for net in tk.networks:
             ref_tot = auto_tot = 0.0
             ref_any = auto_any = False
@@ -116,7 +118,7 @@ def compare(rules: list[Rule], res: WriteResult, ref: Reference, tk: Takeoff) ->
                     auto_any = True
                 if rv in (None, 0) and av in (None, 0):
                     status = "MATCH"
-                elif rv is not None and av is not None and abs(rv - av) < 0.5 + 1e-9 * abs(rv):
+                elif rv is not None and av is not None and abs(rv - av) < tol + 1e-9 * abs(rv):
                     status = "MATCH"
                 else:
                     status = "DIFF"
@@ -125,7 +127,7 @@ def compare(rules: list[Rule], res: WriteResult, ref: Reference, tk: Takeoff) ->
                                 note=inv.get(f"{rule.key}|{net}|{area}") or inv.get(f"{rule.key}|{net}") or inv.get(rule.key, "")))
             out.append(dict(rule=rule, net=net, area="TOTAL", ref=ref_tot if ref_any else None,
                             auto=auto_tot if auto_any else None,
-                            status="MATCH" if (not ref_any and not auto_any) or abs(ref_tot - auto_tot) < 0.5 + 1e-9 * abs(ref_tot) else "DIFF",
+                            status="MATCH" if (not ref_any and not auto_any) or abs(ref_tot - auto_tot) < tol + 1e-9 * abs(ref_tot) else "DIFF",
                             formula="", note=inv.get(f"{rule.key}|{net}") or inv.get(rule.key, "")))
     return out
 

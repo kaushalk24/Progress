@@ -147,7 +147,7 @@ def page_run():
             log_box.code("\n".join(lines[-14:]))
 
         with st.spinner("Detecting inputs ..."):
-            det = detect(inputs, job / "extracted")
+            det = detect(inputs, job / "extracted", exclude=[job / "out"])
         st.write("Detected: " + ", ".join(f"**{v}** {k}" for k, v in det.summary().items()))
         try:
             params, notes = params_from_detected(det, job / "out", project_name=pname or None, project_number=pnum or None,

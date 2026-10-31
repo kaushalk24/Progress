@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.5.0 - forensic review, independent code review, research-backed rules
+
+### New rules from the forensic analysis (see FORENSIC_FINDINGS.md and BOM_RULES.md)
+- **Ground wire kits (FE0-07264810)** are now written. The rule follows the blank template's note: one kit per splice location that meets any of these, counted once:
+  - the splice name ends in G;
+  - it is the first splice on each cable's route out of the OLM hub;
+  - the name ends in 0;
+  - it is an end of line.
+
+  NMK gives 321 kits, DMI 126. New policy `ground_kits` (template_note / g_suffix / not_ordered). The Credit River BOM, made on the older template, left this line blank.
+- **D basket (FE0-R89279) = 0:** the FOSC450-D6-6-NT-0-T3V closure ships with its tall basket. This comes from the CommScope ordering guide, and the approved BOM also orders 0.
+- **Deep-check design rules:**
+  - MAX5_ON_LARGE_CABLE (WARN): in both approved designs no MAX5 houses a splice (mid-span, branch or end) on a cable above 48F. Splices are tied to their nearest housing, and FOSC closure splices are excluded;
+  - MAX10_SMALL_CABLE (INFO);
+  - CLOSURE_OVER_CAPACITY (WARN: more trays than a FOSC 450 holds with its basket);
+  - CABLE_CROSS_NETWORK (INFO).
+- Policy calibration no longer counts a row that the approved BOM never filled in as evidence of 0.
+
+### Fixed: findings of the independent code review (each has a regression test)
+- **BLOCKER: one OLM run from a combined drawing.**
+  - Before: it booked neighbouring OLMs' peds and vaults (within 150 ft), the whole transport corridor (5,279 ft aerial, about 7,000 ft UG) and inter-network cables to that OLM.
+  - Now: other networks' boundaries are recognised and excluded, and a cable belongs to its A-end network in every kind of run.
+  - Single-OLM runs now equal the combined run on every cell.
+- **BLOCKER: boundary label not recognised.** A single-network job counted the whole drawing (MAX10 60 -> 260) with no error. Now:
+  - the whole-drawing fallback is used only when the drawing has no boundary polygons (WARN);
+  - otherwise the result is an ERROR, and that network's BOM is left blank instead of filled with false zeros;
+  - the label regex is configurable.
+- KeyError crash when the network fed by the transport corridor has no boundary.
+- **Address list:** columns are now matched by name (case and order no longer matter). Sheets that are not address lists are skipped. An empty list falls back to the drawing counts instead of writing 0 or negative passings.
+- **Mixed 1x32 / 1x64 designs:** the second ratio's designed splitters are written (they were 0) and a WARN is raised.
+- **Enclosure types:** spellings such as "FOSC-450B", "450D" and "FOSC450-D" are recognised by one shared rule. Unknown types are flagged; SPLICE CASE is a known non-closure.
+- **Rerun into the output folder:**
+  - The tool's own FINAL_BOM was taken as the approved BOM, and with `--learn` it learned from itself.
+  - The output folder and generated files are now skipped, and generated workbooks carry a marker.
+- **One-OLM-per-BOM:** a 2-OLM job on the blank per-OLM template made one BOM and dropped the second OLM's Transport BOM. Capacity is now the smallest of the main, Transport and Jumper sheets.
+- **Area columns** are located from the "Total Quantity" header. A shifted template no longer has its totals overwritten.
+- **Computed zeros where nothing was computed:**
+  - FOSC lines are left blank without splice reports;
+  - a block missing from the drawing's definitions (a renamed symbol) gives a blank line and an ERROR, not 0.
+- **Rule expressions** are evaluated by a restricted parser (no `eval`). A negative result is left blank.
+- **Zip extraction:** size, entry and compression-ratio limits; two zips with the same name no longer merge.
+- **LibreOffice:** with a relative `--out`, the recalculation hung for up to 15 minutes. The profile path is now absolute.
+- **Splice reports:** a text number ("1,234", "48 ct") no longer aborts the job, and an unreadable report is skipped with an ERROR.
+- The deep check no longer adds stray rows to the audit's Network Assignment sheet.
+- Grant and Non-Grant cable cells now add up exactly to the rounded network total.
+- Robustness: policy variants no longer crash on a cable size that has no base quantity.
+
+### Research (RESEARCH.md)
+- The FOSC 450 ordering guide confirms 2 trays per kit, 24 splices per B tray and 48 per D tray, and the tray limits per closure.
+- LibreDWG and ezdxf limits are documented.
+- No public source prescribes slack, the BEAD split or the ped grounding rules, so the tool keeps reading them from the design and the customer template.
+
+### Tests
+75 tests (74 run without `slow`). New files: `tests/test_forensic_rules.py` and `tests/test_review_regressions.py`.
+
 ## 0.4.0 - self-service tool: app, auto-detect, batch, deep check, learned policies
 - **App** (`python -m fttx_bom app` / `windows\run_app.bat`): a local browser UI to upload or point at files, run, see the issue table and download all outputs. Also batch runs, a BOM guide (how every line is calculated) and a policy editor.
 - **Auto-detection** (`auto` command): classifies DWG/DXF, address lists, both splice-report layouts, blank templates and completed BOMs by content. Zips are extracted safely, including nested ones (zip-slip blocked).

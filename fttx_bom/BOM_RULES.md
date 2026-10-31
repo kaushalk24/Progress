@@ -29,7 +29,7 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Cable Grant/Non-Grant | Route each segment through the cable polylines (graph shortest path from A to B splice), split at splices and structures, classify each span by majority area, then apportion TOTAL by span length | Cells: FC072/FC144 8/8, FC048 6/8, FC096 4/8, FC024 0/8 (all within a few spans; R03 FC048 exact) |
 | FOSC 450A-D | Splice reports `Enclosure Type`, area by splice location | Totals 4/4; 450B cells 6/8 (NMK-05131 is 23 ft from an edge), 450D 8/8 |
 | Splitter 1x32 / 1x64 | Ratio from splice-report `PLC COUPLER` rows (fallback: address list). Network = ROUNDUP(passings/ratio). Grant = ROUNDUP(grant/ratio); Non-Grant = rest | 8/8 exact; matches report coupler count and address-list PONs |
-| XGS SFP+ | ROUNDUP(column passings / ratio) per column | 8/8 exact (gives 18 SFP for 15 PONs; flagged) |
+| XGS SFP+ | ROUNDUP(ROUNDUP(column passings/32)/2) per column (SME: Jumper Calculator / 2; superseded the 0.1 rule) | 8/8 exact (18 SFP for 15 PONs; flagged) |
 | MDU enclosure | 1 per `FMMULTIADD` building | exact |
 | OLM bundle, XM3.1 PSU, battery kit | 1 per `CX1_OLM`; Z-14 ped + ground enclosure + pedestal support per ground OLM; pole enclosure per aerial OLM (within 15 ft of an aerial pole) | exact |
 | Batteries | 3 x OLM (3-battery enclosure) | exact |
@@ -49,10 +49,67 @@ Machine-readable catalogue: `config/bom_rules.json`. Drawing conventions:
 | Splitters | Designed count (splice reports). Grant = ROUNDUP(grant/ratio), the rest Non-Grant (SME). The template's per-column ROUNDUP(/64) is overridden. | 8/8 |
 | OLM equipment | Grant column unless the OLM has no grant passings (SME) | 8/8 |
 
+## Rules added by the forensic review (0.5.0)
+
+| BOM line / check | Rule | Evidence | Status |
+|---|---|---|---|
+| Ground wire kit FE0-07264810 | One kit per splice location that meets any of the template note's conditions, counted once:<br>• the name ends in G;<br>• it is the first splice point on the routed path of each cable leaving the OLM hub (the splice point nearest the OLM block);<br>• the name ends in 0;<br>• it is an end of line (a cable ends there and none starts there). | Blank template L27: "Hand count for Grounds All splices with letter G at End, First in line, any ending in a zero, and also EOL Peds". NMK: 321 (R02 70, R03 85, R04 87, R05 79); DMI 126. G and end of line coincide for 243 of the 248 G splices in NMK. The Credit River reference (older template, no note) left the line blank. | INFERRED (customer note). Policy `ground_kits`: template_note / g_suffix / not_ordered |
+| D basket FE0-R89279 | 0. The FOSC450-D6-6-NT-0-T3V closure ships with its tall basket. | Part code ("T") from the CommScope ordering guide; the reference orders 0 | VERIFIED |
+| Closure capacity | WARN when one location needs more trays than a FOSC 450 holds with its basket (450B 6, 450D T3V 5) | Ordering guide (2004 edition); NMK-02001G and 03001G need 6 D trays | Design check |
+| Ped size against cable | WARN when a MAX5 houses a splice on a cable above 48F (any role). INFO for a MAX10 at a mid-span or end splice on a cable of 48F or less. The splice goes to its nearest housing; FOSC-closure splices are excluded. | NMK and DMI: 0 MAX5 on a cable above 48F; MAX10 mid-span on a cable above 48F: 113 and 11 | Design check |
+| Cross-network cable | Booked wholly to its A-end network; INFO CABLE_CROSS_NETWORK | Network totals agree with the reference with this convention | VERIFIED_TOTAL |
+| Per-OLM job on a combined drawing | Other networks' labelled boundaries are excluded, not nearest-assigned. The transport corridor belongs to the OTN-fed network only. | Single-OLM runs equal the combined run on every cell (regression test) | VERIFIED |
+
+## DWG → BOM chains (how each quantity is derived)
+
+**MAX10 / MAX5 peds (CBP-MAX10DSM24, CBP-MAX5DSM24)**
+1. `CX1-MAX10` / `CX1-MAX5` block inserts.
+2. One ped per insert; its network is the boundary that contains it, and its column is Grant/Non-Grant by location.
+3. The bonding jumper (×2), the ped bonding kit (×1) and the ped splice tray (×1) follow from template formulas.
+
+**Fiber cable (FFA-F9xx)**
+1. `fiberinfo.dwg` labels: SEGNUM "A TO B FCnnn", plus FTG / SLK / TOTAL / TTL / REQ.
+2. One labelled segment per cable, with design length TOTAL = route + slack (equal to the splice report's Cable Design Length).
+3. The segment belongs to the network of its A end.
+4. It is routed through the cable polylines from splice A to splice B and split at every splice or structure; each span goes to its majority area.
+5. TOTAL is apportioned by span length. Cables found only in a splice report (the 100 ft OLM tails) are added and flagged.
+
+**FOSC 450 B/D closures and trays**
+1. The splice report's Enclosure Type (FOSC 450 A–D; SPLICE CASE is not a closure line).
+2. One closure per report; its column is the location of the MC_SPLICE point.
+3. Trays per location = ROUNDUP(fusion splices / 24 for B, or / 48 for D).
+4. Packages = ROUNDUP(column trays / 2), because each kit holds 2 trays.
+
+**Splitters and SFP**
+1. PLC COUPLER rows in the splice reports.
+2. Ratio and designed count; a second ratio is written from its designed count.
+3. Grant = ROUNDUP(grant passings / ratio); Non-Grant = the rest.
+4. SFP per column = ROUNDUP(ROUNDUP(passings / 32) / 2), the Jumper Calculator divided by 2.
+
+**Passings**
+1. Address-list served rows give the network total.
+2. HC / CC / MDUC count blocks give the category split.
+3. GRANTADDRESS `FMRESADD2` blocks that match a served address give Grant residential.
+4. Commercial and MDU are Grant when outside the Non-Grant polygons.
+
+**Ground wire kits**
+1. MC_SPLICE names and the cable topology.
+2. The template note's conditions (see the table above).
+3. One kit per qualifying location.
+
+**Drops**
+1. FX_DROPS lines on `RTE_SpatialNet_UGDROP` with their CX1-FTG-N2 labels.
+2. The footage follows the served address's area; the row carries Non-Grant only.
+
+**Route footage**
+1. `CX1-FTG-N2` FTG labels on `RTE_UGTRENCH` / `RTE_AESTRAND` (as CalcFTG does) inside the boundary.
+2. Rows 6–10 are filled from them.
+
 ## Not reproducible from the supplied data (left blank, flagged)
 
-* **Ground wire kits, heat shrink**: the reference left them blank. The audit shows counts as SUGGESTED.
-* **GOAT peds, peds-with-tap, FTP/FST/MST/OTE taps, plenum lateral**: no symbol in these designs.
+* **Heat-shrink sleeves:** the SME says they aren't updated in the BOM; the audit shows the fusion-splice count.
+* **GOAT peds, peds with taps, FTP/FST/MST/OTE taps, plenum lateral:** these designs have no symbol for them.
+* **Route Grant/Non-Grant split (rows 6–10):** point, window and trench-length methods all fail to reproduce the reference; see FORENSIC_FINDINGS.md F6.
 
 ## Reference BOM errors / inconsistencies found
 

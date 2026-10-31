@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from ..extract.model import Drawing, Insert, Point
 from ..inputs.address_list import AddressList
 from ..inputs.splice_reports import SpliceReport, network_from_splice_name
-from .geometry import dist, length_inside, polyline_length
+from .geometry import dist, length_inside, point_segment_distance, polyline_length
 from .network import AREAS, GRANT, NONGRANT, Classifier
 
 FT_RE = re.compile(r"-?\d+(?:\.\d+)?")
@@ -71,6 +71,7 @@ class Takeoff:
         self.checks: list[Check] = []
         self.cables: list[CableSegment] = []
         self.unassigned: list[str] = []
+        self.foreign_cables: list[tuple[str, str, str, str]] = []  # (A, B, network, name) of other networks in the drawing
         self.extra: dict = {"ratio": {}, "enclosures": [], "olms": []}  # facts the policy variants need
         self.policy_used: dict[str, str] = {}
 
@@ -110,6 +111,7 @@ class Takeoff:
         sub.checks = [c for c in self.checks if not any(o in c.name or o in c.detail for o in others)]
         sub.cables = [c for c in self.cables if c.network in nets]
         sub.unassigned = list(self.unassigned)
+        sub.foreign_cables = list(self.foreign_cables)
         sub.extra = self.extra
         sub.policy_used = dict(self.policy_used)
         return sub
@@ -126,16 +128,46 @@ def _blocks(d: Drawing, conv: dict, key: str) -> list[Insert]:
 
 def _locate(cls: Classifier, ins: Insert, tk: Takeoff) -> tuple[str | None, str]:
     net = cls.network_of(ins.pt, f"{ins.name}:{ins.handle}")
-    if net is None:
+    if net is None and not cls.foreign_of(ins.pt):
         tk.unassigned.append(f"{ins.name} {ins.handle} at ({ins.pt[0]:.0f},{ins.pt[1]:.0f}) on {ins.layer}")
     return net, cls.area_of(ins.pt)
+
+
+def resolve_report_networks(d, conv, cls: Classifier, tk: "Takeoff", reports) -> None:
+    """Set each splice report's network: the splice-name pattern when it names a network in the
+    drawing, else the splice point's drawing location (symbol, then report coordinates), else the
+    folder name; a single-network job without other networks owns every report."""
+    known = set(tk.networks) | set(cls.foreign)
+    pos = {}
+    for ins in _blocks(d, conv, "splice_point"):
+        pos.setdefault(ins.attr("NAME").upper(), ins.pt)
+    for r in reports or []:
+        by_name = network_from_splice_name(r.name.upper())
+        if by_name in known:
+            r.network = by_name
+            continue
+        p = pos.get(r.name.upper()) or r.coords
+        net = cls.resolve(p)[0] if p else None
+        if net is None and r.network not in known and len(tk.networks) == 1 and not cls.foreign:
+            net = tk.networks[0]
+        if net and net != r.network:
+            tk.check("splice report network", True, f"{r.name}: network {net} from its drawing location (name/folder gave '{r.network}')")
+            r.network = net
+        elif net is None and r.network not in known:
+            tk.check("splice report network", False, f"{r.name}: network not found (name/folder '{r.network}', no drawing location)", warn=True)
 
 
 def count_blocks(d, conv, cls, tk, key, qkey=None, unit="EA"):
     qkey = qkey or key
     names = conv["blocks"][key]["names"]
+    found = _blocks(d, conv, key)
+    if not found and d.block_census and not any(n in d.block_census for n in names):
+        # the block is not even defined in this drawing: a renamed symbol, not a computed zero
+        tk.check(f"block not defined {qkey}", False, f"no {names} block definition in the drawing - "
+                 f"{qkey} not counted (left blank); add the drawing's block name to config/conventions.json")
+        return
     tk.ensure(qkey, unit, f"count of block {names}")
-    for ins in _blocks(d, conv, key):
+    for ins in found:
         net, area = _locate(cls, ins, tk)
         if net:
             tk.add(qkey, net, area, 1, unit, f"count of block {names}", [ins.handle])
@@ -184,12 +216,12 @@ def passings(d, conv, cls, tk: Takeoff, address_lists: dict[str, AddressList]):
             net = cls.network_of(ins.pt, f"{ins.name}:{ins.handle}", strict=True)
             v = num(ins.attr(tag)) or 0
             if net is None:
-                if v:
+                if v and not cls.foreign_of(ins.pt, strict=True):
                     tk.unassigned.append(f"{ins.name} {ins.handle} {tag}={v:g} outside all networks")
                 continue
             sums[(net, tag)] += v
             ev[(net, tag)].append(ins.handle)
-    served = {n: ServedIndex(address_lists[n]) for n in tk.networks if n in address_lists}
+    served = {n: ServedIndex(address_lists[n]) for n in tk.networks if n in address_lists and address_lists[n].served}
 
     def is_served(net, number, street, what):
         idx = served.get(net)
@@ -237,7 +269,7 @@ def passings(d, conv, cls, tk: Takeoff, address_lists: dict[str, AddressList]):
         com_total = cc + pool - com_in_cc  # unused MDUC units are not MDU -> commercial
         dwg_total = hc + cc + mduc
         al = address_lists.get(net)
-        if al:
+        if al and al.served:
             total = al.passings
             ok = abs(dwg_total - total) < 0.5
             tk.check(f"passings vs address list {net}", ok,
@@ -245,7 +277,8 @@ def passings(d, conv, cls, tk: Takeoff, address_lists: dict[str, AddressList]):
                      + ("" if ok else " - address list used as the network total (residential adjusted)"), warn=not ok)
         else:
             total = dwg_total
-            tk.check(f"passings vs address list {net}", False, "no address list supplied - drawing count blocks used", warn=True)
+            why = "address list has no served rows" if al else "no address list supplied"
+            tk.check(f"passings vs address list {net}", False, f"{why} - drawing count blocks used", warn=True)
         res_total = total - com_total - mdu_total
         rg = len(res_grant[net])
         cg = len(com_grant[net])
@@ -436,6 +469,7 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
     breaks = _break_points(d, conv)
     leaders = d.leaders
     netset = {n.upper(): n for n in net_names}
+    known = {**{n.upper(): n for n in cls.foreign}, **netset}
     seen: dict[str, tuple] = {}
     for ins in labels:
         segname = ins.attr("SEGNUM")
@@ -456,17 +490,22 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
             continue
         seen[segname] = (ttl, total)
         a, b = m.group(1).strip(), m.group(2).strip()
-        net = None
+        # the cable belongs to the network of its first end that names one (A end first), whether or
+        # not that network is in this job, so per-OLM runs and combined runs book it identically
+        net = foreign = None
         for end in (a, b):
-            if end.upper() in netset:
-                net = netset[end.upper()]
+            e = end.upper()
+            owner = known.get(e) or known.get((network_from_splice_name(e) or "").upper())
+            if owner:
+                net, foreign = (owner, None) if owner in netset.values() else (None, owner)
                 break
-            nn = network_from_splice_name(end.upper())
-            if nn and nn.upper() in netset:
-                net = netset[nn.upper()]
-                break
-        if net is None:
+        if net is None and foreign is None:
             net = cls.network_of(ins.pt, f"cable label {segname}")
+            foreign = None if net else cls.foreign_of(ins.pt)
+        if net is None and foreign:
+            # another network of the same drawing: not this job's material, kept for topology (end of line)
+            tk.foreign_cables.append((a, b, foreign, segname.upper()))
+            continue
         seg = CableSegment(ins.handle, segname, a, b, int(ttl), ins.attr("CON").upper(), num(ins.attr("FTG")) or 0,
                            num(ins.attr("SLK")) or 0, total, net)
         pa, pb = _resolve_endpoint(a, pos), _resolve_endpoint(b, pos)
@@ -506,7 +545,7 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
 
     # cables present in the splice reports but carrying no DWG cable label
     # (e.g. the 100 ft OLM -> first splice FC024 tail). Real cable: include + flag.
-    labelled = {c.name.upper() for c in tk.cables}
+    labelled = {c.name.upper() for c in tk.cables} | {f[3] for f in tk.foreign_cables}
     rep_only = {}
     for r in reports or []:
         for sg in r.segments:
@@ -518,6 +557,9 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
     for name, (sg, r) in rep_only.items():
         mm = SEG_RE.match(sg.cable)
         a = mm.group(1) if mm else ""
+        if r.network in cls.foreign:
+            tk.foreign_cables.append((a, mm.group(2) if mm else "", r.network, name))
+            continue
         net = r.network if r.network in tk.networks else None
         pa = _resolve_endpoint(a, pos) if a else None
         area = cls.area_of(pa) if pa else GRANT
@@ -556,23 +598,47 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
         place_key = "cable_aerial_ft" if c.placement.startswith("A") else "cable_ug_ft"
         tk.add(place_key, c.network, NONGRANT, ng, "FT", "cable footage by placement", [c.handle])
         tk.add(place_key, c.network, GRANT, c.total_ft - ng, "FT", "cable footage by placement", [c.handle])
+    # round so Grant + Non-Grant = the rounded network total (separate rounding could lose 1 ft)
     for (k, n, a), q in list(tk.q.items()):
-        if k.startswith("cable_"):
+        if k.startswith("cable_") and a == NONGRANT:
+            g = tk.q.get((k, n, GRANT))
+            total = round(q.value + (g.value if g else 0))
             q.value = round(q.value)
+            if g:
+                g.value = total - q.value
 
 
 # ----------------------------------------------------------------- splice reports
-TRAY_CAPACITY = {"B": 24, "D": 48}  # splices per tray: ACC-B-24 tray, FOSC-ACC-D-TRAY-48
-ENCL_RE = re.compile(r"FOSC\s*450\s*([A-D])", re.I)
+TRAY_CAPACITY = {"B": 24, "D": 48}  # splices per tray: ACC-B-24 tray, FOSC-ACC-D-TRAY-48 (CommScope ordering guide)
+# trays one closure holds with its basket installed (ordering guide: B basket 'limit 6 trays', Tall basket 'limit 5')
+TRAYS_PER_CLOSURE = {"B": 6, "D": 5}
+# 'FOSC 450D', 'FOSC450-D', 'FOSC-450B', '450 D', 'Fosc 450-b' ... (shared with the deep check)
+ENCL_RE = re.compile(r"(?<![0-9])450\s*-?\s*([A-D])(?![A-Z])", re.I)
+NON_BOM_ENCLOSURES = ("SPLICE CASE",)  # splices made inside the MAX ped: no FOSC enclosure line
+
+
+def enclosure_letter(enclosure: str | None, conv: dict | None = None) -> str | None:
+    """FOSC 450 size letter of a splice-report Enclosure Type, None when it is not a FOSC 450."""
+    m = ENCL_RE.search(enclosure or "")
+    return m.group(1).upper() if m else None
+
+
+def enclosure_is_non_bom(enclosure: str | None, conv: dict | None = None) -> bool:
+    names = (conv or {}).get("non_bom_enclosures", NON_BOM_ENCLOSURES)
+    return any(n.upper() in (enclosure or "").upper() for n in names)
 
 
 def enclosures(d, conv, cls, tk: Takeoff, reports: list[SpliceReport]):
     pos = {}
     for ins in _blocks(d, conv, "splice_point"):
         pos.setdefault(ins.attr("NAME").upper(), ins.pt)
-    if reports:
-        for L in "bd":
-            tk.ensure(f"trays_450{L}", "EA", "per enclosure ROUNDUP(splices / tray capacity)")
+    if not reports:
+        return  # enclosures and trays are not counted without splice reports (left blank, not 0)
+    for L in "bd":
+        tk.ensure(f"trays_450{L}", "EA", "per enclosure ROUNDUP(splices / tray capacity)")
+    # FOSC450-D6-6-NT-0-T3V: the 'T' is the tall slack basket, shipped with the closure (CommScope ordering
+    # guide), so no separate D basket is ordered; the approved BOM orders 0
+    tk.ensure("basket_d", "EA", "0: the T3V 450D closure includes its tall basket")
     for letter in "ABCD":
         tk.ensure(f"fosc450{letter.lower()}", "EA", "splice report Enclosure Type")
         tk.ensure(f"fosc450{letter.lower()}_splices", "EA", "fusion splices in enclosure (splice report)")
@@ -588,6 +654,9 @@ def enclosures(d, conv, cls, tk: Takeoff, reports: list[SpliceReport]):
             continue
         done.add(r.name)
         m = ENCL_RE.search(r.enclosure or "")
+        if r.enclosure and not m and not enclosure_is_non_bom(r.enclosure, conv):
+            tk.check("enclosure type unknown", False, f"{r.name}: Enclosure Type '{r.enclosure}' is not a FOSC 450 A-D "
+                     "and not a known non-BOM type - not counted", warn=True)
         p = pos.get(r.name.upper()) or r.coords
         net = None
         if p:
@@ -658,10 +727,22 @@ def derived(d, conv, cls, tk: Takeoff, reports, address_lists):
             # ROUNDUP(passings/32) whatever splitter is actually designed
             tk.q[("pon_ports", n, a)] = Qty("pon_ports", n, a, math.ceil(math.ceil(p / 32) / 2) if p else 0, "EA",
                                             "ROUNDUP(ROUNDUP(passings/32)/2) (Jumper Calculator / 2)", [])
+        # a second split ratio in the same network (e.g. an MDU node on 1x64 in a 1x32 design): write its
+        # designed count too, in the column of each coupler's splice location
+        for r2 in (32, 64):
+            extra = tk.total(f"report_splitter_1x{r2}", n) if r2 != ratio else 0
+            if not extra:
+                continue
+            for a in AREAS:
+                tk.q[(f"splitter_1x{r2}", n, a)] = Qty(f"splitter_1x{r2}", n, a, tk.get(f"report_splitter_1x{r2}", n, a, 0), "EA",
+                                                       f"designed 1x{r2} couplers (splice reports), by splice location", [])
+            tk.check(f"mixed split ratios {n}", False, f"main 1x{ratio} plus {extra:g} x 1x{r2} in the splice reports - both written; "
+                     "confirm the PON design", warn=True)
+            need += int(extra)
         tk.extra.setdefault("designed_pons", {})[n] = need
         if reports:
-            rep = tk.total(f"report_splitter_1x{ratio}", n)
-            tk.check(f"splitters vs splice reports {n}", rep == need, f"design rule {need} x 1x{ratio} vs splice-report PLC COUPLER rows {rep:g}")
+            rep = sum(tk.total(f"report_splitter_1x{r2}", n) for r2 in (32, 64))
+            tk.check(f"splitters vs splice reports {n}", rep == need, f"design rule {need} splitters (main 1x{ratio}) vs splice-report PLC COUPLER rows {rep:g}")
         al = address_lists.get(n)
         if al:
             tk.check(f"splitters vs address-list PONs {n}", al.pon_count == need, f"design rule {need} vs address-list PON count {al.pon_count}")
@@ -781,19 +862,98 @@ def drop_footage(d, conv, cls, tk: Takeoff, address_lists):
                                                  "Non-Grant drop footage (reference: total - grant)", [])
 
 
-def grounding_points(d, conv, cls, tk: Takeoff):
-    tk.ensure("grounding_points", "EA", "splice points whose name ends in G")
+GROUND_HUB_MAX_FT = 250.0  # OLM block -> its hub splice point (NMK 63-132 ft, DMI 66 ft)
+ON_PATH_FT = 3.0  # routed cable paths pass through the splice points (measured 0 ft); same tolerance as _spans
+
+
+def _first_on_path(path, points: dict[str, Insert], exclude: str) -> str | None:
+    """Name of the first splice point lying on a routed path (by distance along the path)."""
+    if len(path) < 2:
+        return None
+    xs, ys = [p[0] for p in path], [p[1] for p in path]
+    x0, x1, y0, y1 = min(xs) - ON_PATH_FT, max(xs) + ON_PATH_FT, min(ys) - ON_PATH_FT, max(ys) + ON_PATH_FT
+    best = None
+    for name, ins in points.items():
+        p = ins.pt
+        if name == exclude or not (x0 <= p[0] <= x1 and y0 <= p[1] <= y1):
+            continue
+        acc = 0.0
+        for a, b in zip(path, path[1:]):
+            seg = dist(a, b)
+            if point_segment_distance(p, a, b) <= ON_PATH_FT:
+                t = 0.0 if seg == 0 else max(0.0, min(1.0, ((p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1])) / seg / seg))
+                s = acc + t * seg
+                if best is None or s < best[0]:
+                    best = (s, name)
+                break
+            acc += seg
+    return best[1] if best else None
+
+
+def ground_locations(d, conv, tk: Takeoff) -> tuple[dict[str, set[str]], dict[str, Insert], set[str]]:
+    """Splice locations that get a ground wire kit (FE0-07264810), each with its reasons.
+
+    Blank-template note on the line: "Hand count for grounds: all splices with letter G
+    at end, first in line, any ending in a zero, and also EOL peds".
+      G suffix       splice name ends in G
+      ends in 0      splice name ends in 0
+      first in line  first splice point on the routed path of each cable leaving the OLM
+                     hub (the splice point nearest the OLM block)
+      end of line    a cable ends there and no cable starts there
+    """
+    points: dict[str, Insert] = {}
     for ins in _blocks(d, conv, "splice_point"):
-        if ins.attr("NAME").upper().endswith("G"):
-            net, area = _locate(cls, ins, tk)
-            if net:
-                tk.add("grounding_points", net, area, 1, "EA", "splice points whose name ends in G", [ins.attr("NAME")])
+        nm = (ins.attr("NAME") or "").strip().upper()
+        if nm and nm not in points:
+            points[nm] = ins
+    reasons: dict[str, set[str]] = defaultdict(set)
+    for nm in points:
+        if nm.endswith("G"):
+            reasons[nm].add("G suffix")
+        if nm.endswith("0"):
+            reasons[nm].add("ends in 0")
+    # topology uses every cable in the drawing, including other networks' (per-OLM runs = combined run)
+    ends_ab = [(c.a.upper(), c.b.upper()) for c in tk.cables] + [(f[0].upper(), f[1].upper()) for f in tk.foreign_cables]
+    starts = {a for a, _b in ends_ab}
+    for _a, b in ends_ab:
+        if b in points and b not in starts:
+            reasons[b].add("end of line")
+    hubs: set[str] = set()
+    for olm in _blocks(d, conv, "olm"):
+        near = min(points.items(), key=lambda kv: dist(kv[1].pt, olm.pt), default=None)
+        if near and dist(near[1].pt, olm.pt) <= GROUND_HUB_MAX_FT:
+            hubs.add(near[0])
+    for c in tk.cables:
+        if c.a.upper() in hubs and c.path:
+            first = _first_on_path(c.path, points, exclude=c.a.upper())
+            if first:
+                reasons[first].add("first in line")
+    return reasons, points, hubs
+
+
+def grounding_points(d, conv, cls, tk: Takeoff):
+    method = "ground wire kits: splices named ...G, first in line after the OLM, names ending in 0, end-of-line (template note)"
+    tk.ensure("grounding_points", "EA", method)
+    reasons, points, hubs = ground_locations(d, conv, tk)
+    if _blocks(d, conv, "olm") and not hubs:
+        tk.check("ground kits: OLM hub", False, f"no splice point within {GROUND_HUB_MAX_FT:g} ft of the OLM block - "
+                 "'first in line' grounds not counted", warn=True)
+    rows = []
+    for nm in sorted(reasons):
+        net, area = _locate(cls, points[nm], tk)
+        if not net:
+            continue
+        why = sorted(reasons[nm])
+        rows.append((net, area, nm, why))
+        tk.add("grounding_points", net, area, 1, "EA", method, [f"{nm} ({', '.join(why)})"])
+    tk.extra["ground"] = rows
 
 
 def build_takeoff(d: Drawing, conv: dict, cls: Classifier, networks: list[str],
                   address_lists: dict[str, AddressList], reports: list[SpliceReport],
                   policies: dict[str, str] | None = None) -> Takeoff:
     tk = Takeoff(networks)
+    resolve_report_networks(d, conv, cls, tk, reports)
     passings(d, conv, cls, tk, address_lists)
     for key in ("ped_max10", "ped_max5", "vault", "ug_lbox"):
         count_blocks(d, conv, cls, tk, key)
@@ -815,6 +975,13 @@ def build_takeoff(d: Drawing, conv: dict, cls: Classifier, networks: list[str],
             tk.check(f"SFP vs designed PONs {n}", sfp == need,
                      f"policy sfp={tk.policy_used['sfp']} gives {sfp:g} XGS SFP+ for {need} designed PONs"
                      + ("" if sfp == need else " (per-column rounding) - see Policies sheet"), warn=True)
+    for n in networks:
+        if n not in cls.networks and not (cls.single_network == n and not cls.networks):
+            # no boundary for this network: every drawing quantity would be a false zero - leave the BOM blank
+            for k in [k for k in tk.q if k[1] == n]:
+                del tk.q[k]
+            tk.check(f"network boundary {n}", False, f"no boundary polygon for {n} in the drawing - its quantities are left blank "
+                     "(see the NETWORK_BOUNDARY issue)")
     if cls.nearest_assigned:
         tk.checks.append(Check("objects outside boundaries", "WARN",
                                f"{len(cls.nearest_assigned)} objects outside every network boundary were assigned via the transport corridor "

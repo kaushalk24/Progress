@@ -17,7 +17,7 @@ from pathlib import Path
 
 import openpyxl
 from openpyxl.formula.translate import Translator
-from openpyxl.utils import column_index_from_string, get_column_letter
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 from ..engine.network import GRANT
@@ -49,6 +49,7 @@ class WriteResult:
     template_rows: list[tuple[int, str, str]] = field(default_factory=list)
     formula_repairs: list[str] = field(default_factory=list)
     formulas_replaced: list[str] = field(default_factory=list)
+    total_col: str = "G"  # 'Total Quantity' column; area columns follow it
 
 
 def area_label(net: str, area: str) -> str:
@@ -83,6 +84,34 @@ def template_area_count(template: Path, sheet: str) -> int:
                 n, i = n + 1, i + 1
             return n
     raise ValueError(f"header row with 'Part Number' / 'Total Quantity' not found in {sheet}")
+
+
+def template_capacity(template: Path, cfg: dict) -> int:
+    """Area columns one workbook can hold: the smallest of the main sheet, the Transport BOM area
+    columns and the Jumper Calculator blocks (sheets missing from the template are ignored)."""
+    n = template_area_count(template, cfg["sheet"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        wb = openpyxl.load_workbook(template, read_only=True)
+        try:
+            t = cfg.get("transport_sheet")
+            if t and t["sheet"] in wb.sheetnames:
+                rows = list(wb[t["sheet"]].iter_rows(min_row=t["header_row"], max_row=t["header_row"], max_col=40, values_only=True))
+                vals = [str(v or "").strip() for v in (rows[0] if rows else [])]
+                low = [v.lower() for v in vals]
+                if "total quantity" in low:
+                    i, k = low.index("total quantity") + 1, 0
+                    while i < len(vals) and vals[i]:
+                        k, i = k + 1, i + 1
+                    n = min(n, k)
+            j = cfg.get("jumper_sheet")
+            if j and j["sheet"] in wb.sheetnames:
+                blocks = sum(1 for row in wb[j["sheet"]].iter_rows(max_col=3, values_only=True)
+                             if len(row) > 2 and str(row[2] or "").strip().lower() == "splitters required")
+                n = min(n, blocks)
+        finally:
+            wb.close()
+    return n
 
 
 def find_rows(ws, rules: list[Rule], header_row: int) -> tuple[dict[str, int], list[str]]:
@@ -124,7 +153,14 @@ def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: di
     header_row = next((r for r in range(1, 30) if str(ws.cell(r, 2).value or "").strip().lower() == "part number"), None)
     if header_row is None:
         raise ValueError("template header row ('Part Number' in column B) not found")
-    c0 = column_index_from_string(cfg["first_data_col"])
+    tq = next((c for c in range(1, 40) if str(ws.cell(header_row, c).value or "").strip().lower() == "total quantity"), None)
+    if tq is None:
+        raise ValueError("template header 'Total Quantity' not found - cannot locate the area columns")
+    c0 = tq + 1  # area columns start right after Total Quantity, wherever the template puts it
+    res.total_col = get_column_letter(tq)
+    if get_column_letter(c0) != cfg.get("first_data_col", get_column_letter(c0)):
+        res.issues.append(f"template area columns start at {get_column_letter(c0)} (rule catalogue says {cfg['first_data_col']}) - "
+                          "header used")
     letters = area_columns(ws, header_row, c0)
     if not letters:
         raise ValueError("no area columns found after 'Total Quantity' in the template header")
@@ -141,8 +177,9 @@ def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: di
     for i, L in enumerate(letters):
         ws[f"{L}{header_row}"].value = area_label(*cols[i]) if i < len(cols) else None
 
+    fixed = [get_column_letter(c) for c in range(2, tq + 1)]  # part number .. Total Quantity: never written
     for r in range(header_row + 1, ws.max_row + 1):
-        for c in "BCDEFG":
+        for c in fixed:
             v = ws[f"{c}{r}"].value
             if v is not None:
                 res.template_snapshot[f"{c}{r}"] = v
@@ -208,6 +245,10 @@ def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: di
     _write_transport(wb, tk, cfg, cols, res)
     _write_jumpers(wb, tk, cfg, cols, res)
     _restore_validation(wb)
+    from .. import __version__
+    from ..inputs.detect import GENERATED_MARK
+
+    wb.properties.keywords = f"{GENERATED_MARK} {__version__}"  # a rerun never takes this file as a template or approved BOM
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out)
     return res

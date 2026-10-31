@@ -1,54 +1,55 @@
 # Progress and issues
 
-_Last updated: 2026-10-31, build 0.4.0_
+_Last updated: 2026-10-31, build 0.5.0_
 
 ## Working
 
-- **Self-service tool (0.4.0):**
-  - local app;
-  - `auto` and `batch` commands with content-based input detection;
-  - a deep check with an AutoCAD issue script;
-  - policies learned from approved BOMs.
-- Batch test: DMI-R15 plus NMK (four OLMs, auto-calibrated against the approved BOM), all workbooks OK.
-- The app was driven headless (AppTest) and in a real browser (Playwright), with no page errors.
-
-- End-to-end CLI: DWG (AutoCAD 2018 / AC1032 read natively via LibreDWG-WASM) or DXF, plus address lists, splice reports and the template, produces FINAL_BOM, BOM_AUDIT and BOM_DISCREPANCIES.
-- NMK-R02..R05 combined run: 142 s. DMI-R15 run: 95 s. Both exit 0 with no engine or workbook failures. Formulas were recalculated with LibreOffice and checked (no Excel errors; G = sum of the area columns; recalculated totals = engine totals).
-- Template fidelity: sheets, part numbers, descriptions, F/G formulas, comments, external links and conditional formatting are preserved. The B1 list validation is restored. Reference-job constants are cleared from the area columns.
+- **Self-service tool:** local app, `auto` and `batch` commands, deep check with an AutoCAD issue script, and policies learned from approved BOMs (0.4.0).
+- **0.5.0, forensic and review release:**
+  - **New rules:** ground wire kits from the template note, D basket = 0, and a second split ratio written.
+  - **New design checks:** ped size against cable, closure capacity, cross-network cables.
+  - All 19 findings of an independent code review are fixed or documented, each with a regression test.
+- **Per-OLM runs on a combined drawing** now give the same numbers as the combined run, cell for cell. They used to book neighbours' objects and the transport corridor to the job network.
+- **Template layout:** the area columns are found from the header, and a template is split into one BOM per OLM whenever its Transport BOM or Jumper Calculator can't hold more.
+- **Outputs:** every output is marked, so a rerun never treats the tool's own BOM as the approved BOM.
 
 ## NMK reconciliation (reference = manual Credit River BOM)
 
-| Measure | Result |
-|---|---|
-| Area cells compared | 360 |
-| Area cells matching | 292 |
-| Network totals matching | 156 / 180 |
+RECON_TABLE
 
-Lines reproducing all 8 Grant/Non-Grant cells: residential, commercial and MDU passings; Z-14 OLM ped; OLM bundle; XGS SFP+; 1x64 and 1x32 splitters; MDU enclosure; FOSC 450A/C/D; OLM power equipment; batteries; FC072, FC144 and zero-quantity cable sizes; Transport BOM; Jumper Calculator.
+## Critical unresolved issues (deliverable G), ranked by effect on BOM correctness
 
-Lines with exact network totals but a different Grant/Non-Grant split: MAX10 and MAX5 peds, vaults, 450B, FC048, FC096 and FC024 (R02/R03). The cause is objects or spans close to Non-Grant polygon edges. In R05 the shift is consistent across rows, which suggests the boundary changed after the manual BOM.
-
-## Remaining issues (ranked by effect on BOM correctness)
-
-1. **Drop footage:** now computed from the FX_DROPS lines. It needs FXAUTO run and saved in every network's drawing; R02/R04 in the combined file have no drops, so they're flagged.
-2. **Route / UG footage (rows 6-10): INFERRED.** The tool uses the trench route-footage labels. The reference uses a different method in each network (R04/R05 cable sums incl. slack; R02 ≈ route; R03 neither). *Decision needed:* which definition is approved.
-3. **Reference cable errors to confirm:** R04 has 5,187 ft moved from FC024 to FC048 against both the drawing and the splice reports. The 100 ft OLM tail is counted in R02/R03 but not in R04/R05.
-4. **Trays:** 6 of 7 network totals exact with pooled packages. **MAX10 +4:** need-based gives 0 (no ped feeds more than 2); the reference and template apply a blanket policy, so this needs SME confirmation.
-5. **Grant/Non-Grant split near boundaries.** Location-based classification is verified as the method, but a few items sit within a few feet of edges. *Need:* confirmation that the current DWG Non-Grant polygons are final (R05 especially).
-6. **SFP convention.** The reference rounds each area separately, giving 18 SFP for 15 PONs. The tool reproduces this and flags it.
-7. DMI-R15: 6 cable segments can't be routed because one end (DMI-14001G, DMI-16249G, 15222G, 15091G, 15029) has no splice symbol or splice report. Those segments are classified at their label point and flagged.
-8. DMI-R15: the drawing house counts (223) exceed the address list (222) because of a duplicate "2023 60TH" address block. The address list is used.
+1. **Route / UG footage split (rows 6–10).**
+   - Network totals follow CalcFTG.
+   - The reference Grant/Non-Grant split can't be reproduced by any geometric method (FORENSIC_FINDINGS F4).
+   - *Decision needed:* confirm the current Non-Grant polygons, especially R05, and which footage definition is approved.
+2. **MAX10 +4 upgrade kits.**
+   - The need-based count is 0; the reference applies a blanket policy (44 / 63).
+   - *Decision needed:* which policy applies (F7).
+3. **Ground wire kits.**
+   - Now written from the template note (NMK 321, DMI 126).
+   - *Confirm:* that new BOMs should order them; the Credit River BOM left the line blank. `ground_kits=not_ordered` restores the blank.
+4. **Hub closures over tray capacity.**
+   - NMK-02001G and 03001G need 6 D trays; the 2004 ordering guide gives 5 for a T3V closure.
+   - *Confirm:* the closure configuration, or the current CommScope limit (vendor site blocked here).
+5. **Reference cable errors to confirm:** R04 has 5,187 ft moved from FC024 to FC048, and the OLM tail is inconsistent (F8).
+6. **Grant/Non-Grant split near boundaries.**
+   - Items within a few feet of the Non-Grant edges.
+   - The R05 boundary probably changed after the manual BOM.
+7. **Drop footage** needs FXAUTO run and saved in every network's drawing; R02 and R04 in the combined file have no drops.
+8. **DMI-R15:**
+   - 6 cable segments have one end without a splice symbol or splice report, so they are classified at their label;
+   - there is a duplicate "2023 60TH" address block.
+9. **Learned-policy evidence** is keyed by project number and network names. Two projects with the same keys would overwrite each other's evidence (review finding 18, minor).
 
 ## Tests
 
-`python -m pytest -q` → 43 passed: unit, tooling (detection, policies, deep check, batch, app pages), integration on the real files, and an end-to-end CLI run. The integration tests need `FTTX_TEST_DATA` to be set.
-
-## Next priorities
-
-1. Get the drop-footage and route-footage definitions from engineering, then implement and verify them.
-2. Add tray rules once the engineer confirms the tray capacity and spare policy.
-3. Optional: a simple GUI or a Windows batch launcher.
+`python -m pytest -q` (with `FTTX_TEST_DATA`):
+- TEST_COUNT
+- unit, tooling, forensic-rule and review-regression tests;
+- integration on the real NMK / DMI files;
+- the end-to-end CLI run.
 
 ## Pending from the SME meeting
-- The marked-up template showing which cells to fill.
-- Grant address validation report: a separate deliverable, not built yet. Needs its template (see SME_MEETING_NOTES.md #13).
+
+- Grant address validation report: a separate deliverable, not built yet (SME_MEETING_NOTES.md #13).

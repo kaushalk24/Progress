@@ -85,10 +85,11 @@ def recalc_with_libreoffice(src: Path, workdir: Path) -> Path | None:
         return None
     workdir.mkdir(parents=True, exist_ok=True)
     profile = workdir / "lo_profile"
-    cmd = [soffice, f"-env:UserInstallation=file://{profile}", "--headless", "--calc", "--convert-to", "xlsx",
-           "--outdir", str(workdir), str(src)]
+    # absolute paths: a relative profile path makes a malformed file:// URL and soffice hangs
+    cmd = [soffice, f"-env:UserInstallation={profile.resolve().as_uri()}", "--headless", "--calc", "--convert-to", "xlsx",
+           "--outdir", str(workdir.resolve()), str(Path(src).resolve())]
     try:
-        subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     except subprocess.TimeoutExpired:
         return None
     out = workdir / src.name
@@ -107,8 +108,10 @@ def verify(res: WriteResult, expected: dict[tuple[str, str], float | None], work
     for coord, a in res.template_snapshot.items():
         if gs.get(coord) != a:
             struct_diff.append(f"{coord}: {a!r} -> {gs.get(coord)!r}")
+    fixed_cols = {c for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if "B" <= c <= res.total_col}
     for coord, b in gs.items():
-        if coord[0] in "BCDEFG" and coord not in res.template_snapshot and int(coord[1:]) > 5:
+        col = coord.rstrip("0123456789")
+        if col in fixed_cols and coord not in res.template_snapshot and int(coord[len(col):]) > 5:
             struct_diff.append(f"{coord}: None -> {b!r}")
     v.add("part numbers / descriptions / F-G formulas unchanged", not struct_diff, "; ".join(struct_diff[:10]) or "identical")
     misplaced = []
@@ -144,12 +147,14 @@ def verify(res: WriteResult, expected: dict[tuple[str, str], float | None], work
     ws = grid(vals[res.sheet])
     bad = []
     for key, r in res.rows.items():
-        g = ws.get(f"G{r}")
+        T = res.total_col
+        first = min(res.columns.values(), key=lambda L: (len(L), L)) if res.columns else ""
+        g = ws.get(f"{T}{r}")
         parts = [ws.get(f"{L}{r}") for L in res.columns.values()]
         s = sum(p for p in parts if isinstance(p, (int, float)))
-        formula = str(gs.get(f"G{r}") or "")
-        if formula.upper().startswith("=SUM(H") and isinstance(g, (int, float)) and abs(g - s) > 1e-6:
-            bad.append(f"G{r} {g} != sum {s}")
+        formula = str(gs.get(f"{T}{r}") or "")
+        if formula.upper().startswith(f"=SUM({first}") and isinstance(g, (int, float)) and abs(g - s) > 1e-6:
+            bad.append(f"{T}{r} {g} != sum {s}")
         v.recalc_values[key] = g
     v.add("Total Quantity column = sum of area columns", not bad, "; ".join(bad[:10]) or "ok")
     exp_bad = []
