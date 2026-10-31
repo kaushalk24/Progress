@@ -33,21 +33,18 @@ zip to a pre-release.
 
 1. Install Python 3.11 or newer from python.org (tick *Add Python to PATH*).
 2. Double-click **`FTTH Address List Tool.bat`**. On first use it installs `openpyxl`.
-3. In the window:
-   * **1 Inputs** – *Splice reports folder* (sub-folders per OLM are fine; include the hub report
-     of each OLM and as many downstream closure reports as possible), *Design drawing* (the
-     `.dwg` as exported – recommended), *Output folder*, *File name prefix* (e.g.
-     `123456_Example City ST`). *Scan reports* lists the OLMs; leave *All OLMs found* to
-     generate every OLM.
-   * **2 Options** – *Regional config*: pick a file from the `config` folder (e.g. *Desk study
-     acceptance*) or browse to one; the line below says what it does and which rules it accepts.
-     *Approved overrides*: the filled-in review worklist. *Completed workbooks to compare*: a
-     finished list, or a folder of them, to measure the result against.
-   * Hover over a field for help. The window remembers the last settings.
-4. Click **Generate address list(s)**. The *Results* tab shows each OLM (FINAL / DRAFT, row counts,
-   match with the completed list); its buttons open the workbook, the review worklist, the
-   exceptions and the reports to request. *Use worklist as overrides* puts the selected worklist in
-   the overrides field for the next run. The *Log* tab has the details.
+3. In the window (*Inputs*): *Splice reports folder* (sub-folders per OLM are fine; include the hub
+   report of each OLM and as many downstream closure reports as possible), *Design drawing* (the
+   `.dwg` as exported – recommended), *Output folder*, *File name prefix* (e.g.
+   `123456_Example City ST`). *Scan reports* lists the OLMs; leave *All OLMs found* to generate
+   every OLM. Hover over a field for help; the window remembers the last inputs. Pasted paths
+   may keep the quotes Windows adds ("Copy as path").
+4. Click **Generate address list(s)**. The *Results* tab shows each OLM (FINAL / DRAFT, row counts);
+   double-click a row, or use its buttons, to open the workbook, the review worklist, the
+   exceptions and the reports to request. The *Log* tab has the details.
+
+Regional configs, approved overrides and comparisons with completed lists are command-line options
+(`--config`, `--overrides`, `--reference`; see below). The window always uses the default settings.
 
 **Company logo:** put a square PNG named `logo.png` in the `assets` folder of the tool (next to the
 exe in the packaged program); it replaces the built-in logo in the window.

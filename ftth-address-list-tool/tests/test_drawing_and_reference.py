@@ -110,12 +110,3 @@ def test_reference_pack():
     if dwgs:
         assert agree >= 0.99 * compared
 
-
-def test_gui_config_picker():
-    pytest.importorskip("tkinter")
-    from ftth_addrlist.gui import DEFAULT_CONFIG_LABEL, config_description, regional_configs
-    cfgs = regional_configs()
-    assert cfgs[DEFAULT_CONFIG_LABEL] is None and "Desk study acceptance" in cfgs
-    text = config_description(cfgs["Desk study acceptance"])
-    assert "FS-DROP" in text and "FS-DRAWING" in text
-    assert "nothing is accepted" in config_description(None)

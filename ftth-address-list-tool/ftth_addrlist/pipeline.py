@@ -6,6 +6,7 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -47,15 +48,26 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def find_report_files(folder: Path) -> list[Path]:
+def find_report_files(folder: Path, exclude: Path | None = None) -> list[Path]:
+    """All .xlsx under `folder`, except Excel lock files and anything inside `exclude` (the output folder,
+    when it lies inside the report folder)."""
     if not folder.exists():
         raise InputError(f"Splice report folder not found: {folder}")
     if folder.is_file():
         return [folder]
-    files = sorted(p for p in folder.rglob("*.xlsx") if not p.name.startswith("~$"))
+    skip = exclude.resolve() if exclude is not None else None
+    files = sorted(p for p in folder.rglob("*.xlsx") if not p.name.startswith("~$") and
+                   not (skip is not None and skip in p.resolve().parents))
     if not files:
         raise InputError(f"No .xlsx splice reports found in {folder}")
     return files
+
+
+def safe_filename(name: str) -> str:
+    """A file name Windows accepts: characters < > : " / \\ | ? * and control characters become '-'."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", name).lstrip("_ ")
+    stem, dot, ext = name.rpartition(".")
+    return (stem.rstrip(" .") + dot + ext) if dot else name.rstrip(" .")
 
 
 def unique_path(path: Path) -> Path:
@@ -88,7 +100,7 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
         cfg["project"]["name_prefix"] = prefix
     reports = Path(reports)
     out_dir = Path(out_dir)
-    files = find_report_files(reports)
+    files = find_report_files(reports, exclude=out_dir)
     inputs_resolved = {p.resolve() for p in files}
     if out_dir.resolve() in {p.parent for p in inputs_resolved}:
         log("Note: output folder is an input folder; existing files are never overwritten.")
@@ -104,6 +116,9 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
         raise InputError("No OLM found: no splice report has a segment to an 'OLM Housing'. "
                          "Supply the hub closure report(s).")
     log(f"OLMs found: {', '.join(found) or 'none'}; generating: {', '.join(targets)}")
+    for o in targets:
+        if o not in found:
+            log(f"Note: {o} is not in these splice reports (OLMs found: {', '.join(found) or 'none'}) - check the name")
 
     ov_rows, ov_issues = ([], [])
     if overrides or cfg.get("overrides", {}).get("path"):
@@ -162,7 +177,7 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
             from .drawing import crosscheck
             cross, x_issues = crosscheck(res, inventory)
             res.issues += x_issues
-        name = cfg["project"]["output_filename"].format(prefix=cfg["project"]["name_prefix"], olm=olm).lstrip("_ ")
+        name = safe_filename(cfg["project"]["output_filename"].format(prefix=cfg["project"]["name_prefix"], olm=olm))
         out = out_dir / name
         if not res.is_final:
             out = out.with_name(out.stem + cfg["project"]["draft_suffix"] + out.suffix)
@@ -215,9 +230,10 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
         with open(unique_path(out_dir / f"{stem}_run_manifest.json"), "w", encoding="utf-8") as fh:
             json.dump(manifest, fh, indent=2, default=str)
         c = res.counts
-        log(f"{olm}: {'FINAL' if res.is_final else 'DRAFT (review required)'} - {len(res.rows)} rows: "
-            f"{c['CONFIRMED']} confirmed, {c['APPROVED']} approved, {c['PROVISIONAL']} provisional, "
-            f"{c['UNRESOLVED']} unresolved; {oc.errors} error(s). -> {oc.workbook.name if oc.workbook else 'no workbook'}")
+        if res.rows:
+            log(f"{olm}: {'FINAL' if res.is_final else 'DRAFT (review required)'} - {len(res.rows)} rows: "
+                f"{c['CONFIRMED']} confirmed, {c['APPROVED']} approved, {c['PROVISIONAL']} provisional, "
+                f"{c['UNRESOLVED']} unresolved; {oc.errors} error(s). -> {oc.workbook.name}")
         outcomes.append(oc)
         results.append(res)
     if comparisons:
@@ -245,7 +261,8 @@ def _relevant_issues(global_issues: list[Issue], res: OlmResult) -> list[Issue]:
     out = []
     for i in global_issues:
         src = (i.source or "").split(" row ")[0]
-        if not src or src in used or i.code in ("REPORT_UNREADABLE", "DUPLICATE_REPORT") or i.code.startswith("DRAWING"):
+        if not src or src in used or i.code in ("REPORT_UNREADABLE", "DUPLICATE_REPORT", "NOT_A_SPLICE_REPORT") or \
+                i.code.startswith("DRAWING"):
             out.append(i)
     return out
 

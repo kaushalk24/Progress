@@ -45,6 +45,7 @@ ACTIONS = {
     "GUIDE_DUPLICATE_FIBER": "Hand-made guide assigns one fibre twice; obtain the system report",
     "DUPLICATE_REPORT": "Remove the outdated duplicate report",
     "REPORT_UNREADABLE": "Re-export the report as .xlsx",
+    "NOT_A_SPLICE_REPORT": "Information only: an address list or earlier output in the report folder was ignored",
     "NO_HUB": "Supply the hub (splitter) closure report for this OLM",
     "PON_PORTS_FREE": "Information only",
     "FIBER_SPLICE_FROM_DRAWING": "Closure located from the design drawing; confirm with that closure's splice "

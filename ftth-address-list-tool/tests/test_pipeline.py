@@ -300,3 +300,22 @@ def test_leading_zeros_preserved(tmp_path):
     ws = openpyxl.load_workbook(outs[0].workbook).worksheets[0]
     vals = {c.value for r in ws.iter_rows(min_row=2) for c in r}
     assert "0012 A ST" in vals and "00777" in vals
+
+
+def test_address_lists_and_outputs_in_report_folder_are_ignored(net_dir, tmp_path):
+    # a completed list and an earlier output kept with the reports must not count as unreadable reports
+    out = net_dir / "out"
+    first = run(net_dir, out, log=lambda *_: None)[0]
+    shutil.copy(first.workbook, net_dir / "completed list.xlsx")
+    second = run(net_dir, out, log=lambda *_: None)[0]
+    assert second.errors == first.errors == 0
+    _, issues = load_reports(sorted(net_dir.glob("*.xlsx")), load_config())
+    assert any(i.code == "NOT_A_SPLICE_REPORT" and i.severity == "INFO" for i in issues)
+    assert not any(i.code == "REPORT_UNREADABLE" for i in issues)
+
+
+def test_output_file_names_are_valid_on_windows(net_dir, tmp_path):
+    from ftth_addrlist.pipeline import safe_filename
+    assert safe_filename('12/34: A<B>?_TST-R01_FTTH_Address List.xlsx') == "12-34- A-B--_TST-R01_FTTH_Address List.xlsx"
+    oc = run(net_dir, tmp_path / "out", prefix="12/34: X", log=lambda *_: None)[0]
+    assert oc.workbook.parent == tmp_path / "out" and ":" not in oc.workbook.name and "/" not in oc.workbook.name

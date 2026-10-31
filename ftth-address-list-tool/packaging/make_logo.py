@@ -10,31 +10,36 @@ S = 1024                      # drawn large, scaled down for smooth edges
 
 
 def draw() -> Image.Image:
+    """Map pin (the premise address) holding a short list in the fibre colour code (blue, orange, green):
+    an address list for fibre. Blue-to-teal tile."""
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    # rounded tile with a vertical navy gradient
     grad = Image.new("RGBA", (S, S))
-    gd = ImageDraw.Draw(grad)
+    gp = grad.load()
+    a, b = (11, 61, 145), (0, 150, 136)                 # deep blue -> teal, diagonal
     for y in range(S):
-        t = y / S
-        gd.line([(0, y), (S, y)], fill=(int(14 + 16 * t), int(42 + 30 * t), int(74 + 40 * t), 255))
+        for x in range(0, S, 4):
+            t = (x + y) / (2 * S)
+            c = tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3)) + (255,)
+            for k in range(4):
+                gp[x + k, y] = c
     mask = Image.new("L", (S, S), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, S - 1, S - 1], radius=210, fill=255)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, S - 1, S - 1], radius=220, fill=255)
     img.paste(grad, (0, 0), mask)
-    hub = (270, 512)
-    ends = [(800, 250), (840, 512), (800, 774)]
-    colours = [(30, 136, 229), (251, 140, 0), (67, 160, 71)]      # fibre colour code: blue, orange, green
-    for (ex, ey), col in zip(ends, colours):
-        # quadratic curve hub -> premise
-        cx, cy = (hub[0] + ex) / 2, ey
-        pts = [((1 - t) ** 2 * hub[0] + 2 * (1 - t) * t * cx + t * t * ex,
-                (1 - t) ** 2 * hub[1] + 2 * (1 - t) * t * cy + t * t * ey) for t in [i / 400 for i in range(401)]]
-        for x, y in pts:                      # round brush: an even stroke without joint artefacts
-            d.ellipse([x - 23, y - 23, x + 23, y + 23], fill=col + (255,))
-        d.ellipse([ex - 62, ey - 62, ex + 62, ey + 62], fill=(255, 255, 255, 255))
-        d.ellipse([ex - 30, ey - 30, ex + 30, ey + 30], fill=col + (255,))
-    d.ellipse([hub[0] - 120, hub[1] - 120, hub[0] + 120, hub[1] + 120], fill=(255, 255, 255, 255))
-    d.ellipse([hub[0] - 62, hub[1] - 62, hub[0] + 62, hub[1] + 62], fill=(14, 42, 74, 255))
+    d = ImageDraw.Draw(img)
+    # soft shadow under the pin
+    shadow = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).ellipse([352, 838, 672, 898], fill=(0, 0, 0, 70))
+    img.alpha_composite(shadow)
+    # pin: circle head + point
+    cx, cy, r = 512, 430, 300
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(255, 255, 255, 255))
+    d.polygon([(cx - 236, cy + 186), (cx + 236, cy + 186), (cx, 860)], fill=(255, 255, 255, 255))
+    # list inside the head: bullet + bar per fibre colour
+    colours = [(30, 136, 229), (251, 140, 0), (67, 160, 71)]
+    for i, col in enumerate(colours):
+        y = cy - 120 + i * 120
+        d.ellipse([cx - 175, y - 34, cx - 107, y + 34], fill=col + (255,))
+        d.rounded_rectangle([cx - 70, y - 30, cx + 185, y + 30], radius=30, fill=col + (255,))
     return img
 
 

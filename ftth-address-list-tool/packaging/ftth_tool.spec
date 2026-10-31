@@ -8,7 +8,8 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 HIDDEN = collect_submodules("ftth_addrlist")
-DATAS = collect_data_files("ftth_addrlist")          # built-in logo (ftth_addrlist/assets)
+DATAS = collect_data_files("ftth_addrlist") + [       # built-in logo; fallback copy of the default settings
+    (os.path.join(ROOT, "config", "default_config.toml"), "config")]
 ICON = os.path.join(SPECPATH, "app.ico")
 EXCLUDE = ["pytest", "numpy", "ezdxf", "matplotlib", "PIL", "IPython"]
 

@@ -16,6 +16,9 @@ except ModuleNotFoundError:  # pragma: no cover - older Python
 TOOL_ROOT = (Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
              else Path(__file__).resolve().parent.parent)
 DEFAULT_CONFIG = TOOL_ROOT / "config" / "default_config.toml"
+if not DEFAULT_CONFIG.exists() and getattr(sys, "_MEIPASS", None):
+    # packaged program whose config folder was not copied with it: use the copy built into the program
+    DEFAULT_CONFIG = Path(sys._MEIPASS) / "config" / "default_config.toml"
 
 
 class ConfigError(Exception):

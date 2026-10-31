@@ -1,8 +1,8 @@
 """Operator window (Tkinter, part of standard Python on Windows; bundled in the packaged program).
 
-Layout: header with logo - Inputs card - Options card (regional config, approved overrides, completed
-workbooks to compare) - action bar with progress - Results / Log tabs - status bar. The last used
-settings are remembered per user.
+Layout: header with logo - Inputs card - action bar with progress - Results / Log tabs - status bar.
+The last used inputs are remembered per user. Regional configs, approved overrides and comparisons
+with completed lists stay available on the command line (ftth_addrlist_cli.exe run --help).
 """
 
 from __future__ import annotations
@@ -23,12 +23,18 @@ from .config import TOOL_ROOT
 NAVY, NAVY_2, ACCENT, ACCENT_DARK = "#0E2A4A", "#173E66", "#1E88E5", "#1565C0"
 BG, CARD, TEXT, MUTED, BORDER = "#F3F5F8", "#FFFFFF", "#1F2933", "#66788A", "#D8DEE6"
 OK, WARN, BAD = "#2E7D32", "#B26A00", "#C62828"
-DEFAULT_CONFIG_LABEL = "Default settings (built-in)"
+ALL_OLMS = "All OLMs found"
+FIELDS = ("reports", "drawing", "out", "prefix", "olm")
 
 
 def _settings_path() -> Path:
     base = os.environ.get("APPDATA") or os.path.join(Path.home(), ".config")
     return Path(base) / "FTTH Address List Tool" / "settings.json"
+
+
+def clean_path(text: str) -> str:
+    """A path as typed or pasted: trims spaces and the quotes Windows 'Copy as path' adds."""
+    return text.strip().strip('"').strip("'").strip()
 
 
 def _open(path) -> None:
@@ -48,33 +54,6 @@ def _logo_file() -> Path | None:
         if p.exists():
             return p
     return None
-
-
-def regional_configs() -> dict[str, Path | None]:
-    """Display name -> config file, for the configs in <tool folder>/config (default first)."""
-    out: dict[str, Path | None] = {DEFAULT_CONFIG_LABEL: None}
-    folder = TOOL_ROOT / "config"
-    for p in sorted(folder.glob("*.toml")) if folder.exists() else []:
-        if p.name != "default_config.toml":
-            out[p.stem.replace("_", " ").capitalize()] = p
-    return out
-
-
-def config_description(path: Path | None) -> str:
-    """First comment line of a config file, plus the rules it accepts."""
-    if path is None:
-        return "Every inferred value is left for review (amber cells); nothing is accepted automatically."
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return "Configuration file cannot be read."
-    first = next((ln.lstrip("# ").strip() for ln in lines if ln.startswith("#") and ln.strip("# ").strip()), "")
-    try:
-        from .config import load_config
-        rules = load_config(path).get("approvals", {}).get("accepted_rules", [])
-    except Exception as exc:  # shown to the operator, never raised
-        return f"{first}  -  invalid configuration: {exc}"
-    return first + (f"  Accepts: {', '.join(rules)}." if rules else "")
 
 
 class Tooltip:
@@ -104,14 +83,12 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"FTTH Address List Generator {__version__}")
-        self.geometry("1040x740")
-        self.minsize(880, 640)
+        self.geometry("1000x620")
+        self.minsize(820, 540)
         self.configure(background=BG)
         self.q: queue.Queue = queue.Queue()
         self.outcomes: dict[str, object] = {}
-        self.vars = {k: tk.StringVar() for k in ("reports", "drawing", "out", "prefix", "olm", "config",
-                                                  "overrides", "reference")}
-        self.configs = regional_configs()
+        self.vars = {k: tk.StringVar() for k in FIELDS}
         self._ui_style()
         self._ui_icon()
         self._ui_header()
@@ -120,7 +97,6 @@ class App(tk.Tk):
         body = ttk.Frame(self, style="Body.TFrame", padding=(14, 10, 14, 4))
         body.pack(fill="both", expand=True)
         self._ui_inputs(body)
-        self._ui_options(body)
         self._ui_actions(body)
         self._ui_results(body)
         self._load_settings()
@@ -134,7 +110,7 @@ class App(tk.Tk):
         families = set(tkfont.families(self))
         base = next((f for f in ("Segoe UI", "Helvetica Neue", "DejaVu Sans") if f in families), "TkDefaultFont")
         self.fonts = {k: tkfont.Font(self, family=base, size=s, weight=w) for k, s, w in (
-            ("base", 10, "normal"), ("bold", 10, "bold"), ("title", 15, "bold"), ("sub", 9, "normal"),
+            ("base", 10, "normal"), ("bold", 10, "bold"), ("title", 16, "bold"),
             ("card", 11, "bold"), ("small", 9, "normal"), ("button", 11, "bold"))}
         self.option_add("*Font", self.fonts["base"])
         st = ttk.Style(self)
@@ -145,7 +121,6 @@ class App(tk.Tk):
         st.configure("Plain.TFrame", background=CARD, borderwidth=0)
         st.configure("Card.TLabel", background=CARD, foreground=TEXT)
         st.configure("CardTitle.TLabel", background=CARD, foreground=NAVY, font=self.fonts["card"])
-        st.configure("Hint.TLabel", background=CARD, foreground=MUTED, font=self.fonts["small"])
         st.configure("Status.TLabel", background="#E4E9EF", foreground=MUTED, font=self.fonts["small"])
         st.configure("TEntry", fieldbackground="#FFFFFF", bordercolor=BORDER, lightcolor=BORDER, padding=3)
         st.configure("TCombobox", fieldbackground="#FFFFFF", bordercolor=BORDER, padding=3)
@@ -161,7 +136,7 @@ class App(tk.Tk):
         st.configure("Treeview.Heading", font=self.fonts["bold"], background="#E9EEF4")
 
     def _ui_icon(self):
-        self.logo_small = self.logo = None
+        self.logo = None
         p = _logo_file()
         if p is None:
             return
@@ -177,29 +152,14 @@ class App(tk.Tk):
         bar = tk.Frame(self, background=NAVY, height=64)
         bar.pack(fill="x")
         if self.logo is not None:
-            tk.Label(bar, image=self.logo, background=NAVY).pack(side="left", padx=(16, 10), pady=8)
-        txt = tk.Frame(bar, background=NAVY)
-        txt.pack(side="left", pady=8, padx=(0 if self.logo else 16, 0))
-        tk.Label(txt, text="FTTH Address List Generator", font=self.fonts["title"], foreground="#FFFFFF",
-                 background=NAVY).pack(anchor="w")
-        tk.Label(txt, text="Splice reports + design drawing  →  OLM address-list workbooks",
-                 font=self.fonts["sub"], foreground="#B8C7D9", background=NAVY).pack(anchor="w")
+            tk.Label(bar, image=self.logo, background=NAVY).pack(side="left", padx=(16, 12), pady=10)
+        tk.Label(bar, text="FTTH Address List Generator", font=self.fonts["title"], foreground="#FFFFFF",
+                 background=NAVY).pack(side="left", pady=10, padx=(0 if self.logo else 16, 0))
         tk.Label(bar, text=f"v{__version__}", font=self.fonts["small"], foreground="#B8C7D9",
                  background=NAVY_2, padx=10, pady=3).pack(side="right", padx=18)
 
-    def _ui_card(self, parent, title: str, step: str):
-        outer = ttk.Frame(parent, style="Card.TFrame", padding=(14, 8, 14, 8))
-        outer.pack(fill="x", pady=(0, 8))
-        head = ttk.Frame(outer, style="Plain.TFrame", padding=0)
-        head.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 4))
-        tk.Label(head, text=step, background=ACCENT, foreground="#FFFFFF", font=self.fonts["bold"],
-                 width=2).pack(side="left", padx=(0, 8))
-        ttk.Label(head, text=title, style="CardTitle.TLabel").pack(side="left")
-        outer.columnconfigure(1, weight=1)
-        return outer
-
     def _ui_row(self, card, r, label, key, buttons=(), tip=None, required=False):
-        lab = ttk.Label(card, text=label + ("  *" if required else ""), style="Card.TLabel", width=30)
+        lab = ttk.Label(card, text=label + ("  *" if required else ""), style="Card.TLabel", width=24)
         lab.grid(row=r, column=0, sticky="w", pady=2)
         ent = ttk.Entry(card, textvariable=self.vars[key])
         ent.grid(row=r, column=1, sticky="we", pady=2, padx=(0, 6))
@@ -215,51 +175,29 @@ class App(tk.Tk):
             Tooltip(ent, tip)
         return ent
 
-    # ------------------------------------------------------------------ cards
+    # ------------------------------------------------------------------ layout
     def _ui_inputs(self, body):
-        c = self._ui_card(body, "Inputs", "1")
+        c = ttk.Frame(body, style="Card.TFrame", padding=(14, 8, 14, 10))
+        c.pack(fill="x", pady=(0, 8))
+        c.columnconfigure(1, weight=1)
+        ttk.Label(c, text="Inputs", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 4))
         self._ui_row(c, 1, "Splice reports folder", "reports", [("Browse…", lambda: self._ui_dir("reports"))],
-                  "Folder with the Splice Connections Reports (.xlsx). Sub-folders per OLM are fine. Include the "
-                  "hub report of every OLM and as many downstream closure reports as possible.", required=True)
+                     "Folder with the Splice Connections Reports (.xlsx). Sub-folders per OLM are fine. Include the "
+                     "hub report of every OLM and as many downstream closure reports as possible.", required=True)
         self._ui_row(c, 2, "Design drawing (.dwg)", "drawing",
-                  [("Browse…", lambda: self._ui_file("drawing", [("Drawings", "*.dwg *.dxf"), ("All", "*.*")]))],
-                  "Recommended. The region's DWG as exported (AutoCAD 2010-2018). Fills Fiber Splice where the "
-                  "reports stop. Run FXAUTO / FXMISSING first when drop lines are used.")
+                     [("Browse…", lambda: self._ui_file("drawing", [("Drawings", "*.dwg *.dxf"), ("All", "*.*")]))],
+                     "Recommended. The region's DWG as exported (AutoCAD 2010-2018). Fills Fiber Splice where the "
+                     "reports stop. Run FXAUTO / FXMISSING first when drop lines are used.")
         self._ui_row(c, 3, "Output folder", "out", [("Browse…", lambda: self._ui_dir("out"))],
-                  "Where the workbooks and reports are written. Existing files are never overwritten.",
-                  required=True)
+                     "Where the workbooks and reports are written. Existing files are never overwritten.",
+                     required=True)
         self._ui_row(c, 4, "File name prefix", "prefix", tip="Start of every output file name, e.g. "
-                  "123456_Example City ST")
+                     "123456_Example City ST")
         ttk.Label(c, text="OLM", style="Card.TLabel").grid(row=5, column=0, sticky="w", pady=2)
-        self.olm_box = ttk.Combobox(c, textvariable=self.vars["olm"], values=["All OLMs found"])
+        self.olm_box = ttk.Combobox(c, textvariable=self.vars["olm"], values=[ALL_OLMS])
         self.olm_box.grid(row=5, column=1, sticky="we", pady=2, padx=(0, 6))
         ttk.Button(c, text="Scan reports", command=self.scan).grid(row=5, column=2, sticky="w")
-        Tooltip(self.olm_box, "Leave 'All OLMs found' to generate every OLM, or Scan and pick one.")
-
-    def _ui_options(self, body):
-        c = self._ui_card(body, "Options", "2")
-        ttk.Label(c, text="Regional config", style="Card.TLabel", width=30).grid(row=1, column=0, sticky="w", pady=2)
-        self.cfg_box = ttk.Combobox(c, textvariable=self.vars["config"], values=list(self.configs))
-        self.cfg_box.grid(row=1, column=1, sticky="we", pady=2, padx=(0, 6))
-        self.cfg_box.bind("<<ComboboxSelected>>", lambda _: self._describe_config())
-        self.cfg_box.bind("<FocusOut>", lambda _: self._describe_config())
-        ttk.Button(c, text="Browse…", command=self._pick_config).grid(row=1, column=2, sticky="w", padx=(0, 4))
-        ttk.Button(c, text="Edit", command=lambda: _open(self._config_path())).grid(row=1, column=3, sticky="w")
-        self.cfg_hint = ttk.Label(c, text="", style="Hint.TLabel", wraplength=900, justify="left")
-        self.cfg_hint.grid(row=2, column=1, columnspan=3, sticky="w", pady=(0, 4))
-        c.bind("<Configure>", lambda e: self.cfg_hint.configure(wraplength=max(300, e.width - 330)))
-        Tooltip(self.cfg_box, "Regional conventions and the approvals policy. Files in the tool's config folder are "
-                              "listed; 'Desk study acceptance' accepts the evidence-based Fiber Splice rules.")
-        self._ui_row(c, 3, "Approved overrides (.csv)", "overrides",
-                  [("Browse…", lambda: self._ui_file("overrides", [("CSV", "*.csv"), ("All", "*.*")])),
-                   ("Clear", lambda: self.vars["overrides"].set(""))],
-                  "The review worklist from an earlier run, filled in (action ACCEPT or SET, value, approved_by, "
-                  "approved_on, reason). Approved cells are shown in blue as APPROVED.")
-        self._ui_row(c, 4, "Completed workbooks to compare", "reference",
-                  [("File…", lambda: self._ui_file("reference", [("Excel", "*.xlsx"), ("All", "*.*")])),
-                   ("Folder…", lambda: self._ui_dir("reference"))],
-                  "Optional. Manually completed address list(s) - a file, or a folder matched by OLM name. The run "
-                  "adds comparison_with_reference.xlsx and the match figures in the Results tab.")
+        Tooltip(self.olm_box, f"Leave '{ALL_OLMS}' to generate every OLM, or Scan and pick one.")
 
     def _ui_actions(self, body):
         bar = ttk.Frame(body, style="Body.TFrame")
@@ -267,8 +205,7 @@ class App(tk.Tk):
         self.run_btn = ttk.Button(bar, text="▶  Generate address list(s)", style="Accent.TButton",
                                   command=self.start)
         self.run_btn.pack(side="left")
-        ttk.Button(bar, text="Open output folder", command=lambda: _open(self.vars["out"].get())).pack(
-            side="left", padx=8)
+        ttk.Button(bar, text="Open output folder", command=self._open_out).pack(side="left", padx=8)
         self.progress = ttk.Progressbar(bar, mode="indeterminate", length=220)
         self.progress.pack(side="right")
         self.run_state = ttk.Label(bar, text="", foreground=MUTED, background=BG)
@@ -278,14 +215,13 @@ class App(tk.Tk):
         self.tabs = ttk.Notebook(body)
         self.tabs.pack(fill="both", expand=True)
         res = ttk.Frame(self.tabs, style="Card.TFrame", padding=8)
-        cols = ("olm", "result", "rows", "confirmed", "approved", "provisional", "unresolved", "match")
-        heads = ("OLM", "Result", "Rows", "Confirmed", "Approved", "Provisional", "Unresolved",
-                 "Match with completed list")
-        widths = (90, 190, 50, 92, 86, 98, 98, 275)
-        self.tree = ttk.Treeview(res, columns=cols, show="headings", height=3, selectmode="browse")
+        cols = ("olm", "result", "rows", "confirmed", "approved", "provisional", "unresolved")
+        heads = ("OLM", "Result", "Rows", "Confirmed", "Approved", "Provisional", "Unresolved")
+        widths = (120, 260, 80, 110, 110, 110, 110)
+        self.tree = ttk.Treeview(res, columns=cols, show="headings", height=4, selectmode="browse")
         for c, h, w in zip(cols, heads, widths):
             self.tree.heading(c, text=h)
-            self.tree.column(c, width=w, anchor="w" if c in ("olm", "result", "match") else "center")
+            self.tree.column(c, width=w, anchor="w" if c in ("olm", "result") else "center")
         self.tree.tag_configure("final", foreground=OK)
         self.tree.tag_configure("draft", foreground=WARN)
         self.tree.tag_configure("failed", foreground=BAD)
@@ -296,11 +232,6 @@ class App(tk.Tk):
         for text, what in (("Open workbook", "workbook"), ("Open review worklist", "worklist"),
                            ("Open exceptions", "exceptions_csv"), ("Reports to request", "reports_to_request")):
             ttk.Button(btns, text=text, command=lambda w=what: self._open_selected(w)).pack(side="left", padx=(0, 6))
-        use = ttk.Button(btns, text="Use worklist as overrides", command=self._use_worklist)
-        use.pack(side="left", padx=(12, 0))
-        Tooltip(use, "After filling in the review worklist (ACCEPT / SET + your name and date), select it as the "
-                     "overrides file and Generate again.")
-        Tooltip(self.tree, "Double-click a row to open its workbook.")
         log = ttk.Frame(self.tabs, padding=0)
         self.log = scrolledtext.ScrolledText(log, height=10, font=("Consolas", 9), background="#FBFCFD", wrap="word",
                                              foreground=TEXT, relief="flat", borderwidth=0)
@@ -309,36 +240,27 @@ class App(tk.Tk):
         self.tabs.add(log, text="Log")
 
     # ------------------------------------------------------------------ helpers
+    def _value(self, key) -> str:
+        return clean_path(self.vars[key].get())
+
     def _ui_dir(self, key):
-        p = filedialog.askdirectory(initialdir=self.vars[key].get() or None)
+        p = filedialog.askdirectory(initialdir=self._value(key) or None)
         if p:
             self.vars[key].set(p)
 
     def _ui_file(self, key, types):
-        cur = self.vars[key].get()
+        cur = self._value(key)
         p = filedialog.askopenfilename(filetypes=types, initialdir=(str(Path(cur).parent) if cur else None))
         if p:
             self.vars[key].set(p)
 
-    def _pick_config(self):
-        p = filedialog.askopenfilename(filetypes=[("Configuration", "*.toml")],
-                                       initialdir=str(TOOL_ROOT / "config"))
-        if p:
-            self.vars["config"].set(p)
-            self._describe_config()
-
-    def _config_path(self) -> Path | None:
-        v = self.vars["config"].get().strip()
-        if not v or v == DEFAULT_CONFIG_LABEL:
-            return None
-        return self.configs.get(v) or Path(v)
-
-    def _describe_config(self):
-        p = self._config_path()
-        if p is not None and not p.exists():
-            self.cfg_hint.configure(text=f"File not found: {p}", foreground=BAD)
-            return
-        self.cfg_hint.configure(text=config_description(p), foreground=MUTED)
+    def _open_out(self):
+        p = self._value("out")
+        if p and Path(p).exists():
+            _open(p)
+        else:
+            messagebox.showinfo("Output folder", "The output folder does not exist yet; it is created by the "
+                                                 "first run.")
 
     def say(self, text):
         self.q.put(("log", text))
@@ -360,14 +282,16 @@ class App(tk.Tk):
         from .network import Network
         from .pipeline import find_report_files
         from .splice_reports import load_reports
-        if not self.vars["reports"].get():
+        folder = self._value("reports")
+        if not folder:
             messagebox.showwarning("Splice reports", "Choose the splice-report folder first.")
             return
         try:
-            cfg = load_config(self._config_path())
-            reps, issues = load_reports(find_report_files(Path(self.vars["reports"].get())), cfg)
+            cfg = load_config()
+            out = self._value("out")
+            reps, issues = load_reports(find_report_files(Path(folder), exclude=Path(out) if out else None), cfg)
             olms = Network(reps, cfg).olms()
-            self.olm_box["values"] = ["All OLMs found"] + olms
+            self.olm_box["values"] = [ALL_OLMS] + olms
             self.say(f"Scan: {len(reps)} report(s) readable; OLMs: {', '.join(olms) or 'none found'}")
             for i in issues:
                 if i.severity == "ERROR":
@@ -376,22 +300,15 @@ class App(tk.Tk):
             messagebox.showerror("Scan failed", str(exc))
 
     def _ui_check(self) -> list[str]:
-        v = {k: x.get().strip() for k, x in self.vars.items()}
+        v = {k: self._value(k) for k in FIELDS}
         problems = []
         if not v["reports"] or not Path(v["reports"]).exists():
             problems.append("Splice reports folder: choose an existing folder.")
         if not v["out"]:
             problems.append("Output folder: choose where the results go.")
-        if v["drawing"] and (not Path(v["drawing"]).exists() or Path(v["drawing"]).suffix.lower() not in
+        if v["drawing"] and (not Path(v["drawing"]).is_file() or Path(v["drawing"]).suffix.lower() not in
                              (".dwg", ".dxf")):
             problems.append("Design drawing: the file does not exist or is not a .dwg / .dxf.")
-        cp = self._config_path()
-        if cp is not None and not cp.exists():
-            problems.append(f"Regional config: {cp} not found.")
-        if v["overrides"] and (not Path(v["overrides"]).exists() or not v["overrides"].lower().endswith(".csv")):
-            problems.append("Approved overrides: the .csv file does not exist.")
-        if v["reference"] and not Path(v["reference"]).exists():
-            problems.append("Completed workbooks: the file or folder does not exist.")
         return problems
 
     def start(self):
@@ -403,7 +320,7 @@ class App(tk.Tk):
         self.run_btn.state(["disabled"])
         self.progress.configure(mode="indeterminate", value=0)
         self.progress.start(12)
-        self.run_state.configure(text="Working…")
+        self.run_state.configure(text="Working…", foreground=MUTED)
         self.tree.delete(*self.tree.get_children())
         self.outcomes.clear()
         self.tabs.select(1)
@@ -411,11 +328,11 @@ class App(tk.Tk):
 
     def work(self):
         from .pipeline import run
-        v = {k: (x.get().strip() or None) for k, x in self.vars.items()}
-        olm = v["olm"] if v["olm"] and v["olm"] != "All OLMs found" else None
+        v = {k: (self._value(k) or None) for k in FIELDS}
+        olm = v["olm"] if v["olm"] and v["olm"] != ALL_OLMS else None
         try:
-            outs = run(v["reports"], v["out"], [olm] if olm else None, self._config_path(), v["overrides"],
-                       v["prefix"], v["reference"], v["drawing"], log=self.say)
+            outs = run(v["reports"], v["out"], [olm] if olm else None, None, None, v["prefix"], None, v["drawing"],
+                       log=self.say)
             self.q.put(("done", (outs, None)))
         except Exception as exc:
             self.q.put(("done", ([], exc)))
@@ -438,20 +355,13 @@ class App(tk.Tk):
                 result, tag = "✔ FINAL", "final"
             else:
                 result, tag = "DRAFT - review required", "draft"
-            match = ""
-            if o.comparison:
-                fs = o.comparison.get("field_stats", {})
-                good = sum(s.get("normalised", 0) for s in fs.values())
-                tot = sum(s.get("compared", 0) for s in fs.values())
-                match = (f"{o.comparison.get('matched')}/{o.comparison.get('ref_rows')} rows \u00b7 "
-                         f"{tot - good} cell(s) differ ({100 * good / tot:.1f} %)" if tot else "no rows compared")
             self.tree.insert("", "end", iid=o.olm, tags=(tag,), values=(
                 o.olm, result, sum(c.values()) if c else "", c.get("CONFIRMED", ""), c.get("APPROVED", ""),
-                c.get("PROVISIONAL", ""), c.get("UNRESOLVED", ""), match))
+                c.get("PROVISIONAL", ""), c.get("UNRESOLVED", "")))
         drafts = [o.olm for o in outs if not o.final]
         self.run_state.configure(text="Done" if not drafts else f"Done - {len(drafts)} draft(s)",
                                  foreground=OK if not drafts else WARN)
-        self.say("Done. " + ("All workbooks FINAL." if not drafts else
+        self.say("Done. Double-click a result row to open its workbook. " + ("All workbooks FINAL." if not drafts else
                              f"DRAFT (review required): {', '.join(drafts)} - see the Row Status and Exceptions sheets "
                              f"and the review worklist."))
         self.tabs.select(0)
@@ -474,13 +384,6 @@ class App(tk.Tk):
             else:
                 messagebox.showinfo("Results", "That file was not written for this OLM.")
 
-    def _use_worklist(self):
-        o = self._selected()
-        if o is not None and o.worklist:
-            self.vars["overrides"].set(str(o.worklist))
-            self.say(f"Overrides set to {o.worklist}. Fill in action / value / approved_by / approved_on / reason, "
-                     f"save, then Generate again.")
-
     # ------------------------------------------------------------------ settings
     def _load_settings(self):
         data = {}
@@ -488,22 +391,19 @@ class App(tk.Tk):
             data = json.loads(_settings_path().read_text(encoding="utf-8"))
         except (OSError, ValueError):
             pass
-        for k, var in self.vars.items():
+        for k in FIELDS:
             if isinstance(data.get(k), str):
-                var.set(data[k])
+                self.vars[k].set(data[k])
         if not self.vars["out"].get():
             self.vars["out"].set(str(Path.home() / "Documents" / "FTTH Address Lists"))
-        if not self.vars["config"].get():
-            self.vars["config"].set(DEFAULT_CONFIG_LABEL)
         if not self.vars["olm"].get():
-            self.vars["olm"].set("All OLMs found")
-        self._describe_config()
+            self.vars["olm"].set(ALL_OLMS)
 
     def _save_settings(self):
         try:
             p = _settings_path()
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps({k: v.get() for k, v in self.vars.items()}, indent=1), encoding="utf-8")
+            p.write_text(json.dumps({k: self.vars[k].get() for k in FIELDS}, indent=1), encoding="utf-8")
         except OSError:
             pass
 

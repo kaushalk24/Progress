@@ -67,6 +67,13 @@ def _int(v):
         return None
 
 
+class NotAReport(ReportError):
+    """The workbook is an address list or another output of this tool, not a splice report."""
+
+
+OUTPUT_SHEETS = {"Row Status", "Field Evidence", "Run Info", "Difference classes", "Field differences"}
+
+
 def read_report(path: str | Path, cfg: dict) -> SpliceReport:
     path = Path(path)
     try:
@@ -74,11 +81,16 @@ def read_report(path: str | Path, cfg: dict) -> SpliceReport:
     except Exception as exc:  # corrupt / not xlsx
         raise ReportError(f"{path.name}: cannot be opened as an Excel workbook ({exc})") from exc
     try:
+        sheets = set(wb.sheetnames)
         ws = wb.worksheets[0]
         rows = [list(r) for r in ws.iter_rows(values_only=True)]
     finally:
         wb.close()
     first = [str(_clean(v) or "") for v in (rows[0] if rows else [])]
+    head = {str(_clean(v) or "").upper() for r in rows[:3] for v in r}
+    if sheets & OUTPUT_SHEETS or {"PON NAME", "FIBER #"} <= head:
+        raise NotAReport(f"{path.name}: an address-list workbook (or another output of this tool), not a splice "
+                         f"report - skipped")
     if any(c == "Splice Connections Report" for c in first):
         return _read_connections_report(path, rows, cfg)
     if any(c == "Fiber Optic Splice Guide" for c in first):
@@ -305,6 +317,9 @@ def load_reports(paths, cfg: dict):
     for p in paths:
         try:
             rep = read_report(p, cfg)
+        except NotAReport as exc:   # completed lists / earlier outputs kept with the reports: ignored, not an error
+            issues.append(Issue("INFO", "NOT_A_SPLICE_REPORT", str(exc), source=Path(p).name))
+            continue
         except ReportError as exc:
             issues.append(Issue("ERROR", "REPORT_UNREADABLE", str(exc), source=Path(p).name))
             continue
