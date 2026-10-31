@@ -1,3 +1,5 @@
 openpyxl>=3.1
-ezdxf>=1.3   # DXF input (optional when only DWG is used)
-pytest>=8   # tests
+ezdxf>=1.3        # DXF input (optional when only DWG is used)
+streamlit==1.65.0 # local app
+pandas>=2.0       # app tables
+pytest>=8         # tests

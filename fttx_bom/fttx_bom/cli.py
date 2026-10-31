@@ -1,30 +1,21 @@
 """Command line entry point.
 
-Example:
-  python -m fttx_bom --dwg design.dwg --address-list "Address List/" \
-      --splice-reports "Splice Reports/" --template BOM_template.xlsx --out out/ \
-      [--reference completed_BOM.xlsx]
+  python -m fttx_bom auto  <files/folders/zips ...> --out OUT          everything auto-detected
+  python -m fttx_bom batch <jobs folder> --out OUT [--template T]      one sub-folder per network/job
+  python -m fttx_bom run   --dwg D --address-list A --splice-reports S --template T --out OUT
+  python -m fttx_bom app                                               local browser app
+(`python -m fttx_bom --dwg ...` without a sub-command means `run`.)
 """
 from __future__ import annotations
 
 import argparse
-import datetime as dt
-import json
-import re
+import subprocess
 import sys
-import time
 from pathlib import Path
 
 from . import __version__
-from .engine.network import build_classifier
-from .engine.rules import CONFIG_DIR, load_rules
-from .engine.takeoff import build_takeoff
-from .excel.reports import compare, read_reference, write_audit, write_discrepancies
-from .excel.verify import verify
-from .excel.writer import template_area_count, write_bom
-from .extract.backends import ExtractionError, load_drawing
-from .inputs.address_list import read_address_lists
-from .inputs.splice_reports import read_splice_reports
+from .extract.backends import ExtractionError
+from .pipeline import JobParams, JobResult, project_from_filename, run_job  # noqa: F401 (re-exported)
 
 
 def _expand(paths: list[str], suffixes: tuple[str, ...]) -> list[Path]:
@@ -40,151 +31,111 @@ def _expand(paths: list[str], suffixes: tuple[str, ...]) -> list[Path]:
     return out
 
 
-def project_from_filename(name: str) -> dict:
-    stem = re.sub(r"^[0-9a-f]{8}-", "", Path(name).stem)
-    m = re.match(r"^(\d{4,})_(.+)$", stem)
-    if not m:
-        return {"number": "", "name": stem}
-    number, rest = m.group(1), m.group(2)
-    words = []
-    for w in rest.split("_"):
-        if w.upper() in ("FTTH", "FTTX", "BEAD", "DWG", "COMBINED") or re.match(r"^[A-Z]{2,5}-R\d{2}$", w):
-            break
-        words.append(w)
-    if len(words) >= 2 and re.fullmatch(r"[A-Z]{2}", words[-1]):
-        return {"number": number, "name": " ".join(words[:-1]) + ", " + words[-1]}
-    return {"number": number, "name": " ".join(words)}
+def report(res: JobResult) -> None:
+    if res.calibration:
+        print("calibration (cells matched per policy option vs the approved BOM):")
+        for r in res.calibration:
+            print(f"  {r['policy']:15s} {r['option']:15s} {r['matched']:>3}/{r['cells']:<3} "
+                  f"{'BEST' if r['best'] else '    '} {'in use' if r['selected'] else ''}")
+    for g in res.groups:
+        print(f"FINAL BOM : {g.bom}")
+        print(f"AUDIT     : {g.audit}")
+        if g.discrepancies:
+            print(f"DISCREP.  : {g.discrepancies}")
+            print(f"reference : area cells {g.ref_cells[0]}/{g.ref_cells[1]} match, network totals {g.ref_totals[0]}/{g.ref_totals[1]} match")
+        print("coverage  : " + ", ".join(f"{k}={v}" for k, v in sorted(g.coverage.items())))
+        sev = {s: sum(1 for i in g.issues if i.severity == s) for s in ("ERROR", "WARN", "INFO")}
+        print(f"deep check: ERROR={sev['ERROR']} WARN={sev['WARN']} INFO={sev['INFO']}  "
+              f"(list: {g.issues_csv.name}; AutoCAD: SCRIPT {g.issues_scr.name} circles each located issue)")
+        for i in g.issues:
+            if i.severity == "ERROR":
+                print(f"  ERROR {i.code} {i.network}: {i.message[:160]}")
+        print(f"workbook  : FAIL={len(g.workbook_failures)} (recalculated={'yes' if g.recalculated else 'NO'})")
+        for c in g.workbook_failures:
+            print(f"  FAIL {c[0]}: {c[2]}")
+    print(f"policies  : {', '.join(f'{k}={v}' for k, v in res.policies_used.items())}")
+    print(f"elapsed   : {res.elapsed:.1f}s")
 
 
-def run(args) -> int:
-    t0 = time.time()
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-    conv = json.loads((Path(args.conventions) if args.conventions else CONFIG_DIR / "conventions.json").read_text())
-    cfg, rules = load_rules(args.rules)
-
-    template = Path(args.template)
-    if not template.exists():
-        raise FileNotFoundError(f"template not found: {template}")
-    al_files = _expand(args.address_list, (".xlsx",))
-    address_lists = read_address_lists(al_files) if al_files else {}
-    reports = read_splice_reports(_expand(args.splice_reports, (".xlsx",))) if args.splice_reports else []
-    networks = [n.strip() for n in args.networks.split(",")] if args.networks else sorted(address_lists)
-    if not networks:
-        raise SystemExit("no networks: supply address lists or --networks")
-    for n in networks:
-        if n not in address_lists:
-            print(f"WARNING: no address list for {n}", file=sys.stderr)
-
-    drawing = load_drawing(args.dwg, Path(args.cache) if args.cache else out / ".cache")
-    cls = build_classifier(drawing, conv, networks)
-    tk = build_takeoff(drawing, conv, cls, networks, address_lists, reports)
-
-    proj = project_from_filename(Path(args.dwg).name)
-    project = {"name": args.project_name or proj["name"], "number": args.project_number or proj["number"], "system": args.system or ""}
-    n_area = template_area_count(template, cfg["sheet"])
-    if len(networks) * 2 <= n_area:
-        groups = [networks]
-    else:
-        print(f"template has {n_area} area columns: writing one BOM per OLM ({len(networks)} files)")
-        groups = [[n] for n in networks]
-    ref = read_reference(Path(args.reference), cfg["sheet"], rules) if args.reference else None
-    worst = 0
-    for group in groups:
-        worst = max(worst, _write_group(args, group, tk.subset(group), drawing, cls, reports, al_files, template,
-                                        rules, cfg, project, out, ref))
-    print(f"elapsed   : {time.time() - t0:.1f}s")
-    return worst
+def _common(p):
+    p.add_argument("--out", required=True, help="output folder")
+    p.add_argument("--project-name")
+    p.add_argument("--project-number")
+    p.add_argument("--system", default="", help="e.g. 'Capital West' (template B1 list)")
+    p.add_argument("--policies", help="policy selection JSON (default config/policies.json)")
+    p.add_argument("--learn", action="store_true", help="with an approved BOM as reference: learn the best policy options")
+    p.add_argument("--no-recalc", action="store_true", help="skip LibreOffice formula recalculation")
+    p.add_argument("--cache", help="DWG conversion cache folder")
 
 
-def _write_group(args, networks, tk, drawing, cls, reports, al_files, template, rules, cfg, project, out, ref) -> int:
-    tag = networks[0] if len(networks) == 1 else networks[0] + "".join("-" + n.split("-")[-1] for n in networks[1:])
-    prefix = f"{project['number']}_{tag}" if project["number"] else tag
-    bom_path = out / f"{prefix}_FINAL_BOM.xlsx"
-    res = write_bom(template, bom_path, tk, rules, cfg, project)
-
-    expected = {}
-    for rule in rules:
-        if rule.write and rule.key in res.rule_values:
-            vals = [v for v, _n in res.rule_values[rule.key].values() if v is not None]
-            expected[(rule.key,)] = sum(vals) if vals else None
-    ver = verify(res, expected, out / ".work", recalc=not args.no_recalc)
-
-    comp = None
-    if ref is not None:
-        comp = compare(rules, res, ref, tk)
-        write_discrepancies(out / f"{prefix}_BOM_DISCREPANCIES.xlsx", comp, ref, tk)
-
-    meta = {
-        "Generated": dt.datetime.now().isoformat(timespec="seconds"),
-        "Tool version": __version__,
-        "Drawing": str(args.dwg),
-        "CAD backend": drawing.backend,
-        "Drawing units (INSUNITS)": drawing.header.get("INSUNITS"),
-        "CAD reader warnings": "; ".join(drawing.warnings) or "none",
-        "Address lists": ", ".join(str(p) for p in al_files) or "none",
-        "Splice reports": f"{len(reports)} files",
-        "Template": str(template),
-        "Template area columns": ", ".join(res.columns.values()),
-        "Template formulas repaired": "; ".join(res.formula_repairs) or "none",
-        "Template formulas replaced by computed values": "; ".join(res.formulas_replaced) or "none",
-        "Reference BOM": args.reference or "none (no independent reference - quantities are internally checked only)",
-        "Networks": ", ".join(networks),
-        "Network boundaries found": ", ".join(cls.networks) or "single-network drawing",
-        "Non-Grant polygons": len(cls.nongrant),
-        "Cable segments": len(tk.cables),
-        "Writer issues": "; ".join(res.issues) or "none",
-        "Reference constants cleared from template": len(res.cleared),
-    }
-    summary = write_audit(out / f"{prefix}_BOM_AUDIT.xlsx", tk, rules, res, ver,
-                          meta | {"_census": dict(drawing.census), "_block_census": drawing.block_census},
-                          cls, reports, ref, comp, res.template_rows)
-
-    print(f"FINAL BOM : {bom_path}")
-    print(f"AUDIT     : {out / f'{prefix}_BOM_AUDIT.xlsx'}")
-    if comp is not None:
-        cells = [x for x in comp if x["area"] != "TOTAL"]
-        tots = [x for x in comp if x["area"] == "TOTAL"]
-        print(f"DISCREP.  : {out / f'{prefix}_BOM_DISCREPANCIES.xlsx'}")
-        print(f"reference : area cells {sum(x['status'] == 'MATCH' for x in cells)}/{len(cells)} match, "
-              f"network totals {sum(x['status'] == 'MATCH' for x in tots)}/{len(tots)} match")
-    if res.formula_repairs:
-        print(f"template  : {len(res.formula_repairs)} inconsistent template formulas repaired (see audit)")
-    print("coverage  : " + ", ".join(f"{k}={v}" for k, v in sorted(summary["coverage"].items())))
-    nfail = sum(1 for c in tk.checks if c.status == "FAIL")
-    print(f"checks    : engine FAIL={nfail} WARN={sum(1 for c in tk.checks if c.status == 'WARN')}; "
-          f"workbook FAIL={len(ver.failed)} (recalculated={'yes' if ver.recalculated else 'NO'})")
-    for c in tk.checks:
-        if c.status == "FAIL":
-            print(f"  FAIL {c.name}: {c.detail}")
-    for c in ver.failed:
-        print(f"  FAIL {c[0]}: {c[2]}")
-    return 1 if ver.failed else 0
+def _kw(a) -> dict:
+    return dict(project_name=a.project_name, project_number=a.project_number, system=a.system or "",
+                policies=Path(a.policies) if a.policies else None, learn=a.learn, recalc=not a.no_recalc,
+                cache=Path(a.cache) if a.cache else None)
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="fttx_bom", description="FTTx BOM automation: DWG + address list + splice reports -> BOM")
-    p.add_argument("--dwg", required=True, help="design drawing (.dwg, .dxf, or converter .json)")
-    p.add_argument("--address-list", nargs="*", default=[], help="address list .xlsx files or folders")
-    p.add_argument("--splice-reports", nargs="*", default=[], help="splice report .xlsx files or folders")
-    p.add_argument("--template", required=True, help="approved BOM template workbook")
-    p.add_argument("--out", required=True, help="output folder")
-    p.add_argument("--reference", help="completed BOM to reconcile against (optional)")
-    p.add_argument("--networks", help="comma separated network names (default: address-list sheet names)")
-    p.add_argument("--project-name")
-    p.add_argument("--project-number")
-    p.add_argument("--system", help="e.g. 'Capital West' (template B1 list)")
-    p.add_argument("--rules", help="alternative rule catalogue JSON")
-    p.add_argument("--conventions", help="alternative CAD conventions JSON")
-    p.add_argument("--cache", help="DWG conversion cache folder")
-    p.add_argument("--no-recalc", action="store_true", help="skip LibreOffice formula recalculation")
-    p.add_argument("--version", action="version", version=__version__)
-    args = p.parse_args(argv)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0].startswith("-") and argv[0] not in ("-h", "--help", "--version"):
+        argv = ["run"] + argv
+    ap = argparse.ArgumentParser(prog="fttx_bom", description="FTTx BOM automation: DWG + address list + splice reports -> BOM")
+    ap.add_argument("--version", action="version", version=__version__)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("run", help="explicit inputs")
+    r.add_argument("--dwg", required=True, help="design drawing (.dwg, .dxf, or converter .json)")
+    r.add_argument("--address-list", nargs="*", default=[], help="address list .xlsx files or folders")
+    r.add_argument("--splice-reports", nargs="*", default=[], help="splice report .xlsx files or folders")
+    r.add_argument("--template", required=True, help="approved BOM template workbook")
+    r.add_argument("--reference", help="completed BOM to reconcile against (optional)")
+    r.add_argument("--networks", help="comma separated network names (default: address-list sheet names)")
+    r.add_argument("--rules", help="alternative rule catalogue JSON")
+    r.add_argument("--conventions", help="alternative CAD conventions JSON")
+    _common(r)
+
+    a = sub.add_parser("auto", help="give files/folders/zips; roles are detected from content")
+    a.add_argument("paths", nargs="+")
+    a.add_argument("--template", help="force a template (else detected)")
+    a.add_argument("--reference", help="force a reference BOM (else a detected completed BOM)")
+    _common(a)
+
+    b = sub.add_parser("batch", help="run every job sub-folder of a folder")
+    b.add_argument("root")
+    b.add_argument("--template", help="template used when a job folder has none")
+    _common(b)
+
+    sub.add_parser("app", help="start the local browser app")
+    args = ap.parse_args(argv)
     try:
-        return run(args)
+        if args.cmd == "app":
+            app = Path(__file__).resolve().parents[1] / "app" / "bom_app.py"
+            return subprocess.call([sys.executable, "-m", "streamlit", "run", str(app), "--server.maxUploadSize=4096",
+                                    "--browser.gatherUsageStats=false"])
+        if args.cmd == "run":
+            p = JobParams(dwg=Path(args.dwg), address_lists=_expand(args.address_list, (".xlsx",)),
+                          splice_reports=_expand(args.splice_reports, (".xlsx",)), template=Path(args.template),
+                          out=Path(args.out), reference=Path(args.reference) if args.reference else None,
+                          networks=[n.strip() for n in args.networks.split(",")] if args.networks else None,
+                          rules=Path(args.rules) if args.rules else None,
+                          conventions=Path(args.conventions) if args.conventions else None, **_kw(args))
+            res = run_job(p)
+            report(res)
+            return res.exit_code
+        from .jobs import run_auto, run_batch
+
+        if args.cmd == "auto":
+            res, _notes = run_auto([Path(x) for x in args.paths], Path(args.out),
+                                   template=Path(args.template) if args.template else None,
+                                   reference=Path(args.reference) if args.reference else None, **_kw(args))
+            report(res)
+            return res.exit_code
+        if args.cmd == "batch":
+            run_batch(Path(args.root), Path(args.out), template=Path(args.template) if args.template else None, **_kw(args))
+            return 0
     except (ExtractionError, FileNotFoundError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
+    return 0
 
 
 if __name__ == "__main__":

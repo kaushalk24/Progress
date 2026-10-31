@@ -1,8 +1,16 @@
 # Progress and issues
 
-_Last updated: 2026-10-30, build 0.1.0_
+_Last updated: 2026-10-31, build 0.4.0_
 
 ## Working
+
+- **Self-service tool (0.4.0):**
+  - local app;
+  - `auto` and `batch` commands with content-based input detection;
+  - a deep check with an AutoCAD issue script;
+  - policies learned from approved BOMs.
+- Batch test: DMI-R15 plus NMK (four OLMs, auto-calibrated against the approved BOM), all workbooks OK.
+- The app was driven headless (AppTest) and in a real browser (Playwright), with no page errors.
 
 - End-to-end CLI: DWG (AutoCAD 2018 / AC1032 read natively via LibreDWG-WASM) or DXF, plus address lists, splice reports and the template, produces FINAL_BOM, BOM_AUDIT and BOM_DISCREPANCIES.
 - NMK-R02..R05 combined run: 142 s. DMI-R15 run: 95 s. Both exit 0 with no engine or workbook failures. Formulas were recalculated with LibreOffice and checked (no Excel errors; G = sum of the area columns; recalculated totals = engine totals).
@@ -33,7 +41,7 @@ Lines with exact network totals but a different Grant/Non-Grant split: MAX10 and
 
 ## Tests
 
-`python -m pytest -q` → 25 passed (12 unit, 12 integration on the real files, 1 end-to-end CLI on DMI-R15). The integration tests need `FTTX_TEST_DATA` to be set.
+`python -m pytest -q` → 43 passed: unit, tooling (detection, policies, deep check, batch, app pages), integration on the real files, and an end-to-end CLI run. The integration tests need `FTTX_TEST_DATA` to be set.
 
 ## Next priorities
 

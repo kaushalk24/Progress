@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0 - self-service tool: app, auto-detect, batch, deep check, learned policies
+- **App** (`python -m fttx_bom app` / `windows\run_app.bat`): a local browser UI to upload or point at files, run, see the issue table and download all outputs. Also batch runs, a BOM guide (how every line is calculated) and a policy editor.
+- **Auto-detection** (`auto` command): classifies DWG/DXF, address lists, both splice-report layouts, blank templates and completed BOMs by content. Zips are extracted safely, including nested ones (zip-slip blocked).
+- **Batch** (`batch` command): one job per sub-folder, with `BATCH_SUMMARY.xlsx`.
+- **Deep check**: about 40 checks with severity, affected BOM lines, fix instructions and coordinates. Results go to the `Deep Check` audit sheet, `*_ISSUES.csv` and `*_ISSUES.scr` (an AutoCAD script that circles each issue with object snaps off).
+- **Policies**: every open convention is computed every way. With an approved BOM, each option is scored per cell; `--learn` stores the evidence in `config/policies.json` and selects the best. On a tie, the documented SME / AutoCAD-routine method wins over the lower total error. The Credit River calibration confirms all current defaults.
+- **Splice Guide report layout** ("Fiber Optic Splice Guide") is parsed. Before this, three NMK-R03 reports were read as blank enclosures with 0 splices.
+- `pipeline.run_job()` is shared by the CLI, batch and the app. The CLI has `run` / `auto` / `batch` / `app` sub-commands; the old flag form still works.
+
+### Bugs found by the new self-tests (each has a regression test)
+- A new cable dataclass field shifted positional arguments, so a report-only cable got text in `path_ft`. All constructor calls now use keywords.
+- The app's issue table needed `jinja2` (not installed with Streamlit), so the results page crashed. It now uses plain markers.
+- The batch summary showed job-wide issue totals on every OLM row. It now counts per BOM.
+- Deprecated Streamlit `use_container_width` replaced with `width="stretch"`.
+
 ## 0.3.0 - FX_DROPS / CalcFTG routines, blank per-OLM template
 - **Drop footage** (row 11) now computed from the FX_DROPS lines on `RTE_SpatialNet_UGDROP` (ped edge to address PED, CX1-FTG-N2 length). Each drop follows the address it serves. The row carries Non-Grant drops only, matching the reference "total - grant"; grant drops are shown in the audit. If a network has no drop lines, the row is left blank with a "run FXAUTO" warning. NMK-R03 Non-Grant 52,752 vs reference 52,678 (0.14%); DMI-R15 222 drops = 222 passings, 36,117 ft = label sum.
 - **Splice trays**: trays per location ROUNDUP(splices/48 or /24), then 2-tray packages pooled per column. Reproduces the reference 450D R02 4 / R04 4 / R05 5 and 450B 1/1/2 (R03 5 vs 4).

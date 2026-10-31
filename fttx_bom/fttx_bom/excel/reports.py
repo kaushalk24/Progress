@@ -153,7 +153,7 @@ def template_material_rows(ws) -> list[tuple[int, str, str]]:
 
 
 def write_audit(path: Path, tk: Takeoff, rules: list[Rule], res: WriteResult, verification, meta: dict,
-                cls, reports, ref: Reference | None, comp: list[dict] | None, template_rows) -> dict:
+                cls, reports, ref: Reference | None, comp: list[dict] | None, template_rows, issues=None) -> dict:
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     cov, ndisc = coverage(template_rows, rules, res, comp)
@@ -172,10 +172,23 @@ def write_audit(path: Path, tk: Takeoff, rules: list[Rule], res: WriteResult, ve
     ws.append(["Failed engine checks", sum(1 for c in tk.checks if c.status == "FAIL")])
     ws.append(["Failed workbook verification checks", sum(1 for c in verification.checks if c[1] == "FAIL")])
     ws.append(["Formulas recalculated (LibreOffice)", "yes" if verification.recalculated else "NO - not verified"])
+    sev = Counter(i.severity for i in (issues or []))
+    ws.append(["Deep check: ERROR / WARN / INFO", f"{sev.get('ERROR', 0)} / {sev.get('WARN', 0)} / {sev.get('INFO', 0)} (see 'Deep Check' sheet)"])
+    ws.append(["Policies in use", ", ".join(f"{k}={v}" for k, v in tk.policy_used.items())])
     ws.append([])
     ws.append(["Status meanings", "VERIFIED = reproduces the NMK reference from independent sources; VERIFIED_TOTAL = network totals verified, "
                "Grant/Non-Grant split inferred; INFERRED = defensible rule, not proven against an approved BOM; UNRESOLVED / NOT_DETECTED = "
                "left blank in the BOM, engineer must supply; SUGGESTED = audit only. A passed software test does not prove an engineering quantity."])
+
+    issues = issues or []
+    ws = _sheet(wb, "Deep Check", ["#", "Severity", "Category", "Code", "Network", "Problem", "BOM lines affected", "How to fix", "X", "Y"],
+                {3: 14, 4: 24, 6: 90, 7: 30, 8: 70})
+    sev_fill = {"ERROR": FILLS["FAIL"], "WARN": FILLS["WARN"], "INFO": PatternFill("solid", fgColor="DDEBF7")}
+    for k, i in enumerate(issues, 1):
+        ws.append([k, i.severity, i.category, i.code, i.network, i.message, i.affects, i.fix,
+                   round(i.x, 2) if i.x is not None else None, round(i.y, 2) if i.y is not None else None])
+        ws.cell(ws.max_row, 2).fill = sev_fill.get(i.severity, FILLS["WARN"])
+    ws.auto_filter.ref = f"A1:J{max(2, ws.max_row)}"
 
     cols = tk.columns
     ws = _sheet(wb, "BOM Lines", ["Row", "Part Number", "Description", "Status", "Written to BOM", "Rule / basis", "Source"]
@@ -194,8 +207,27 @@ def write_audit(path: Path, tk: Takeoff, rules: list[Rule], res: WriteResult, ve
         ws.append(line + [_fmt(x) for x in nums] + [_fmt(tot), "; ".join(notes)])
         ws.cell(ws.max_row, 4).fill = FILLS["PASS"] if rule.status.startswith("VERIFIED") else FILLS["WARN"]
 
+    from ..engine.policies import POLICIES
+
+    ws = _sheet(wb, "Policies", ["Policy", "Decides", "Option", "In use", "Description", "Total (all columns)"]
+                + [f"{n} {a}" for n, a in cols] + ["Approved-BOM cells matched"], {1: 16, 2: 30, 3: 16, 5: 70})
+    calib = {(r["policy"], r["option"]): r for r in (tk.extra.get("calibration") or [])}
+    for p in POLICIES:
+        keys = sorted({k.split("@")[0] for k, _n, _a in tk.q if "@" in k and p.owns(k.split("@")[0])})
+        for opt, desc in p.options.items():
+            for key in keys:
+                vals = [tk.get(f"{key}@{opt}", n, a) for n, a in cols]
+                tot = sum(v for v in vals if v is not None) if any(v is not None for v in vals) else None
+                c = calib.get((p.name, opt))
+                ws.append([p.name, f"{p.title} ({key})", opt, "YES" if tk.policy_used.get(p.name) == opt else "",
+                           desc, _fmt(tot)] + [_fmt(v) for v in vals] + [f"{c['matched']}/{c['cells']}" if c else ""])
+                if tk.policy_used.get(p.name) == opt:
+                    ws.cell(ws.max_row, 4).fill = FILLS["PASS"]
+
     ws = _sheet(wb, "Takeoff", ["Quantity key", "Network", "Area", "Value", "Unit", "Method", "Evidence count", "Evidence (handles / names)"], {6: 60, 8: 80})
     for (k, n, a), q in sorted(tk.q.items()):
+        if "@" in k:
+            continue  # policy alternatives are on the Policies sheet
         ws.append([k, n, a, _fmt(q.value), q.unit, q.method, len(q.evidence), ", ".join(map(str, q.evidence[:60]))])
 
     ws = _sheet(wb, "Cables", ["Label handle", "Segment", "Network", "Fibers", "Placement", "Route FTG", "Slack SLK", "TOTAL",
@@ -238,7 +270,8 @@ def write_audit(path: Path, tk: Takeoff, rules: list[Rule], res: WriteResult, ve
             ws.append([f"nested INSERTs inside block '{name}'", cnt["INSERT"], "not expanded (symbol geometry only) - avoids double counting"])
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)
-    return {"coverage": dict(cov), "discrepancies": ndisc, "failed_checks": len(fails)}
+    return {"coverage": dict(cov), "discrepancies": ndisc, "failed_checks": len(fails),
+            "issues": dict(Counter(i.severity for i in (issues or [])))}
 
 
 def write_discrepancies(path: Path, comp: list[dict], ref: Reference, tk: Takeoff):
@@ -265,6 +298,14 @@ def write_discrepancies(path: Path, comp: list[dict], ref: Reference, tk: Takeof
         ws.append([x["rule"].key, x["rule"].status, x["net"], _fmt(rv), _fmt(av), _fmt(abs(diff)),
                    round(100 * diff / rv, 1) if rv else None, x["status"], x["note"]])
         ws.cell(ws.max_row, 8).fill = FILLS[x["status"]]
+    calib = tk.extra.get("calibration") or []
+    if calib:
+        ws = _sheet(wb, "Policy Calibration", ["Policy", "Option", "Cells matched", "Cells compared", "Abs error", "Best", "In use", "Description"],
+                    {1: 16, 2: 16, 8: 80})
+        for r in calib:
+            ws.append([r["policy"], r["option"], r["matched"], r["cells"], r["abs_error"], "BEST" if r["best"] else "", "YES" if r["selected"] else "", r["description"]])
+            if r["best"]:
+                ws.cell(ws.max_row, 6).fill = FILLS["PASS"]
     ws = _sheet(wb, "Summary", ["Measure", "Value"], {1: 60, 2: 20})
     cells = [x for x in comp if x["area"] != "TOTAL"]
     tots = [x for x in comp if x["area"] == "TOTAL"]

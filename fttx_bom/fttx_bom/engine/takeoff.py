@@ -57,6 +57,7 @@ class CableSegment:
     total_ft: float
     network: str | None
     ng_fraction: float | None = None
+    ng_fraction_length: float | None = None
     path_ft: float | None = None
     split_method: str = ""
     path: list = field(default_factory=list)
@@ -70,6 +71,8 @@ class Takeoff:
         self.checks: list[Check] = []
         self.cables: list[CableSegment] = []
         self.unassigned: list[str] = []
+        self.extra: dict = {"ratio": {}, "enclosures": [], "olms": []}  # facts the policy variants need
+        self.policy_used: dict[str, str] = {}
 
     @property
     def columns(self) -> list[tuple[str, str]]:
@@ -107,6 +110,8 @@ class Takeoff:
         sub.checks = [c for c in self.checks if not any(o in c.name or o in c.detail for o in others)]
         sub.cables = [c for c in self.cables if c.network in nets]
         sub.unassigned = list(self.unassigned)
+        sub.extra = self.extra
+        sub.policy_used = dict(self.policy_used)
         return sub
 
     def check(self, name, ok, detail, warn=False):
@@ -476,6 +481,7 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
             seg.path_ft = plen
             seg.path = path
             seg.spans = _spans(path, breaks, cls)
+            seg.ng_fraction_length = length_inside(path, cls.nongrant) / plen if plen else 0.0
             if split_mode == "span":
                 ng_len = sum(L for L, ar in seg.spans if ar == NONGRANT)
                 seg.split_method = "route spans (splice to splice) by majority area"
@@ -506,6 +512,8 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
         for sg in r.segments:
             if sg.placement.lower() == "pigtail" or sg.cable.upper() in labelled or sg.cable.upper() in rep_only:
                 continue
+            if sg.design_length is None:
+                continue  # splice-guide format carries no length: cannot add footage from it
             rep_only[sg.cable.upper()] = (sg, r)
     for name, (sg, r) in rep_only.items():
         mm = SEG_RE.match(sg.cable)
@@ -513,10 +521,11 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
         net = r.network if r.network in tk.networks else None
         pa = _resolve_endpoint(a, pos) if a else None
         area = cls.area_of(pa) if pa else GRANT
-        c = CableSegment(f"report:{r.name}", sg.cable, a, mm.group(2) if mm else "", sg.fibers,
-                         "AR" if sg.placement.lower().startswith("aer") else "UG", sg.design_length or 0, 0,
-                         sg.design_length or 0, net, 1.0 if area == NONGRANT else 0.0, None,
-                         "splice report only (no DWG cable label)")
+        c = CableSegment(handle=f"report:{r.name}", name=sg.cable, a=a, b=mm.group(2) if mm else "", fibers=sg.fibers,
+                         placement="AR" if sg.placement.lower().startswith("aer") else "UG", route_ft=sg.design_length or 0,
+                         slack_ft=0, total_ft=sg.design_length or 0, network=net,
+                         ng_fraction=1.0 if area == NONGRANT else 0.0, ng_fraction_length=1.0 if area == NONGRANT else 0.0,
+                         split_method="splice report only (no DWG cable label)")
         tk.cables.append(c)
         tk.check("cable missing DWG label", False,
                  f"{sg.cable} ({sg.fibers}F, {sg.design_length:g} ft) is in splice report {r.name} but has no DWG cable label; included from the report",
@@ -597,6 +606,7 @@ def enclosures(d, conv, cls, tk: Takeoff, reports: list[SpliceReport]):
                 # SME walkthrough: trays per splice location = ROUNDUP(splices / tray capacity);
                 # packages of 2 trays are pooled per column (spare tray of a package goes to another location)
                 trays = math.ceil(r.fusion_splices / cap) if r.fusion_splices else 0
+                tk.extra["enclosures"].append((net, area, m.group(1).upper(), r.fusion_splices, r.name))
                 tk.add(f"trays_450{m.group(1).lower()}", net, area, trays, "EA",
                        f"per enclosure ROUNDUP(splices/{cap})", [f"{r.name}:{r.fusion_splices} splices -> {trays} trays"])
         if net:
@@ -616,6 +626,7 @@ def derived(d, conv, cls, tk: Takeoff, reports, address_lists):
             continue
         # SME: OLM equipment is always booked to Grant (1 per OLM) unless the whole OLM area is Non-Grant
         area = GRANT if tk.get("passings", net, GRANT, 0) > 0 else NONGRANT
+        tk.extra["olms"].append((net, _loc, any(dist(ins.pt, p) <= 15 for p in poles), ins.handle))
         aerial = any(dist(ins.pt, p) <= 15 for p in poles)
         tk.add("olm_aerial" if aerial else "olm_ground", net, area, 1, "EA", "OLM mounting by proximity to aerial pole", [ins.handle])
         tk.add("olm", net, area, 1, "EA", "count of OLM blocks", [ins.handle])
@@ -627,6 +638,7 @@ def derived(d, conv, cls, tk: Takeoff, reports, address_lists):
             tk.check(f"split ratio {n}", False, "no PLC COUPLER rows in splice reports or address list - assumed 1x64", warn=True)
         else:
             tk.check(f"split ratio {n}", True, f"1x{ratio} ({why})")
+        tk.extra["ratio"][n] = ratio
         tot = tk.total("passings", n)
         need = math.ceil(tot / ratio) if tot else 0
         designed = tk.total(f"report_splitter_1x{ratio}", n) if reports else 0
@@ -646,9 +658,7 @@ def derived(d, conv, cls, tk: Takeoff, reports, address_lists):
             # ROUNDUP(passings/32) whatever splitter is actually designed
             tk.q[("pon_ports", n, a)] = Qty("pon_ports", n, a, math.ceil(math.ceil(p / 32) / 2) if p else 0, "EA",
                                             "ROUNDUP(ROUNDUP(passings/32)/2) (Jumper Calculator / 2)", [])
-        sfp = tk.total("pon_ports", n)
-        tk.check(f"SFP vs designed PONs {n}", sfp == need,
-                 f"SME rule (Jumper Calculator splitters / 2, per column) gives {sfp:g} XGS SFP+ for {need} designed 1x{ratio} PONs - confirm", warn=True)
+        tk.extra.setdefault("designed_pons", {})[n] = need
         if reports:
             rep = tk.total(f"report_splitter_1x{ratio}", n)
             tk.check(f"splitters vs splice reports {n}", rep == need, f"design rule {need} x 1x{ratio} vs splice-report PLC COUPLER rows {rep:g}")
@@ -781,7 +791,8 @@ def grounding_points(d, conv, cls, tk: Takeoff):
 
 
 def build_takeoff(d: Drawing, conv: dict, cls: Classifier, networks: list[str],
-                  address_lists: dict[str, AddressList], reports: list[SpliceReport]) -> Takeoff:
+                  address_lists: dict[str, AddressList], reports: list[SpliceReport],
+                  policies: dict[str, str] | None = None) -> Takeoff:
     tk = Takeoff(networks)
     passings(d, conv, cls, tk, address_lists)
     for key in ("ped_max10", "ped_max5", "vault", "ug_lbox"):
@@ -794,6 +805,16 @@ def build_takeoff(d: Drawing, conv: dict, cls: Classifier, networks: list[str],
     max10_upgrades(d, conv, cls, tk)
     drop_footage(d, conv, cls, tk, address_lists)
     grounding_points(d, conv, cls, tk)
+    from . import policies as pol
+
+    pol.compute_variants(tk)
+    pol.apply(tk, pol.load_selection() if policies is None else policies)
+    for n in networks:
+        sfp, need = tk.total("pon_ports", n), tk.extra.get("designed_pons", {}).get(n)
+        if need is not None:
+            tk.check(f"SFP vs designed PONs {n}", sfp == need,
+                     f"policy sfp={tk.policy_used['sfp']} gives {sfp:g} XGS SFP+ for {need} designed PONs"
+                     + ("" if sfp == need else " (per-column rounding) - see Policies sheet"), warn=True)
     if cls.nearest_assigned:
         tk.checks.append(Check("objects outside boundaries", "WARN",
                                f"{len(cls.nearest_assigned)} objects outside every network boundary were assigned via the transport corridor "

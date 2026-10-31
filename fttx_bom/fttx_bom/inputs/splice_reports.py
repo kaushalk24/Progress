@@ -46,6 +46,7 @@ class SpliceReport:
     connections: int = 0
     fusion_splices: int = 0
     pass_through: int = 0
+    format: str = "connections report"
 
 
 def network_from_splice_name(name: str) -> str | None:
@@ -57,6 +58,48 @@ def _cable_of(seg_ref: str) -> str:
     return re.sub(r":\s*Seg\d+$", "", seg_ref.strip())
 
 
+GUIDE_CABLE_RE = re.compile(r"^(.+?)\s*:\s*Seg\s*(\d+)\s*-\s*(\d+)\s*ct", re.I)
+GUIDE_FIBER_RE = re.compile(r"\s+SEG-?\d+\s*$", re.I)
+
+
+def _read_splice_guide(path: Path, rows: list[list]) -> SpliceReport:
+    """Alternative layout 'Fiber Optic Splice Guide': labels in column B, values in E,
+    In / Out cables in columns K / O, fiber rows pair column B (in) with column H (out)."""
+    rep = SpliceReport(str(path), "", "", "", None)
+    rep.format = "splice guide"
+    seen = set()
+    for r in rows[:14]:
+        r = list(r) + [None] * 16
+        label = str(r[1] or "").strip().rstrip(":").lower()
+        if label == "splice name":
+            rep.name = str(r[4] or "").strip()
+        elif label == "enclosure make/model":
+            rep.enclosure = str(r[4] or "").strip()
+        for col in (10, 14):
+            m = GUIDE_CABLE_RE.match(str(r[col] or "").strip())
+            if m and m.group(0) not in seen:
+                seen.add(m.group(0))
+                cable = re.sub(r"\s+", " ", m.group(1)).strip()
+                placement = "Pigtail" if re.search(r"FC00[1-8]$", cable) else "Underground"
+                rep.segments.append(Segment(f"Segment {m.group(2)} of {cable} - {placement}", cable, int(m.group(2)),
+                                            placement, int(m.group(3)), "", "", None))
+    for r in rows[14:]:
+        r = list(r) + [None] * 16
+        a, b = r[1], r[7]
+        if not a or not b:
+            continue
+        rep.connections += 1
+        ca = GUIDE_FIBER_RE.sub("", str(a)).strip()
+        cb = GUIDE_FIBER_RE.sub("", str(b)).strip()
+        if re.sub(r"\s+", " ", ca) == re.sub(r"\s+", " ", cb):
+            rep.pass_through += 1
+        else:
+            rep.fusion_splices += 1
+    rep.name = rep.name or path.stem
+    rep.network = network_from_splice_name(rep.name) or path.parent.name
+    return rep
+
+
 def read_splice_report(path: str | Path) -> SpliceReport:
     path = Path(path)
     with warnings.catch_warnings():
@@ -65,6 +108,8 @@ def read_splice_report(path: str | Path) -> SpliceReport:
     ws = wb.worksheets[0]
     rows = [list(r) for r in ws.iter_rows(values_only=True)]
     wb.close()
+    if rows and any(str(v or "").strip().upper() == "FIBER OPTIC SPLICE GUIDE" for v in rows[0][:3]):
+        return _read_splice_guide(path, rows)
     hdr: dict[str, list] = {}
     mode = None
     rep = SpliceReport(str(path), "", "", "", None)

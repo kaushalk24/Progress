@@ -199,4 +199,24 @@ def test_cli_end_to_end_dmi(tmp_path):
     assert p.returncode == 0, p.stdout + p.stderr
     assert (tmp_path / "386021_DMI-R15_FINAL_BOM.xlsx").exists()
     assert (tmp_path / "386021_DMI-R15_BOM_AUDIT.xlsx").exists()
-    assert "workbook FAIL=0" in p.stdout
+    assert "workbook  : FAIL=0" in p.stdout and "deep check: ERROR=0" in p.stdout
+
+
+def test_deep_check_real_findings(nmk):
+    from fttx_bom.engine.doctor import run_doctor
+
+    d, cls, tk = nmk
+    als = read_address_lists(sorted((DATA / "addr/Address List").glob("*.xlsx")))
+    reps = read_splice_reports([DATA / "splice/Splice Reports"])
+    issues = run_doctor(d, CONV, cls, tk, als, reps)
+    codes = {i.code for i in issues}
+    assert not [i for i in issues if i.severity == "ERROR"]
+    assert any(i.code == "SERVED_NOT_DRAWN" and "2595 PILLSBURY" in i.message for i in issues)  # address-list typo of 22595
+    assert {"ADDRESS_DUPLICATE", "CABLE_ONLY_IN_REPORT", "DROP_COUNT_MISMATCH", "SPLICE_GUIDE_FORMAT"} <= codes
+    assert len(issues) < 150  # noise guard: actionable list, not thousands of lines
+
+
+def test_splice_guide_format_parsed():
+    reps = read_splice_reports([DATA / "splice/Splice Reports/NMK-R03/NMK-03129.xlsx"])
+    r = reps[0]
+    assert (r.name, r.format, r.fusion_splices, r.pass_through) == ("NMK-03129", "splice guide", 10, 134)

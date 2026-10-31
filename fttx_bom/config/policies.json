@@ -1,0 +1,4 @@
+{
+  "_comment": "Policy options used for every new BOM. Update automatically with --learn when you run against an approved BOM.",
+  "selected": {}
+}
