@@ -96,7 +96,7 @@ purely geometric:
 | Callout | Arrowhead (leader vertex) lies on | Measured |
 |---|---|---|
 | Terminal | the boundary of the 12 × 12 handhole block (`CX1-MAX5` / `CX1-MAX10`, block extents ±6.0) hosting the drop closure | 393 on a corner (local ±6,±6), the rest on an edge; median 6.0 / 8.49 (=6√2) from the handhole insert; 698 / 706 on the same handhole the tool selects |
-| BFO | the cable polyline of the segment, near the upstream closure | perpendicular distance 0.0 (median); 31 ft median from the closure; 407 / 459 on the upstream half; 449 / 452 on the same polyline the tool selects |
+| BFO | the cable polyline of the segment, near the upstream closure | perpendicular distance 0.0 (median); 31 ft median from the closure; 407 / 459 on the upstream half; 448 / 452 on the same polyline the tool selects |
 
 Drafting offsets in this design: closure symbol ≈ 20 ft from its handhole, terminal symbol ≈ 30 ft
 (connected to the closure by a `Fiber Cable - Pigtail` polyline).
@@ -158,8 +158,8 @@ bit 0 of the object's string stream, i.e. every field was consumed with the corr
 
 ## 6. Validation of the production tool against the reference
 
-The network content of the DWG (closures with names, handholes, terminals, cable polylines, block geometry) was
-rebuilt as DXF and the tool was run with only the raw ZIP inputs (all mappings auto-detected):
+Version 2.0 reads the original DWG directly (built-in reader) and auto-detects all mappings from the raw ZIP inputs;
+the same figures are obtained from a DXF rebuild of the network:
 
 | Check | Result |
 |---|---|
@@ -167,11 +167,11 @@ rebuilt as DXF and the tool was run with only the raw ZIP inputs (all mappings a
 | Terminal callout text identical to reference | 705 / 708 (2 drafting errors in the reference + 1 address-list closure typo `NKM-02133`) |
 | Terminal callouts on the same handhole as reference | 698 / 706 |
 | BFO text identical to reference | 450 / 476 (reference-vs-report discrepancies, see §2.3) |
-| BFO callouts on the same cable polyline | 449 / 452 |
+| BFO callouts on the same cable polyline | 448 / 452 |
 | Entity / style / layer properties | 100 % per §4; text-location rule 0 violations |
 | Placement QA (tool vs. reference, same metric) | 1,184 clean vs. 1,184 clean (0 text/text, 0 text/symbol overlaps, 0 leader crossings) |
 | Output DXF audit (ezdxf) | 0 errors |
-| Run time (full Credit River) | ≈ 8 s |
+| Run time (full Credit River) | ≈ 10 s from the original DWG (built-in reader), ≈ 12 s from the packaged exe |
 
 ![NMK-02001G](img/compare_NMK-02001G.png)
 ![NMK-02148](img/compare_NMK-02148.png)
