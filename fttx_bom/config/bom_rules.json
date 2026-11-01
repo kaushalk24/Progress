@@ -70,7 +70,7 @@
     {"part": "FE0-F1PLC64", "value": "splitter_1x64", "unit": "EA", "status": "VERIFIED", "write": true,
      "basis": "network = ROUNDUP(passings/64) (= splice-report PLC COUPLER 64 rows = address-list PONs); Grant = ROUNDUP(grant passings/64), Non-Grant = remainder", "source": "DWG+Address list+Splice reports"},
     {"part": "CP0-XM31L903HP120H2SFPAPPS", "value": "olm", "unit": "EA", "status": "VERIFIED", "write": true, "basis": "1 power supply per OLM", "source": "DWG"},
-    {"part": "CP0-PWE312020BCKHDSPIRF", "value": "olm_aerial", "unit": "EA", "status": "INFERRED", "write": true, "basis": "1 pole-mount enclosure per aerial OLM (OLM within 15 ft of an aerial pole)", "source": "DWG"},
+    {"part": "CP0-PWE312020BCKHDSPIRF", "value": "olm_aerial", "unit": "EA", "status": "VERIFIED", "write": true, "basis": "Design standard: pole or ground mount follows the OLM location. 1 pole-mount enclosure per aerial OLM (OLM within 15 ft of an aerial pole; the same test sets the ground-mount lines)", "source": "DWG"},
     {"part": "CP0-UPE3UMB12020BTBISABCKSPIR", "value": "olm_ground", "unit": "EA", "status": "VERIFIED", "write": true, "basis": "1 ground-mount enclosure per ground OLM", "source": "DWG"},
     {"part": "CP0-AXM2PS2ECRPEDSUPPO", "value": "olm_ground", "unit": "EA", "status": "VERIFIED", "write": true, "basis": "1 precast pedestal support per ground OLM", "source": "DWG"},
     {"part": "CP0-7460002030001", "value": "olm", "unit": "EA", "status": "VERIFIED", "write": true, "basis": "1 battery cable kit per OLM", "source": "DWG"},

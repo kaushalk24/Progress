@@ -32,10 +32,10 @@ from fttx_bom.engine.rules import load_rules  # noqa: E402
 from fttx_bom.inputs.detect import detect  # noqa: E402
 from fttx_bom.jobs import params_from_detected, run_batch  # noqa: E402
 from fttx_bom.pipeline import project_from_filename, run_job  # noqa: E402
+from fttx_bom.views import LEVEL, bom_preview  # noqa: E402
 
 WORK = Path.home() / "FTTx_BOM_Jobs"
 SYSTEMS = ["", "Coastal West", "Coastal East", "Capital West", "Capital East"]
-LEVEL = {"LOW": "● Low confidence", "REVIEW": "● Review", "": "✓"}
 SEVERITY = {"ERROR": "● Error", "WARN": "● Warning", "INFO": "● Info"}
 PAGES = ["New BOM", "Batch", "Design standards", "Settings"]
 
@@ -118,12 +118,7 @@ def show_results(res, notes):
             if lines.empty:
                 st.info("No quantities written.")
             else:
-                view = lines.assign(Status=lines["confidence"].map(LEVEL))
-                view = view.pivot_table(index=["line", "description"], columns=["network", "area"], values="value",
-                                        aggfunc="first", dropna=False).reset_index()
-                view.columns = [" ".join(c).strip() if isinstance(c, tuple) else c for c in view.columns]
-                worst = lines.assign(rank=lines["confidence"].map({"LOW": 2, "REVIEW": 1, "": 0})).groupby("line")["rank"].max()
-                view.insert(0, "Status", view["line"].map(lambda x: {2: LEVEL["LOW"], 1: LEVEL["REVIEW"], 0: LEVEL[""]}[worst.get(x, 0)]))
+                view = bom_preview(g.lines)
                 st.dataframe(view, width="stretch", hide_index=True, height=520)
         with tabs[1]:
             _legend()

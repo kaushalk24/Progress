@@ -166,3 +166,18 @@ def test_batch_summary_counts_per_bom(tmp_path, monkeypatch):
     path = jobs.run_batch(tmp_path / "jobs", tmp_path / "out", log=lambda m: None)
     rows = list(openpyxl.load_workbook(path).active.iter_rows(min_row=2, values_only=True))
     assert [(r[1], r[3], r[7]) for r in rows] == [("A-R01", 1, 10), ("A-R02", 0, 20)]
+
+
+def test_bom_preview_keeps_each_line_with_its_description():
+    # regression: a pivot over (line, description) paired every line with every description
+    from fttx_bom.views import bom_preview
+
+    lines = [{"line": k, "description": d, "network": "N1", "area": a, "value": v, "confidence": c}
+             for k, d, vals, c in (("Total Route Mileage", "", (1.5, 2.0), "REVIEW"), ("CBP-MAX10DSM24", "PEDESTAL", (7, 9), ""),
+                                   ("FE0-07264810", "GROUND WIRE KIT", (None, None), "LOW"))
+             for a, v in zip(("Grant", "Non-Grant"), vals)]
+    view = bom_preview(lines)
+    assert list(view["line"]) == ["Total Route Mileage", "CBP-MAX10DSM24", "FE0-07264810"]
+    assert list(view["description"]) == ["", "PEDESTAL", "GROUND WIRE KIT"]
+    assert list(view["Status"]) == ["● Review", "✓", "● Low confidence"]
+    assert view.loc[1, "N1 Grant"] == 7 and view.loc[1, "N1 Non-Grant"] == 9

@@ -145,7 +145,13 @@ def assess(rules: list[Rule], tk: Takeoff, issues=(), address_lists=None, report
 
     by_net: dict[str, list] = {}
     cable_hits: dict[tuple[str, int], list] = {}
+    # closure findings go to that closure's type (450B / 450D ...) and area only
+    closures = {name.upper(): (net, area, typ.lower()) for net, area, typ, _s, name in tk.extra.get("enclosures", [])}
+    closure_hits: dict[tuple[str, str, str], list] = {}
     for i in issues:
+        if i.code == "CLOSURE_OVER_CAPACITY" and i.message.split(":")[0].upper() in closures:
+            closure_hits.setdefault(closures[i.message.split(":")[0].upper()], []).append(i)
+            continue
         if i.code in CABLE_EFFECT:
             if i.code == "CABLE_LABEL_DUPLICATE" and "identical values" in i.message:
                 continue  # counted once: the quantity is not affected
@@ -209,6 +215,10 @@ def assess(rules: list[Rule], tk: Takeoff, issues=(), address_lists=None, report
                     # an issue that names neither a cable nor a network applies to that fiber count everywhere
                     for i in cable_hits.get((n, fib), []) + cable_hits.get(("", fib), []):
                         flag(rule, n, a, CABLE_EFFECT[i.code], i.message[:160], v, kind=i.code)
+                m = re.fullmatch(r"fosc450([a-d])|tray_450([a-d])", rule.value.strip())
+                if m:
+                    for i in closure_hits.get((n, a, m.group(1) or m.group(2)), []):
+                        flag(rule, n, a, REVIEW, i.message[:160], v, kind=i.code)
                 for pp in pol.POLICIES:
                     if pp.name not in UNSETTLED or not any(pp.owns(k) for k in names):
                         continue

@@ -147,3 +147,15 @@ def test_zero_rows_ignore_unmapped_aerial_blocks_and_reasons_aggregate():
     assert flags[("CBP-GFP103160002874", NET, GRANT)].level == REVIEW
     reasons = flags[("CBP-MAX5DSM24", NET, GRANT)].reasons
     assert len(reasons) == 1 and reasons[0].endswith("(+2 more like this)")
+
+
+def test_closure_capacity_flags_only_that_closure_type_and_area():
+    tk = Takeoff([NET])
+    for a in (GRANT, NONGRANT):
+        for k in ("fosc450b", "fosc450d", "tray_450b", "tray_450d"):
+            tk.add(k, NET, a, 1, "EA", "")
+    tk.extra["enclosures"] = [(NET, GRANT, "D", 255, "N-03001G")]
+    rules = [_rule(k.upper(), k) for k in ("fosc450b", "fosc450d", "tray_450b", "tray_450d")]
+    issue = Issue("WARN", "Design", "CLOSURE_OVER_CAPACITY", NET, "N-03001G: 255 fusion splices need 6 trays; the guide gives 5", "", "")
+    flags = assess(rules, tk, [issue], {}, [])
+    assert set(flags) == {("FOSC450D", NET, GRANT), ("TRAY_450D", NET, GRANT)}

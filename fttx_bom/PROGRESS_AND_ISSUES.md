@@ -142,7 +142,7 @@ See FORENSIC_FINDINGS.md for the line-by-line table.
 ## Tests
 
 `python -m pytest -q` (with `FTTX_TEST_DATA`):
-- 97 tests: 96 run without the slow end-to-end test, which is run before a release;
+- 99 tests: 98 run without the slow end-to-end test, which is run before a release;
 - unit, tooling, forensic-rule and review-regression tests;
 - integration on the real NMK / DMI files;
 - the end-to-end CLI run.

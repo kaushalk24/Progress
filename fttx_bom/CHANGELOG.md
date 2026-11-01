@@ -9,7 +9,10 @@
   - An address whose layer disagrees with the Non-Grant boundary marks the residential count. It marks splitters and SFP only when moving the address would change them.
   - Unmapped symbols mark the 0-written pedestal rows only when they sit on the pedestal layer (an aerial symbol is not a pedestal).
   - Trench without fiber marks the UG and mileage rows, not aerial.
+  - A closure over tray capacity marks only that closure's type (e.g. 450D and D trays), in its own area column.
   - Repeated reasons (one per address or per ped) are shown once, with a count.
+- **App: the BOM preview tab paired every line with every description.** It now shows one row per written line, in template order, with its own description and values. The table is built in `fttx_bom/views.py` and covered by a test.
+- **The pole-mount OLM enclosure** uses the same OLM-location test as the ground-mount lines and is rated the same (VERIFIED, design standard: pole or ground mount follows the OLM location).
 - **The route footage and splice-tray rows follow the design standard** (CalcFTG route labels; trays ROUNDUP(splices / 24 or / 48), packages of 2) and are rated VERIFIED. The route-footage convention is no longer listed as unsettled. Trench with no fiber nearby is still marked for review.
 
 ## 0.7.0 - design scope, confidence highlighting, new interface
