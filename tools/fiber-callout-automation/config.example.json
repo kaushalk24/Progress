@@ -1,23 +1,31 @@
 {
+  "drawing_path": "C:/Designs/Region/design.dwg",
+  "splice_paths": [
+    "C:/Designs/Region/Splice_Reports.zip"
+  ],
+  "address_paths": [
+    "C:/Designs/Region/Address_Lists"
+  ],
+  "output_dir": "C:/Designs/Region/callout_output",
   "columns": {
-    "pon": "PON NAME",
-    "port": "PON PORT",
-    "address": "ADDRESS",
-    "tap": "Fiber Tap Name",
-    "splice": "Fiber Splice",
-    "fiber": "FIBER #",
-    "cable": "CABLE NAME",
+    "pon": null,
+    "port": null,
+    "address": null,
+    "tap": null,
+    "splice": null,
+    "fiber": null,
+    "cable": null,
     "olm": null
   },
   "cad": {
-    "closure_layer": "Fiber Splice",
-    "closure_block": "MC_SPLICE.dwg",
-    "closure_name_tag": "NAME",
-    "handhole_layer": "RTE_UGPOLES",
-    "handhole_blocks": ["CX1-MAX5", "CX1-MAX10"],
-    "terminal_layer": "Fiber Node",
-    "cable_layers": ["Fiber Cable - Underground", "Fiber Cable - Aerial"],
-    "snap_tolerance": 2.0
+    "closure_layer": "",
+    "closure_block": "",
+    "closure_name_tag": "",
+    "handhole_layer": "",
+    "handhole_blocks": [],
+    "terminal_layer": "",
+    "cable_layers": [],
+    "snap_tolerance": 0.0
   },
   "spec": {
     "cable_layer": "DES_FIBER_SPL",
@@ -42,5 +50,12 @@
     "zero_pad": 0,
     "cable_range_mode": "span",
     "split_terminal_runs": true
-  }
+  },
+  "ports_per_pon": 0,
+  "existing_mode": "replace",
+  "export_dwg": true,
+  "dwg_version": "R2018",
+  "oda_path": "",
+  "dwg_reader": "auto",
+  "units": "auto"
 }

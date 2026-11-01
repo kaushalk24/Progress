@@ -1,6 +1,5 @@
-ezdxf>=1.1.0
-pandas>=1.5
-openpyxl>=3.1
-PyQt6>=6.4
-# optional: legacy .xls address lists / splice reports
-# xlrd>=2.0
+ezdxf==1.4.5
+numpy==2.5.3
+openpyxl==3.1.5
+PyQt6==6.7.1
+PyQt6-Qt6==6.7.3

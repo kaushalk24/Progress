@@ -1,0 +1,82 @@
+name: FiberCallout Studio - Windows exe
+
+on:
+  push:
+    branches: ["claude/awesome-curie-sle7g2", "main"]
+    paths:
+      - "tools/fiber-callout-automation/**"
+      - ".github/workflows/fiber-callout-studio.yml"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish a GitHub pre-release with the exe"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: tools/fiber-callout-automation
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tools/fiber-callout-automation/requirements-build.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-build.txt
+
+      - name: Unit tests + synthetic-region self-test (source)
+        run: python tests/run_tests.py
+
+      - name: Build FiberCalloutStudio.exe
+        run: pyinstaller packaging/FiberCalloutStudio.spec --noconfirm --distpath dist --workpath build
+
+      - name: Test the built exe (self-test + GUI start-up)
+        run: |
+          $st = Start-Process -FilePath "dist\FiberCalloutStudio.exe" -ArgumentList "--selftest", "--report", "selftest_exe.txt" -Wait -PassThru
+          if (Test-Path selftest_exe.txt) { Get-Content selftest_exe.txt }
+          if ($st.ExitCode -ne 0) { throw "exe self-test failed (exit $($st.ExitCode))" }
+          $gs = Start-Process -FilePath "dist\FiberCalloutStudio.exe" -ArgumentList "--gui-smoke", "--report", "gui_smoke.txt" -Wait -PassThru
+          if (Test-Path gui_smoke.txt) { Get-Content gui_smoke.txt }
+          if ($gs.ExitCode -ne 0) { throw "GUI smoke test failed (exit $($gs.ExitCode))" }
+          (Get-Item dist\FiberCalloutStudio.exe).Length / 1MB | ForEach-Object { "exe size: {0:N1} MB" -f $_ }
+
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item dist\FiberCalloutStudio.exe package\
+          Copy-Item README.md package\README.md
+          Copy-Item docs\PHASE1_REVERSE_ENGINEERING.md package\
+          Copy-Item config.example.json package\
+          Copy-Item selftest_exe.txt package\SELFTEST_RESULT.txt
+          Compress-Archive -Path package\* -DestinationPath FiberCalloutStudio-windows-x64.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FiberCalloutStudio-windows-x64
+          path: tools/fiber-callout-automation/package/*
+          retention-days: 90
+
+      - name: Publish pre-release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "fiber-callout-studio-v2.0.0-b$env:GITHUB_RUN_NUMBER"
+          gh release create $tag FiberCalloutStudio-windows-x64.zip dist\FiberCalloutStudio.exe `
+            --target $env:GITHUB_SHA --prerelease `
+            --title "FiberCallout Studio 2.0.0 for Windows (build $env:GITHUB_RUN_NUMBER)" `
+            --notes-file packaging/RELEASE_NOTES.md
