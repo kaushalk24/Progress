@@ -716,6 +716,7 @@ class AddressBook:
         if self.max_port > self.ports_per_pon:
             issues.add("ERROR", "Address List", "-",
                        f"PON PORT {self.max_port} exceeds ports-per-PON {self.ports_per_pon}")
+        no_splice: Counter = Counter()
         for olm, pon, port, vals, src, ri in raw:
             number = (pon - 1) * self.ports_per_pon + port
             tap = norm_text(vals["tap"])
@@ -736,8 +737,7 @@ class AddressBook:
                 issues.add("INFO", "Address List", f"{src} row {ri}",
                            f"Drop closure of {rec.tap} taken from splice report pigtail ({rec.splice})")
             if not rec.splice:
-                issues.add("WARNING", "Address List", f"{src} row {ri}",
-                           f"No drop splice closure for {rec.address} ({rec.tap}) - no callout can be anchored")
+                no_splice[src] += 1
             self.by_number[key] = rec
             self.records.append(rec)
             other = [k for k in self.terminals if k[0] == olm and k[1] == rec.tap and k[2] != rec.splice]
@@ -752,6 +752,10 @@ class AddressBook:
             self.by_addr[rec.address].append(rec)
             self.by_tap[rec.tap].append(rec)
             self.tap_names.add(rec.tap)
+        for src, n in no_splice.items():
+            issues.add("WARNING", "Address List", src,
+                       f"{n} row(s) have no drop splice closure (map the 'Fiber Splice' column, or add splice reports "
+                       f"with pigtail segments) - their fiber-number callouts cannot be placed")
         self.olms = sorted({r.olm for r in self.records})
         for lst in self.by_tap.values():
             lst.sort(key=lambda r: (r.olm, r.number))
@@ -1860,12 +1864,17 @@ class CalloutPlanner:
                     if closure is None:
                         self.plans.append(CalloutPlan(f"T{uid:05d}", "TERMINAL", t.olm, txt, spec.terminal_layer,
                                                       Vec2(), Vec2(), 1, "-", t.splice, nums, calc, srcs, status="FAILED",
-                                                      notes="Drop closure not found in drawing"))
+                                                      notes="Drop closure not found in drawing" if t.splice else
+                                                      "Drop splice closure unknown"))
                         continue
                     plan = self._place_terminal(f"T{uid:05d}", t, txt, closure, hh, nums, calc, srcs)
                     self._register(plan)
-                if closure is None:
-                    self.issues.add("ERROR", "Missing Closure", t.splice or "(blank)",
+                if closure is None and not t.splice:
+                    self.issues.add("ERROR", "Missing Data", t.tap,
+                                    f"Drop splice closure of terminal {t.tap} ({fmt_numbers(t.numbers, 'exact', 0)}) is unknown")
+                    row["Status"] = "NOT PLACED - drop closure unknown"
+                elif closure is None:
+                    self.issues.add("ERROR", "Missing Closure", t.splice,
                                     f"Drop closure of terminal {t.tap} ({fmt_numbers(t.numbers, 'exact', 0)}) not found in drawing")
                     row["Status"] = "NOT PLACED - closure missing"
                 else:
