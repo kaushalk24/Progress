@@ -319,3 +319,28 @@ Plan:
   2. regenerate into `$S/out10`;
   3. compare the flag counts with out9;
   4. commit, push and send.
+
+## Task 3 checkpoint 5
+
+- **Committed:** `e31d491` (targeted confidence) and `40ce4b1` (preview table fix, closure-capacity targeting, pole-mount rating). 98 non-slow tests pass with the project data.
+- **out10 vs out9 (before `40ce4b1`):** 0 quantity differences in all 7 BOMs.
+
+  | BOM | Review cells, out9 → out10 |
+  |---|---|
+  | DMI | 48 → 20 |
+  | NMK combined | 244 → 92 |
+  | NMK-R02 | 64 → 26 |
+  | NMK-R03 | 68 → 34 |
+  | NMK-R04 | 56 → 16 |
+  | NMK-R05 | 56 → 16 |
+  | DMF | 12 → 10 |
+
+  The low-confidence counts are unchanged.
+- **Running:**
+  - `regen11.sh` → `$S/out11` (final code);
+  - app screenshots → `$S/shots5` (port 8602, HOME=`$S/apphome4`).
+- **Next:**
+  1. compare out11 with out9 (values identical);
+  2. run the slow e2e test;
+  3. update the PROGRESS flag counts;
+  4. commit, push, send the files.
