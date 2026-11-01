@@ -344,3 +344,28 @@ Plan:
   2. run the slow e2e test;
   3. update the PROGRESS flag counts;
   4. commit, push, send the files.
+
+## Task 3 checkpoint 6 (final for this request)
+
+- **out11 (final code) vs out9:** 0 quantity differences in all 7 BOMs.
+
+  | BOM | Review cells, out9 → out11 |
+  |---|---|
+  | DMI | 48 → 18 |
+  | NMK combined | 244 → 64 |
+  | NMK-R02 | 64 → 14 |
+  | NMK-R03 | 68 → 22 |
+  | NMK-R04 | 56 → 14 |
+  | NMK-R05 | 56 → 14 |
+  | DMF | 12 → 8 |
+
+  The low-confidence counts are unchanged.
+- **Tests:** 98 non-slow tests plus the slow end-to-end test pass.
+- **App screenshots:** `$S/shots5`, with no page errors. The preview table is fixed.
+- **Delivered:** `$S/deliver` (outputs zip and screenshots zip).
+- **Open decisions** (in PROGRESS_AND_ISSUES):
+  - drop-footage columns;
+  - MAX10 +4 policy;
+  - D trays at DMI;
+  - UG footage at DMI;
+  - the template's bonding formulas.

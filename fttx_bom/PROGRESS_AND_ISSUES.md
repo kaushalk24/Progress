@@ -4,7 +4,16 @@ _Last updated: 2026-10-31, build 0.7.1_
 
 ## Working
 
-- **0.7.1:** confidence is targeted. A finding marks only the cells whose number it can change (CHANGELOG 0.7.1).
+- **0.7.1:** confidence is targeted. A finding marks only the cells whose number it can change (CHANGELOG 0.7.1). No quantity changed.
+
+  | BOM | Review cells, 0.7.0 → 0.7.1 |
+  |---|---|
+  | DMI-R15 | 48 → 18 |
+  | Credit River combined | 244 → 64 |
+  | Credit River per OLM | 14–22 each |
+  | DMF-R04 | 12 → 8 |
+
+  Low-confidence cells are unchanged: DMI 2 (ground kit, hand count), DMF 30 (no address list or splice reports).
 - **0.7.0:**
   - new interface (UI_DESIGN.md);
   - confidence highlighting in the BOM (red / amber cells, *BOM Review* sheet);
