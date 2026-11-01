@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+callout_output/
+*_FIBER_CALLOUTS_*.dxf
+*_FIBER_CALLOUTS_*.dwg
+*_FIBER_CALLOUTS_QA_*.xlsx
