@@ -2,63 +2,61 @@
 
 <img src="docs/img/logo.png" width="96" align="right" alt="logo">
 
-Windows desktop app that generates the magenta **DES_FIBER_SPL** fiber-number callouts of an FTTx OSP design from its
-**splice reports** and **address lists**, exactly as drafted in the reference design. It works for any region: the
-network (closures, handholes, cables, column names, splitter size, units) is detected from the files themselves.
+FiberCallout Studio is a Windows desktop app. It generates the magenta **DES_FIBER_SPL** fiber-number and BFO callouts
+of an FTTx OSP design from the design's **splice reports** and **address lists**, drafted exactly as in the reference
+design. It works for any region. The app detects closures, handholes, cables, address-list columns, splitter size and
+drawing units from the files on every run, so there is nothing to configure.
 
-![Results](docs/img/ui_results.png)
+![Inputs](docs/img/ui_inputs.png)
 
 ## Download and run (Windows)
 
 1. Download **FiberCalloutStudio-windows-x64** from the repository's *Actions* run (artifact) or *Releases* page.
-2. Run `FiberCalloutStudio.exe`. No Python, AutoCAD or other installation is needed. The exe is not code-signed: if
+2. Run `FiberCalloutStudio.exe`. You don't need Python, AutoCAD or anything else. The exe isn't code-signed, so if
    Windows SmartScreen appears, click *More info -> Run anyway*.
-3. Verify the installation: *Tools -> Run built-in self-test* (or `FiberCalloutStudio.exe --selftest`).
+3. To check the installation, use *Help -> Run self-test* (or run `FiberCalloutStudio.exe --selftest`).
 
 ## Workflow
 
-| Step | What happens |
+| Step | What to do |
 |---|---|
-| **1 Project** | Pick the design drawing (`.dwg` 2010-2025 or `.dxf`), add splice reports and address lists (files, folders or `.zip`; drag & drop works). |
-| **Scan & Auto-Detect** | Fills **Columns** (address-list headers) and **CAD Mapping** (closure block + name attribute, handhole blocks, terminal layer, cable layers, snap tolerance). `(auto-detect)` = decided on every run. |
-| **Validate** | Dry run with the full QA: missing closures (with "did you mean" hints), splice-report vs address-list mismatches, orphan addresses, missing cable geometry, placement conflicts. Nothing is written. |
-| **Generate Callouts** | Writes the drawing + QA/QC workbook and shows every callout in **Results**. |
+| **1 Inputs** | Pick the design drawing (`.dwg` AutoCAD 2010-2025 or `.dxf`). Add every splice report and address list of the region to the one list: files, folders or `.zip` archives. Drag and drop works anywhere in the window. The output folder defaults to `callout_output` next to the drawing. |
+| **Validate** | Optional dry run that lists every problem: missing closures (with "did you mean" hints), splice-report vs address-list mismatches, orphan addresses, missing cable geometry and crowded placements. Nothing is written. |
+| **Generate Callouts** | Writes the callouts DXF and the QA/QC workbook and opens **2 Results**. |
+| **Paste into the design** | In AutoCAD, open the callouts DXF and press **Ctrl+A** then **Ctrl+C**. Switch to the design drawing and type **PASTEORIG**. Every callout lands at its original coordinates. If the design already has fiber callouts, delete them first. The *Existing callouts* tab compares them with the new ones. |
 
-Save the settings of a region with *File -> Save project* and reuse them (`--project` on the command line).
+![Results](docs/img/ui_results.png)
 
 ## What the callouts are
 
 | Callout | Rule (reverse-engineered, see [docs/PHASE1_REVERSE_ENGINEERING.md](docs/PHASE1_REVERSE_ENGINEERING.md)) | Example |
 |---|---|---|
-| Fiber number | `N = (PON - 1) x splitter size + PON PORT` per OLM. One callout per terminal + drop closure (per contiguous run). Arrow on the handhole hosting the drop closure. | `69`, `218-219` |
-| BFO (cable) | For every cable segment leaving a closure that has a splice report and carries live fibers: `BFO <segment fiber count>` / `<lowest>-<highest> N` of the live (not broken / spare) fibers on that segment. Arrow on the cable near the closure. | `BFO 72` / `70-115` |
+| Fiber number | `N = (PON - 1) x splitter size + PON PORT` per OLM. One callout per terminal + drop closure (per contiguous run), with the arrow on the handhole that hosts the drop closure. | `69`, `218-219` |
+| BFO (cable) | One callout for every cable segment that leaves a closure with a splice report and carries live fibers: `BFO <segment fiber count>` / `<lowest>-<highest> N` of the live (not broken or spare) fibers on that segment. The arrow sits on the cable near the closure. | `BFO 72` / `70-115` |
 
-Entity properties (identical to the reference): `MULTILEADER`, layer `DES_FIBER_SPL` (ACI 6, Continuous), color /
-linetype / lineweight ByLayer, MLEADER style `Standard`, text style `Standard` (txt.shx), text height 4.0, rotation 0,
-straight leader, closed-filled arrow 4.0, dogleg 0.36, landing gap 0.09, left/right attachment 6 (underline top
-line), top/bottom attachment 9, MText top-left / top-right by dogleg side. All override flags are set, so the
-callouts look the same whatever the target drawing's MLEADER style contains.
+Entity properties match the reference:
 
-![Style](docs/img/ui_style.png)
+* `MULTILEADER` on layer `DES_FIBER_SPL` (ACI 6, Continuous), with color, linetype and lineweight ByLayer
+* MLEADER style `Standard`, text style `Standard` (txt.shx), text height 4.0, rotation 0
+* straight leader, closed-filled arrow 4.0, dogleg 0.36, landing gap 0.09
+* left/right attachment 6 (underline top line), top/bottom attachment 9
+* MText top-left or top-right, depending on the dogleg side
 
-## DWG input and output
-
-| Situation | Reader | Output |
-|---|---|---|
-| `.dxf` | ezdxf | Complete drawing (DXF; plus DWG when the ODA File Converter is installed) |
-| `.dwg`, [ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter) installed (free) | ODA | Complete drawing as DWG (R2018 by default) + DXF |
-| `.dwg`, no ODA | built-in DWG reader (AutoCAD 2010-2025 formats) | `*_CALLOUTS_ONLY_*.dxf` (callouts at the drawing's coordinates) + `*_APPLY_CALLOUTS_*.scr` |
-
-Applying the script: open the original DWG in AutoCAD, type `SCRIPT`, pick the `.scr` file. It removes the previous
-fiber callouts (by handle, in *replace* mode) and inserts the new ones exploded at 0,0. Fallback without the script:
-open the callouts DXF, `COPYBASE` 0,0 everything, switch to the DWG and `PASTEORIG`.
+All override flags are set, so the callouts look the same whatever the target drawing's MLEADER style contains.
 
 ## Outputs
 
-* drawing (see above)
-* `*_FIBER_CALLOUTS_QA_*.xlsx`: **Summary**, **Network** (per OLM), **Callouts** (every callout: text, anchor,
-  coordinates, numbers, source calculation such as `PON 1 port 12 -> (1-1)x64+12 = 12`, source files, placement
-  review flags), **Terminals**, **Cable Segments**, **Validation Issues**, **Existing vs Computed**, **Settings**.
+* `*_FIBER_CALLOUTS_*.dxf`: the callouts only, at the design drawing's coordinates (DXF R2018).
+* `*_FIBER_CALLOUTS_QA_*.xlsx`, with these sheets:
+  * **Summary**
+  * **Network** (per OLM)
+  * **Callouts**: every callout with its text, anchor, coordinates, numbers, source calculation (such as
+    `PON 1 port 12 -> (1-1)x64+12 = 12`), source files and placement review flags
+  * **Terminals**
+  * **Cable Segments**
+  * **Validation Issues**
+  * **Existing vs Computed**
+  * **Settings**
 
 ## Command line
 
@@ -67,22 +65,31 @@ FiberCalloutStudio.exe --cli --drawing design.dwg --splice Splice_Reports.zip --
 ```
 
 ```bash
-FiberCalloutStudio.exe --cli --validate-only --project region.fcsproj.json
+FiberCalloutStudio.exe --cli --validate-only --project region.json
 ```
 
-Options: `--existing replace|skip|append`, `--dwg-reader auto|builtin|oda`, `--units auto|feet|meters|inches`,
-`--ports-per-pon N`, `--no-dwg`, `--oda <path>`, `--scan-only`, `--selftest`, `--gui-smoke`.
+`--project` reads the paths from a JSON file (see `config.example.json`). The CLI has three diagnostic and override
+options:
+
+* `--scan-only` prints what was auto-detected.
+* `--ports-per-pon N` overrides the splitter size.
+* `--units feet|meters|inches` overrides the drawing units.
 
 ## Verified
 
-* **Credit River (4 OLMs, 867 closures, 884 fibers)** read directly from the original DWG: 1,184 callouts generated
-  (reference 1,184); 705/708 fiber-number and 450/476 BFO texts identical to the hand-drafted reference; 698/706
-  arrows on the same handhole and 448/452 on the same cable; all differences trace to defects in the reference drawing
-  or input data and are listed in the QA workbook.
-* **Synthetic region** (`--selftest`, runs on every build): different prefixes, layers, blocks, attribute tags and
-  column names, 1x32 splitters, rotated rectangular handholes, both splice-report layouts, a closure named only by a
-  text label, one located only from splice-report coordinates, commercial `C-` usages, a non-contiguous terminal
-  and a closure typo - every callout's text, anchor and properties are checked.
+* **Credit River (4 OLMs, 867 closures, 884 fibers)**, read directly from the original DWG:
+  * 1,184 callouts generated, the same count as the reference.
+  * 705/708 fiber-number and 450/476 BFO texts are identical to the hand-drafted reference.
+  * 698/706 arrows are on the same handhole and 448/452 on the same cable.
+  * Every difference traces to a defect in the reference drawing or the input data, and the QA workbook lists each
+    one.
+* **Synthetic region** (`--selftest`, runs on every build): checks every callout's text, anchor and properties on a
+  network with:
+  * different prefixes, layers, blocks, attribute tags and column names
+  * 1x32 splitters and rotated rectangular handholes
+  * both splice-report layouts
+  * a closure named only by a text label, and one located only from splice-report coordinates
+  * commercial `C-` usages, a non-contiguous terminal and a closure typo
 
 ## Build from source
 
@@ -98,14 +105,15 @@ python tests/run_tests.py
 pyinstaller packaging/FiberCalloutStudio.spec --noconfirm
 ```
 
-The GitHub Actions workflow `.github/workflows/fiber-callout-studio.yml` does this on `windows-latest`, runs the tests,
-self-tests the built exe and uploads it (run it manually with *publish_release* to create a pre-release).
+The GitHub Actions workflow `.github/workflows/fiber-callout-studio.yml` does this on `windows-latest`. It runs the
+tests, self-tests the built exe and uploads it. To create a pre-release, run the workflow manually with
+*publish_release*.
 
 ## Layout
 
 ```
 fiber_callout_studio.py   entry point (GUI / CLI / self-test)
-fcs/engine.py             inputs, network model, callout rules, placement, CAD writer, QA workbook
+fcs/engine.py             inputs, network model, callout rules, placement, DXF writer, QA workbook
 fcs/dwg_native.py         built-in DWG 2010-2025 reader
 fcs/gui.py                PyQt6 interface          fcs/branding.py  logo
 fcs/selftest.py           synthetic-region generator + verification

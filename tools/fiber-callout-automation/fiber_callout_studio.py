@@ -43,17 +43,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--report", default="", help="self-test: also write the result to this text file")
     p.add_argument("--drawing", help="target .dwg / .dxf")
     p.add_argument("--splice", nargs="*", default=[], help="splice report files / folders / zips")
-    p.add_argument("--address", nargs="*", default=[], help="address list files / folders / zips")
+    p.add_argument("--address", nargs="*", default=[], help="address list files / folders / zips "
+                   "(one combined list in either option also works)")
     p.add_argument("--out", default="", help="output folder")
-    p.add_argument("--project", default="", help="project .json saved from the GUI (mappings + style)")
+    p.add_argument("--project", default="", help="optional .json with input paths / overrides")
     p.add_argument("--validate-only", action="store_true")
     p.add_argument("--scan-only", action="store_true")
-    p.add_argument("--existing", choices=["replace", "skip", "append"], default=None)
-    p.add_argument("--ports-per-pon", type=int, default=None)
-    p.add_argument("--dwg-reader", choices=["auto", "builtin", "oda"], default=None)
-    p.add_argument("--units", choices=["auto", "feet", "meters", "inches"], default=None)
-    p.add_argument("--no-dwg", action="store_true", help="do not export DWG even when ODA is available")
-    p.add_argument("--oda", default="", help="ODA File Converter executable")
+    p.add_argument("--ports-per-pon", type=int, default=None, help="override the splitter size (default: from splice reports)")
+    p.add_argument("--units", choices=["auto", "feet", "meters", "inches"], default=None, help="override drawing units")
     return p
 
 
@@ -69,7 +66,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             state["pages"] = win.stack.count()
             QTimer.singleShot(1500, app.quit)
         rc = run_gui(ready)
-        ok = rc == 0 and state.get("pages") == 5
+        ok = rc == 0 and state.get("pages") == 2
         if args.report:
             Path(args.report).write_text(f"GUI smoke test {'PASSED' if ok else 'FAILED'}: {state}\n", encoding="utf-8")
         return 0 if ok else 1
@@ -95,18 +92,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cfg.address_paths = args.address
     if args.out:
         cfg.output_dir = args.out
-    if args.existing:
-        cfg.existing_mode = args.existing
     if args.ports_per_pon is not None:
         cfg.ports_per_pon = args.ports_per_pon
-    if args.dwg_reader:
-        cfg.dwg_reader = args.dwg_reader
     if args.units:
         cfg.units = args.units
-    if args.no_dwg:
-        cfg.export_dwg = False
-    if args.oda:
-        cfg.oda_path = args.oda
+    # one combined list works too: splice reports and address lists are told apart by their content
+    if cfg.address_paths and not cfg.splice_paths:
+        cfg.splice_paths = list(cfg.address_paths)
+    elif cfg.splice_paths and not cfg.address_paths:
+        cfg.address_paths = list(cfg.splice_paths)
     rep = Reporter()
     eng = CalloutEngine(cfg, rep)
     try:

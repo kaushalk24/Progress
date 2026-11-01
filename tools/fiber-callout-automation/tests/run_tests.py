@@ -5,7 +5,10 @@
 """
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -87,9 +90,39 @@ def test_report_parsers() -> None:
           and r.conns[0].b_seg == ("ABC-00001G TO ABC-00009G FC048", 3))
 
 
+def test_input_signature() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp) / "data"
+        folder.mkdir()
+        f = folder / "list.csv"
+        f.write_text("PON,PORT\n1,1\n", encoding="utf-8")
+        cfg = E.RunConfig(drawing_path=str(Path(tmp) / "d.dxf"), splice_paths=[str(folder)], address_paths=[str(folder)])
+        before = E.input_signature(cfg)
+        check("signature stable", before == E.input_signature(cfg))
+        dir_mtime = folder.stat().st_mtime_ns
+        f.write_text("PON,PORT\n1,2\n", encoding="utf-8")       # edited in place
+        os.utime(f, ns=(time.time_ns(), f.stat().st_mtime_ns + 1_000_000))
+        os.utime(folder, ns=(dir_mtime, dir_mtime))
+        check("signature sees file edited inside a folder", before != E.input_signature(cfg))
+
+
+def test_output_folder_error() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        blocker = Path(tmp) / "not_a_folder"
+        blocker.write_text("x", encoding="utf-8")
+        cfg = E.RunConfig(drawing_path=str(Path(tmp) / "d.dxf"), output_dir=str(blocker / "out"))
+        eng = E.CalloutEngine(cfg, E.Reporter(lambda m, l: None))
+        res = E.RunResult([], [], [], E.IssueLog(), {}, [], [], {}, {})
+        try:
+            eng.export(res)
+            check("unwritable output folder reported", False, "no error raised")
+        except RuntimeError as exc:
+            check("unwritable output folder reported", "Cannot write to the output folder" in str(exc), str(exc))
+
+
 def main() -> int:
     for fn in (test_numbering_helpers, test_callout_text_rules, test_address_rules, test_header_mapping,
-               test_splitter_detection, test_report_parsers):
+               test_splitter_detection, test_report_parsers, test_input_signature, test_output_folder_error):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001

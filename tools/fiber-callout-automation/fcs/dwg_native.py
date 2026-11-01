@@ -385,7 +385,7 @@ def _string_stream(data: bytes, endbit: int) -> Optional[_Bits]:
 
 
 class _Obj:
-    __slots__ = ("type", "handle", "br", "start", "size", "hsize", "endbit", "ss", "hs")
+    __slots__ = ("type", "handle", "br", "start", "size", "hsize", "endbit", "ss", "hs", "eed")
 
 
 # ----------------------------------------------------------------------------------------------- reader
@@ -419,6 +419,8 @@ class NativeDwg:
         self.layers: Dict[int, Dict[str, Any]] = {}
         self.blocks: Dict[int, str] = {}
         self.block_base: Dict[str, Tuple[float, float]] = {}
+        self.block_effective: Dict[str, str] = {}     # anonymous dynamic-block variant -> dynamic block name
+        self.appids: Dict[int, str] = {}
         self._prefix = 2
         self._tables()
 
@@ -489,12 +491,13 @@ class NativeDwg:
         c = br.BB()
         o.type = br.RC() if c == 0 else (br.RC() + 0x1F0 if c == 1 else br.RS())
         o.handle = br.H()
+        o.eed = []
         while True:
             esz = br.BS()
             if esz == 0:
                 break
-            br.H()
-            br.p += esz * 8
+            app = br.H()
+            o.eed.append((app, br.raw(esz)))
         o.br = br
         o.ss = None
         o.hs = None
@@ -522,6 +525,13 @@ class NativeDwg:
             except (IndexError, ValueError):
                 continue
             if o is None:
+                continue
+            if o.type == 67:
+                try:
+                    self._object_common(o)
+                    self.appids[o.handle] = o.ss.TU() if o.ss else ""
+                except (IndexError, ValueError):
+                    pass
                 continue
             if o.type in (51, 49):
                 try:
@@ -556,6 +566,7 @@ class NativeDwg:
                 self.layers[o.handle] = dict(name=name, aci=aci, off=bool(flags & 2), frozen=bool(flags & 1))
             except (IndexError, ValueError):
                 self.errors["LAYER"] += 1
+        pending: List[Tuple[str, int]] = []
         for o, p0, _ in block_objs:
             try:
                 name = o.ss.TU() if o.ss else ""
@@ -570,8 +581,46 @@ class NativeDwg:
                 base = br.P3()
                 self.blocks[o.handle] = name
                 self.block_base[name] = (base[0], base[1]) if all(math.isfinite(v) and abs(v) < 1e12 for v in base[:2]) else (0.0, 0.0)
+                rep_handle = self._block_rep_handle(o.eed)
+                if rep_handle:
+                    pending.append((name, rep_handle))
             except (IndexError, ValueError):
                 self.errors["BLOCK_HEADER"] += 1
+        for name, h in pending:
+            if h in self.blocks and self.blocks[h] != name:
+                self.block_effective[name] = self.blocks[h]
+
+    def _block_rep_handle(self, eed: List[Tuple[int, bytes]]) -> int:
+        """Handle of the dynamic block definition referenced by an anonymous block (XData AcDbBlockRepBTag)."""
+        for app, raw in eed:
+            if self.appids.get(app, "").upper() != "ACDBBLOCKREPBTAG":
+                continue
+            i = 0
+            while i < len(raw):
+                code = raw[i]
+                i += 1
+                if code == 70:
+                    i += 2
+                elif code == 5:
+                    return int.from_bytes(raw[i:i + 8], "big")
+                elif code == 0:
+                    n = struct.unpack_from("<H", raw, i)[0]
+                    i += 2 + 2 * n
+                elif code == 2:
+                    i += 1
+                elif code == 71:
+                    i += 4
+                elif code in (40, 41, 42):
+                    i += 8
+                elif code in (3,):
+                    i += 8
+                elif 10 <= code <= 13:
+                    i += 24
+                elif code == 4:
+                    i += 1 + raw[i]
+                else:
+                    break
+        return 0
 
     @property
     def layer_names(self) -> List[str]:
@@ -740,7 +789,8 @@ class NativeDwg:
         has_att = br.B()
         nown = br.BL() if has_att else 0
         bh = hs.H(o.handle)
-        e["block"] = self.blocks.get(bh, "")
+        e["block_def"] = self.blocks.get(bh, "")
+        e["block"] = self.block_effective.get(e["block_def"], e["block_def"])
         e["attrib_handles"] = [hs.H(o.handle) for _ in range(nown)] if has_att else []
 
     def _e_MTEXT(self, e: Dict[str, Any], o: _Obj) -> None:  # noqa: N802

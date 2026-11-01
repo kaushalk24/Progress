@@ -60,7 +60,6 @@ jobs:
           Copy-Item dist\FiberCalloutStudio.exe package\
           Copy-Item README.md package\README.md
           Copy-Item docs\PHASE1_REVERSE_ENGINEERING.md package\
-          Copy-Item config.example.json package\
           Copy-Item selftest_exe.txt package\SELFTEST_RESULT.txt
           Compress-Archive -Path package\* -DestinationPath FiberCalloutStudio-windows-x64.zip -Force
 
@@ -75,8 +74,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "fiber-callout-studio-v2.0.0-b$env:GITHUB_RUN_NUMBER"
+          $ver = python -c "import fcs; print(fcs.APP_VERSION)"
+          $tag = "fiber-callout-studio-v$ver-b$env:GITHUB_RUN_NUMBER"
           gh release create $tag FiberCalloutStudio-windows-x64.zip dist\FiberCalloutStudio.exe `
             --target $env:GITHUB_SHA --prerelease `
-            --title "FiberCallout Studio 2.0.0 for Windows (build $env:GITHUB_RUN_NUMBER)" `
+            --title "FiberCallout Studio $ver for Windows (build $env:GITHUB_RUN_NUMBER)" `
             --notes-file packaging/RELEASE_NOTES.md

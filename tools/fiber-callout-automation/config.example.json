@@ -6,56 +6,5 @@
   "address_paths": [
     "C:/Designs/Region/Address_Lists"
   ],
-  "output_dir": "C:/Designs/Region/callout_output",
-  "columns": {
-    "pon": null,
-    "port": null,
-    "address": null,
-    "tap": null,
-    "splice": null,
-    "fiber": null,
-    "cable": null,
-    "olm": null
-  },
-  "cad": {
-    "closure_layer": "",
-    "closure_block": "",
-    "closure_name_tag": "",
-    "handhole_layer": "",
-    "handhole_blocks": [],
-    "terminal_layer": "",
-    "cable_layers": [],
-    "snap_tolerance": 0.0
-  },
-  "spec": {
-    "cable_layer": "DES_FIBER_SPL",
-    "terminal_layer": "DES_FIBER_SPL",
-    "layer_color": 6,
-    "layer_linetype": "Continuous",
-    "mleader_style": "Standard",
-    "text_style": "Standard",
-    "text_style_font": "txt",
-    "text_height": 4.0,
-    "arrow_size": 4.0,
-    "landing_gap": 0.09,
-    "dogleg_length": 0.36,
-    "side_attachment": 6,
-    "vertical_attachment": 9,
-    "text_y_factor": 1.2,
-    "cable_prefix": "BFO",
-    "terminal_leader_length": 17.0,
-    "cable_leader_length": 30.0,
-    "cable_offset_along": 30.0,
-    "handhole_search_radius": 75.0,
-    "zero_pad": 0,
-    "cable_range_mode": "span",
-    "split_terminal_runs": true
-  },
-  "ports_per_pon": 0,
-  "existing_mode": "replace",
-  "export_dwg": true,
-  "dwg_version": "R2018",
-  "oda_path": "",
-  "dwg_reader": "auto",
-  "units": "auto"
+  "output_dir": "C:/Designs/Region/callout_output"
 }

@@ -123,13 +123,8 @@ class RunConfig:
     columns: ColumnMap = field(default_factory=ColumnMap)
     cad: CadMap = field(default_factory=CadMap)
     spec: CalloutSpec = field(default_factory=CalloutSpec)
-    ports_per_pon: int = 0
-    existing_mode: str = "replace"
-    export_dwg: bool = True
-    dwg_version: str = "R2018"
-    oda_path: str = ""
-    dwg_reader: str = "auto"           # auto | builtin | oda
-    units: str = "auto"                # auto | feet | meters | inches
+    ports_per_pon: int = 0             # 0 = splitter size from the splice reports
+    units: str = "auto"                # auto ($INSUNITS of a DXF, feet for DWG) | feet | meters | inches
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -148,6 +143,9 @@ class RunConfig:
                 setattr(cfg, k, v)
         return cfg
 
+
+ADDRESS_EXTS = (".xlsx", ".xlsm", ".xls", ".csv", ".txt")
+REPORT_EXTS = (".xlsx", ".xlsm", ".xls", ".csv")
 
 ADDRESS_FIELDS: Dict[str, Tuple[bool, List[str], str]] = {
     "pon": (True, ["PON NAME", "PON", "PON #", "PON NO", "PON NUMBER", "PON ID", "SPLITTER", "SPLITTER #",
@@ -452,12 +450,23 @@ class InputCollector:
         seen: Set[str] = set()
         exts_l = tuple(e.lower() for e in exts)
 
+        hashes: Dict[str, str] = {}
+
         def add(p: Path) -> None:
             key = str(p.resolve()).lower()
             if key in seen or p.name.startswith("~$") or p.name.startswith("."):
                 return
             if p.suffix.lower() in exts_l:
                 seen.add(key)
+                try:
+                    import hashlib
+                    digest = hashlib.sha1(p.read_bytes()).hexdigest()
+                except OSError:
+                    digest = key
+                if digest in hashes:
+                    issues.add("INFO", "Input", p.name, f"Identical to {hashes[digest]} - duplicate skipped")
+                    return
+                hashes[digest] = p.name
                 out.append(p)
 
         def walk(root: Path) -> None:
@@ -618,6 +627,11 @@ OLM_TOKEN = re.compile(r"(?<![A-Z0-9])([A-Z]{2,}-[A-Z]{0,3}\d{1,4}[A-Z]?)(?![A-Z
 GENERIC_SHEETS = {"SHEET", "SHEET1", "SHEET2", "SHEET3", "DATA", "ADDRESS LIST", "ADDRESSES", "EXPORT", "REPORT"}
 
 
+def looks_like_splice_report(rows: List[List[Any]]) -> bool:
+    head = " ".join(str(c) for r in rows[:14] for c in r if c is not None).lower()
+    return "splice name" in head or "splice connections report" in head or "fiber optic splice guide" in head
+
+
 def derive_olm(sheet: str, filename: str) -> str:
     s = norm_text(sheet)
     stem = norm_text(Path(filename).stem)
@@ -658,7 +672,7 @@ class AddressBook:
         return headers
 
     def load(self, files: List[Path], cmap: ColumnMap, ports_per_pon: int, report_splitter: int,
-             pigtail_splices: Dict[str, str], issues: IssueLog, rep: Reporter) -> None:
+             pigtail_splices: Dict[str, str], issues: IssueLog, rep: Reporter, quiet_cross: bool = False) -> None:
         raw: List[Tuple[str, int, int, Dict[str, Any], str, int]] = []
         for f in files:
             rep.check_cancel()
@@ -669,6 +683,10 @@ class AddressBook:
                 continue
             for sheet, rows in tables:
                 if not rows:
+                    continue
+                if looks_like_splice_report(rows):
+                    if not quiet_cross:
+                        issues.add("INFO", "Address List", f"{f.name}:{sheet}", "This is a splice report - not used as address list")
                     continue
                 hi, headers, score = detect_header_row(rows)
                 if score < 2:
@@ -1011,7 +1029,7 @@ def parse_guide_report(rows: List[List[Any]], fname: str) -> Optional[SpliceRepo
     return rep
 
 
-def load_splice_reports(files: List[Path], issues: IssueLog, rep: Reporter) -> List[SpliceReport]:
+def load_splice_reports(files: List[Path], issues: IssueLog, rep: Reporter, quiet_cross: bool = False) -> List[SpliceReport]:
     reports: List[SpliceReport] = []
     for n, f in enumerate(files):
         rep.check_cancel()
@@ -1036,7 +1054,11 @@ def load_splice_reports(files: List[Path], issues: IssueLog, rep: Reporter) -> L
                 reports.append(r)
                 parsed = True
         if not parsed:
-            issues.add("ERROR", "Splice Report", f.name, "Unrecognised splice report layout")
+            if any(detect_header_row(rows)[2] >= 3 for _sheet, rows in tables if rows):
+                if not quiet_cross:
+                    issues.add("INFO", "Splice Report", f.name, "This is an address list - not used as splice report")
+            else:
+                issues.add("ERROR", "Splice Report", f.name, "Unrecognised splice report layout")
     names = Counter(r.name for r in reports)
     for nm, c in names.items():
         if c > 1:
@@ -1177,6 +1199,23 @@ def _entity_points(e: Any) -> List[Vec2]:
     return out
 
 
+def block_key(name: str) -> str:
+    """Comparison key of a block name; unresolved anonymous (dynamic-block) variants form one family."""
+    n = (name or "").upper()
+    return "*U*" if n.startswith("*U") else n
+
+
+def match_closure_name(value: Any, names: Set[str]) -> str:
+    """Closure name from an attribute / label value ('DMI-10007', 'DMI-10007 (FOSC)', 'SP: DMI-10007')."""
+    v = norm_text(value)
+    if not v or v in names:
+        return v
+    for tok in re.split(r"[\s,;:()\[\]/]+", v):
+        if tok in names:
+            return tok
+    return v
+
+
 def source_from_ezdxf(doc: Any, path: str, kind: str) -> NetworkSource:
     msp = doc.modelspace()
     cache: Dict[str, Any] = {}
@@ -1195,7 +1234,16 @@ def source_from_ezdxf(doc: Any, path: str, kind: str) -> NetworkSource:
                 corners = [v2(m.transform(Vec3(x + base.x, y + base.y, 0)))
                            for x, y in ((lo.x, lo.y), (hi.x, lo.y), (hi.x, hi.y), (lo.x, hi.y))]
                 att = {a.dxf.tag.upper(): a.dxf.text for a in e.attribs}
-                inserts.append(GeoInsert(e.dxf.handle, e.dxf.layer, e.dxf.name, v2(e.dxf.insert), att, corners,
+                name = e.dxf.name
+                if name.startswith("*"):
+                    try:
+                        from ezdxf.dynblkhelper import get_dynamic_block_definition
+                        dyn = get_dynamic_block_definition(e, doc)
+                        if dyn is not None:
+                            name = dyn.name
+                    except Exception:  # noqa: BLE001 - keep the anonymous name
+                        pass
+                inserts.append(GeoInsert(e.dxf.handle, e.dxf.layer, name, v2(e.dxf.insert), att, corners,
                                          box_of_points(corners)))
                 for a in e.attribs:
                     if a.dxf.text and not a.is_invisible:
@@ -1271,7 +1319,7 @@ def source_from_native(path: str, rep: Reporter) -> NetworkSource:
         t = e["type"]
         h = format(e["handle"], "X")
         if t == "INSERT":
-            lo, hi = local.get(e["block"], (Vec2(-1, -1), Vec2(1, 1)))
+            lo, hi = local.get(e.get("block_def") or e["block"], (Vec2(-1, -1), Vec2(1, 1)))
             sx, sy = e["scale"]
             if e.get("mirrored"):
                 sx = -sx
@@ -1313,27 +1361,22 @@ def open_source(cfg: RunConfig, rep: Reporter) -> NetworkSource:
     if not p.exists():
         raise FileNotFoundError(f"Drawing not found: {cfg.drawing_path}")
     if p.suffix.lower() == ".dwg":
-        oda = find_oda_converter(cfg.oda_path)
-        use_oda = cfg.dwg_reader in ("auto", "oda") and _configure_oda(oda)
-        if cfg.dwg_reader == "oda" and not use_oda:
-            raise RuntimeError("ODA File Converter requested but not found - install it or choose the built-in reader")
-        if use_oda:
-            from ezdxf.addons import odafc
-            rep.log(f"Reading DWG with ODA File Converter ({oda})")
-            doc = odafc.readfile(str(p))
-            return source_from_ezdxf(doc, str(p), "dwg-oda")
-        rep.log("Reading DWG with the built-in reader (ODA File Converter not used)")
         try:
             return source_from_native(str(p), rep)
         except DwgUnsupported as exc:
-            raise RuntimeError(str(exc)) from exc
+            oda = find_oda_converter()
+            if oda and _configure_oda(oda):
+                from ezdxf.addons import odafc
+                rep.log(f"{exc} - converting with the ODA File Converter found at {oda}", "WARNING")
+                return source_from_ezdxf(odafc.readfile(str(p)), str(p), "dwg-oda")
+            raise RuntimeError(f"{exc}.") from exc
     if p.suffix.lower() == ".dxf":
         from ezdxf import recover
         doc, auditor = recover.readfile(str(p))
         if auditor.has_errors:
             rep.log(f"DXF recovered with {len(auditor.errors)} structural error(s) fixed", "WARNING")
         return source_from_ezdxf(doc, str(p), "dxf")
-    raise RuntimeError(f"Unsupported drawing type {p.suffix} (use .dwg or .dxf)")
+    raise RuntimeError(f"Unsupported drawing type '{p.suffix}' - select a .dwg or .dxf file")
 
 
 def units_factor(source: NetworkSource, setting: str, rep: Reporter) -> float:
@@ -1360,10 +1403,10 @@ def auto_detect_cad(src: NetworkSource, closure_names: Set[str], report_xy: List
     values: Dict[Tuple[str, str, str], Set[str]] = defaultdict(set)
     positions: Dict[Tuple[str, str], List[Vec2]] = defaultdict(list)
     for ins in src.inserts:
-        key = (ins.layer, ins.block)
+        key = (ins.layer, block_key(ins.block))
         positions[key].append(ins.pos)
         for tag, val in ins.attribs.items():
-            values[(ins.layer, ins.block, tag)].add(norm_text(val))
+            values[(ins.layer, block_key(ins.block), tag)].add(match_closure_name(val, closure_names))
     best = (0, None, None, None)
     for (layer, block, tag), vals in values.items():
         score = len(vals & closure_names)
@@ -1380,13 +1423,13 @@ def auto_detect_cad(src: NetworkSource, closure_names: Set[str], report_xy: List
         for x, y in report_xy:
             it, d = grid.nearest(Vec2(x, y), 3.0 * scale, lambda i: i.pos)
             if it is not None:
-                votes[(it.layer, it.block)] += 1
+                votes[(it.layer, block_key(it.block))] += 1
         if votes:
             (cad.closure_layer, cad.closure_block), n = votes.most_common(1)[0]
             rep.log(f"Closures: no name attribute matched; {n} splice-report coordinates matched block "
                     f"'{cad.closure_block}' on layer '{cad.closure_layer}'")
     else:
-        texts = [t for t in src.texts if norm_text(t.text) in closure_names]
+        texts = [t for t in src.texts if match_closure_name(t.text, closure_names) in closure_names]
         votes = Counter()
         grid = GridIndex(50.0)
         for ins in src.inserts:
@@ -1394,7 +1437,7 @@ def auto_detect_cad(src: NetworkSource, closure_names: Set[str], report_xy: List
         for t in texts:
             it, _ = grid.nearest(t.pos, 60.0 * scale, lambda i: i.pos)
             if it is not None:
-                votes[(it.layer, it.block)] += 1
+                votes[(it.layer, block_key(it.block))] += 1
         if votes:
             (cad.closure_layer, cad.closure_block), n = votes.most_common(1)[0]
             rep.log(f"Closures: identified from {n} name labels next to block '{cad.closure_block}'")
@@ -1555,17 +1598,17 @@ class DrawingModel:
     def _build(self, known_names: Set[str], report_xy: Dict[str, Tuple[float, float]]) -> None:
         cad, spec = self.cad, self.spec
         cl_layer = cad.closure_layer.upper()
-        cl_block = cad.closure_block.upper()
+        cl_block = block_key(cad.closure_block)
         tag = cad.closure_name_tag.upper()
         hh_layer = cad.handhole_layer.upper()
-        hh_blocks = {b.upper() for b in cad.handhole_blocks}
+        hh_blocks = {block_key(b) for b in cad.handhole_blocks}
         term_layer = cad.terminal_layer.upper()
         out_layers = {spec.cable_layer.upper(), spec.terminal_layer.upper()}
         unnamed: List[GeoInsert] = []
         for ins in self.src.inserts:
             layer = ins.layer.upper()
-            if cl_layer and layer == cl_layer and (not cl_block or ins.block.upper() == cl_block):
-                name = norm_text(ins.attribs.get(tag, "")) if tag else ""
+            if cl_layer and layer == cl_layer and (not cl_block or block_key(ins.block) == cl_block):
+                name = match_closure_name(ins.attribs.get(tag, ""), known_names) if tag else ""
                 if not name:
                     unnamed.append(ins)
                     continue
@@ -1573,7 +1616,7 @@ class DrawingModel:
                     self.issues.add("WARNING", "Drawing", name, "Duplicate closure name in drawing; first kept")
                     continue
                 self._add_closure(Closure(name, ins.pos, ins.handle, ins.box))
-            elif hh_layer and layer == hh_layer and ins.block.upper() in hh_blocks:
+            elif hh_layer and layer == hh_layer and block_key(ins.block) in hh_blocks:
                 h = Handhole(ins.pos, ins.handle, ins.block, ins.corners, ins.box)
                 self.handholes.append(h)
                 self.hh_index.insert(ins.box, h)
@@ -1588,7 +1631,7 @@ class DrawingModel:
             named = 0
             taken: Set[str] = set()
             for t in self.src.texts:
-                nm = norm_text(t.text)
+                nm = match_closure_name(t.text, known_names)
                 if nm in known_names and nm not in self.closures:
                     ins, _d = ugrid.nearest(t.pos, 60.0 * self.scale, lambda i: i.pos)
                     if ins is not None and ins.handle not in taken:
@@ -2266,33 +2309,6 @@ class CalloutWriter:
         return ml.dxf.handle
 
 
-def write_apply_script(path: Path, callouts_dxf: Path, delete_handles: List[str], replace: bool) -> None:
-    """AutoCAD script that inserts the callouts DXF exploded at 0,0 into the open drawing."""
-    lines = [
-        "; FiberCallout Studio - apply generated callouts",
-        "; 1. Open the original DWG in AutoCAD   2. type SCRIPT   3. pick this file",
-        "; If your AutoCAD does not accept DXF in -INSERT: open the callouts DXF, COPYBASE 0,0 (select all),",
-        ";    switch to the DWG and run PASTEORIG.",
-        "_.UNDO _BEGIN",
-        '(setvar "CMDECHO" 0)',
-    ]
-    if replace and delete_handles:
-        for i in range(0, len(delete_handles), 80):
-            chunk = " ".join(f'"{h}"' for h in delete_handles[i:i + 80])
-            lines.append(f"(foreach h '({chunk}) (if (setq e (handent h)) (entdel e)))")
-    lines += [
-        "_.-INSERT",
-        f'"*{callouts_dxf.resolve()}"',
-        "0,0",
-        "1",
-        "0",
-        '(setvar "CMDECHO" 1)',
-        "_.UNDO _END",
-        "",
-    ]
-    path.write_text("\r\n".join(lines), encoding="utf-8")
-
-
 # =============================================================================
 # QA workbook
 # =============================================================================
@@ -2366,9 +2382,6 @@ class ScanResult:
     columns: ColumnMap
     cad: Optional[CadMap]
     layers: List[str]
-    insert_pairs: List[Tuple[str, str, int]]
-    insert_tags: Dict[str, List[str]]
-    line_layers: List[Tuple[str, int]]
     drawing_info: str
     ports_hint: str
     issues: IssueLog
@@ -2385,6 +2398,31 @@ class RunResult:
     existing_rows: List[Dict[str, Any]]
     outputs: Dict[str, str]
     placement: Dict[str, int]
+    spec: CalloutSpec = field(default_factory=CalloutSpec)
+    signature: str = ""
+
+
+def input_signature(cfg: RunConfig) -> str:
+    """Identifies the inputs of a run (paths + sizes + modification times) so an analysis can be reused."""
+    parts = []
+
+    def stamp(f: Path) -> str:
+        try:
+            st = f.stat()
+            return f"{f.resolve()}|{st.st_size}|{st.st_mtime_ns}"
+        except OSError:
+            return f"{f}|missing"
+
+    for p in [cfg.drawing_path] + list(cfg.splice_paths) + list(cfg.address_paths):
+        path = Path(p)
+        parts.append(stamp(path))
+        if path.is_dir():       # a file edited in place does not change the folder's own time stamp
+            parts.extend(stamp(f) for f in sorted(path.rglob("*")) if f.is_file())
+    parts.append(json.dumps(dataclasses.asdict(cfg.columns), sort_keys=True))
+    parts.append(json.dumps(dataclasses.asdict(cfg.cad), sort_keys=True))
+    parts.append(json.dumps(dataclasses.asdict(cfg.spec), sort_keys=True))
+    parts.append(f"{cfg.ports_per_pon}|{cfg.units}")
+    return "\n".join(parts)
 
 
 class CalloutEngine:
@@ -2393,26 +2431,21 @@ class CalloutEngine:
         self.rep = rep
         self.collector = InputCollector()
 
-    # ------------------------------------------------------------------ scan
+    # ------------------------------------------------------------------ scan (CLI diagnostics)
     def scan(self) -> ScanResult:
         issues = IssueLog()
         try:
-            addr_files = self.collector.expand(self.cfg.address_paths, (".xlsx", ".xlsm", ".xls", ".csv", ".txt"), issues)
-            spl_files = self.collector.expand(self.cfg.splice_paths, (".xlsx", ".xlsm", ".xls", ".csv"), issues)
+            addr_files = self.collector.expand(self.cfg.address_paths, ADDRESS_EXTS, issues)
+            spl_files = self.collector.expand(self.cfg.splice_paths, REPORT_EXTS, issues)
             headers = AddressBook.scan_headers(addr_files, issues)
             cols = auto_map_columns(headers)
-            self.rep.log(f"Address-list headers found: {', '.join(headers) if headers else '(none)'}")
             reports = load_splice_reports(spl_files, issues, self.rep) if spl_files else []
             splitter = splitter_size(reports)
             ports_hint = f"{splitter} (splitter size found in splice reports)" if splitter else "auto (from address list)"
             cad = None
             layers: List[str] = []
-            pairs: List[Tuple[str, str, int]] = []
-            tags: Dict[str, List[str]] = {}
-            line_layers: List[Tuple[str, int]] = []
             info = ""
             if self.cfg.drawing_path:
-                self.rep.progress(25, "Reading drawing")
                 src = open_source(self.cfg, self.rep)
                 scale = units_factor(src, self.cfg.units, self.rep)
                 book = AddressBook()
@@ -2420,44 +2453,40 @@ class CalloutEngine:
                     book.load(addr_files, cols, self.cfg.ports_per_pon, splitter, pigtail_splices(reports), IssueLog(),
                               Reporter(lambda m, l: None))
                 names = {r.splice for r in book.records if r.splice} | {r.name for r in reports}
-                xy = [r.xy for r in reports if r.xy]
-                cad = auto_detect_cad(src, names, xy, self.rep, scale)
+                cad = auto_detect_cad(src, names, [r.xy for r in reports if r.xy], self.rep, scale)
                 layers = src.layers
-                cnt = Counter((i.layer, i.block) for i in src.inserts)
-                pairs = [(l, b, n) for (l, b), n in cnt.most_common()]
-                tg: Dict[str, Set[str]] = defaultdict(set)
-                for i in src.inserts:
-                    tg[f"{i.layer}|{i.block}"].update(i.attribs.keys())
-                tags = {k: sorted(v) for k, v in tg.items()}
-                line_layers = Counter(l.layer for l in src.lines).most_common()
                 info = f"{Path(self.cfg.drawing_path).name}: {src.kind}, {src.version}, {len(src.layers)} layers"
-                self.rep.log("Auto-detected CAD mapping: closures '%s' / '%s' / tag '%s'; handholes '%s' %s; "
-                             "terminals '%s'; cables %s" % (cad.closure_layer, cad.closure_block, cad.closure_name_tag,
-                                                            cad.handhole_layer, cad.handhole_blocks, cad.terminal_layer,
-                                                            cad.cable_layers))
-            self.rep.progress(100, "Scan complete")
-            return ScanResult(headers, cols, cad, layers, pairs, tags, line_layers, info, ports_hint, issues)
+            return ScanResult(headers, cols, cad, layers, info, ports_hint, issues)
         finally:
             self.collector.cleanup()
 
-    # ------------------------------------------------------------------ core
+    # ------------------------------------------------------------------ analysis
     def _prepare(self, issues: IssueLog) -> Tuple[NetworkSource, AddressBook, List[SpliceReport], DrawingModel,
                                                   CalloutPlanner, CalloutSpec, float]:
         cfg = self.cfg
         self.rep.progress(2, "Collecting input files")
-        addr_files = self.collector.expand(cfg.address_paths, (".xlsx", ".xlsm", ".xls", ".csv", ".txt"), issues)
-        spl_files = self.collector.expand(cfg.splice_paths, (".xlsx", ".xlsm", ".xls", ".csv"), issues)
+        combined = bool(cfg.splice_paths) and sorted(cfg.splice_paths) == sorted(cfg.address_paths)
+        addr_files = self.collector.expand(cfg.address_paths, ADDRESS_EXTS, issues)
+        spl_files = self.collector.expand(cfg.splice_paths, REPORT_EXTS, IssueLog() if combined else issues)
+        reports = load_splice_reports(spl_files, issues, self.rep, quiet_cross=combined)
         if not addr_files:
             issues.add("ERROR", "Input", "Address List", "No address list files found")
-        if not spl_files:
-            issues.add("WARNING", "Input", "Splice Report", "No splice report files found - no BFO (cable) callouts")
-        self.rep.log(f"Inputs: {len(addr_files)} address list file(s), {len(spl_files)} splice report file(s)")
-        reports = load_splice_reports(spl_files, issues, self.rep)
+        if not reports:
+            issues.add("WARNING", "Input", "Splice Report", "No splice reports found - BFO (cable) callouts cannot be produced")
         self.rep.progress(18, "Reading address lists")
         book = AddressBook()
-        book.load(addr_files, cfg.columns, cfg.ports_per_pon, splitter_size(reports), pigtail_splices(reports), issues, self.rep)
+        book.load(addr_files, cfg.columns, cfg.ports_per_pon, splitter_size(reports), pigtail_splices(reports), issues,
+                  self.rep, quiet_cross=combined)
+        self.rep.log(f"Inputs: {len(reports)} splice report(s), {len({r.source.split(':')[0] for r in book.records})} "
+                     f"address list file(s)")
         if not book.records:
-            raise RuntimeError("No usable address-list rows - check the Column Mapper (see Validation Issues)")
+            self._log_issues(issues)
+            raise RuntimeError("No usable address-list rows were found. Check that the address lists contain PON, "
+                               "PORT, address, terminal and splice columns (details in the log).")
+        if book.ports_source.startswith("address list") and reports:
+            issues.add("WARNING", "Numbering", "Ports per PON",
+                       f"Splitter size not found in the splice reports - {book.ports_per_pon} assumed from the highest "
+                       f"PON PORT ({book.max_port}). Check the fiber numbers in the QA workbook.")
         self.rep.progress(22, "Reading drawing")
         src = open_source(cfg, self.rep)
         scale = units_factor(src, cfg.units, self.rep)
@@ -2467,16 +2496,7 @@ class CalloutEngine:
         self.rep.progress(40, "Analysing the network")
         auto = auto_detect_cad(src, names, list(report_xy.values()), self.rep, scale)
         cad = merge_cad(cfg.cad, auto)
-        if cfg.cad.snap_tolerance:
-            cad.snap_tolerance = cfg.cad.snap_tolerance
-        missing_layers = [l for l in [cad.closure_layer, cad.handhole_layer] + list(cad.cable_layers)
-                          if l and l.upper() not in {x.upper() for x in src.layers}]
-        for l in missing_layers:
-            issues.add("WARNING", "CAD Mapping", l, "Mapped layer does not exist in this drawing")
         model = DrawingModel(src, cad, spec, issues, self.rep, names, report_xy, scale)
-        if cfg.existing_mode != "replace":
-            for ex in model.existing:
-                model.text_obstacles.insert(ex.box, ("existing", ex.handle))
         self._cross_validate(book, reports, model, issues)
         planner = CalloutPlanner(model, book, reports, spec, issues, self.rep)
         self.rep.progress(52, "Planning fiber-number callouts")
@@ -2524,166 +2544,128 @@ class CalloutEngine:
     def _log_issues(self, issues: IssueLog) -> None:
         by = Counter((i.severity, i.category) for i in issues.items)
         for (sev, cat), n in sorted(by.items()):
-            self.rep.log(f"{cat}: {n} {sev.lower()}(s)", sev)
+            if sev != "INFO":
+                self.rep.log(f"{cat}: {n} {sev.lower()}(s)", sev)
         shown = 0
         for i in issues.items:
             if i.severity in ("ERROR", "WARNING") and shown < 25:
                 self.rep.log(f"  [{i.category}] {i.obj} - {i.message}", i.severity)
                 shown += 1
         if sum(1 for i in issues.items if i.severity != "INFO") > shown:
-            self.rep.log("  ... the complete list is in the 'Validation Issues' sheet of the QA workbook")
+            self.rep.log("  ... the complete list is in the Results page and the QA workbook")
         self.rep.log("Validation summary: " + issues.summary())
 
-    def _result(self, issues: IssueLog, book: AddressBook, reports: List[SpliceReport], model: DrawingModel,
-                planner: CalloutPlanner, src: NetworkSource, placement: Dict[str, int], existing_rows: List[Dict[str, Any]],
-                outputs: Dict[str, str], mode: str) -> RunResult:
-        plans = planner.plans
-        n_t = sum(1 for p in plans if p.kind == "TERMINAL" and p.status not in ("FAILED",))
-        n_c = sum(1 for p in plans if p.kind == "CABLE" and p.status not in ("FAILED",))
-        summary = {
-            "Tool": f"{APP_NAME} {APP_VERSION}",
-            "Run at": _dt.datetime.now().isoformat(timespec="seconds"),
-            "Mode": mode,
-            "Drawing": self.cfg.drawing_path,
-            "Drawing reader": {"dxf": "DXF (ezdxf)", "dwg-oda": "DWG via ODA File Converter",
-                               "dwg-native": "DWG via built-in reader"}[src.kind],
-            "Drawing version": src.version,
-            "OLMs": ", ".join(book.olms),
-            "Ports per PON": f"{book.ports_per_pon} ({book.ports_source})",
-            "Formula": f"N = (PON - 1) x {book.ports_per_pon} + PON PORT (per OLM)",
-            "Address rows (PON assigned)": len(book.records),
-            "Terminal groups": len(book.terminals),
-            "Splice reports": len(reports),
-            "Closures in drawing": len(model.closures),
-            "Handholes in drawing": len(model.handholes),
-            "Cable segments evaluated": len(planner.segments),
-            "Fiber-number callouts": n_t,
-            "BFO callouts": n_c,
-            "Callouts failed": sum(1 for p in plans if p.status == "FAILED"),
-            "Existing callouts found": len(model.existing),
-            "Existing callouts matched": sum(1 for p in plans if p.existing_match.startswith("MATCH")),
-            "Placement - clean": placement.get("clean", 0),
-            "Placement - needs review": n_t + n_c - placement.get("clean", 0),
-            "Errors": issues.count("ERROR"),
-            "Warnings": issues.count("WARNING"),
-        }
-        for k, v in outputs.items():
-            summary[f"Output {k}"] = v
-        return RunResult(plans, planner.segments, planner.terminal_rows, issues, summary,
-                         self._network_rows(book, reports, planner), existing_rows, outputs, placement)
-
-    def validate(self) -> RunResult:
+    def analyze(self) -> RunResult:
+        """Read and cross-check all inputs and plan every callout (nothing is written)."""
         issues = IssueLog()
         try:
             src, book, reports, model, planner, spec, _scale = self._prepare(issues)
             placement = planner.placement_qa()
+            self.rep.progress(82, "Comparing with existing callouts")
             existing_rows = compare_existing(planner.plans, model.existing, 40.0 * spec.text_height) if model.existing else []
-            n_t = sum(1 for p in planner.plans if p.kind == "TERMINAL" and p.status != "FAILED")
-            n_c = sum(1 for p in planner.plans if p.kind == "CABLE" and p.status != "FAILED")
-            self.rep.log(f"Dry run: {n_t} fiber-number + {n_c} BFO callouts can be placed; "
-                         f"{placement.get('clean', 0)} with clean placement")
+            if model.existing:
+                ok = sum(1 for p in planner.plans if p.existing_match.startswith("MATCH"))
+                self.rep.log(f"Existing fiber callouts in the drawing: {len(model.existing)}; "
+                             f"{ok} identical to a computed callout")
+            plans = planner.plans
+            n_t = sum(1 for p in plans if p.kind == "TERMINAL" and p.status != "FAILED")
+            n_c = sum(1 for p in plans if p.kind == "CABLE" and p.status != "FAILED")
+            summary = {
+                "Tool": f"{APP_NAME} {APP_VERSION}",
+                "Run at": _dt.datetime.now().isoformat(timespec="seconds"),
+                "Drawing": self.cfg.drawing_path,
+                "Drawing reader": {"dxf": "DXF", "dwg-oda": "DWG (ODA File Converter)",
+                                   "dwg-native": "DWG (built-in reader)"}[src.kind],
+                "Drawing version": src.version,
+                "OLMs": ", ".join(book.olms),
+                "Ports per PON": f"{book.ports_per_pon} ({book.ports_source})",
+                "Formula": f"N = (PON - 1) x {book.ports_per_pon} + PON PORT (per OLM)",
+                "Address rows (PON assigned)": len(book.records),
+                "Terminal groups": len(book.terminals),
+                "Splice reports": len(reports),
+                "Closures in drawing": len(model.closures),
+                "Handholes in drawing": len(model.handholes),
+                "Cable segments evaluated": len(planner.segments),
+                "Fiber-number callouts": n_t,
+                "BFO callouts": n_c,
+                "Callouts failed": sum(1 for p in plans if p.status == "FAILED"),
+                "Existing callouts found": len(model.existing),
+                "Existing callouts matched": sum(1 for p in plans if p.existing_match.startswith("MATCH")),
+                "Placement - clean": placement.get("clean", 0),
+                "Placement - needs review": n_t + n_c - placement.get("clean", 0),
+                "Errors": issues.count("ERROR"),
+                "Warnings": issues.count("WARNING"),
+            }
+            self.rep.log(f"Analysis: {n_t} fiber-number + {n_c} BFO callouts; {placement.get('clean', 0)} with clean placement")
             self._log_issues(issues)
-            self.rep.progress(100, "Validation complete")
-            return self._result(issues, book, reports, model, planner, src, placement, existing_rows, {}, "validate")
+            self.rep.progress(100, "Analysis complete")
+            return RunResult(plans, planner.segments, planner.terminal_rows, issues, summary,
+                             self._network_rows(book, reports, planner), existing_rows, {}, placement, spec,
+                             input_signature(self.cfg))
         finally:
             self.collector.cleanup()
 
-    def generate(self) -> RunResult:
+    validate = analyze
+
+    def export(self, result: RunResult) -> RunResult:
+        """Write the callouts (DXF at the drawing's coordinates) and the QA/QC workbook for an analysis."""
         cfg = self.cfg
-        issues = IssueLog()
+        out_dir = Path(cfg.output_dir or Path(cfg.drawing_path).parent / "callout_output")
         try:
-            src, book, reports, model, planner, spec, scale = self._prepare(issues)
-            placement = planner.placement_qa()
-            self.rep.log(f"Placement QA: {placement.get('clean', 0)} clean, {placement.get('text_overlap', 0)} text overlaps, "
-                         f"{placement.get('symbol_overlap', 0)} symbol overlaps, {placement.get('leader_cross', 0)} leader crossings")
-            plans = planner.plans
-            self.rep.progress(82, "Comparing with existing callouts")
-            existing_rows = compare_existing(plans, model.existing, 40.0 * spec.text_height) if model.existing else []
-            if model.existing:
-                ok = sum(1 for p in plans if p.existing_match.startswith("MATCH"))
-                self.rep.log(f"Existing fiber callouts: {len(model.existing)}; computed callouts matching one: {ok}")
-            out_dir = Path(cfg.output_dir or Path(cfg.drawing_path).parent / "callout_output")
             out_dir.mkdir(parents=True, exist_ok=True)
-            stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-            stem = Path(cfg.drawing_path).stem
-            outputs: Dict[str, str] = {}
-            if src.doc is not None:
-                doc = src.doc
-                msp = doc.modelspace()
-                if cfg.existing_mode == "replace" and model.existing:
-                    removed = 0
-                    for ex in model.existing:
-                        ent = doc.entitydb.get(ex.handle)
-                        if ent is not None and ent.is_alive:
-                            msp.delete_entity(ent)
-                            removed += 1
-                    self.rep.log(f"Removed {removed} existing fiber callout(s) (mode: replace)")
-            else:
-                doc = ezdxf.new("R2018", setup=True)
-                doc.header["$INSUNITS"] = 0
-                doc.header["$MEASUREMENT"] = 0
-            self.rep.progress(86, "Writing callouts")
-            writer = CalloutWriter(doc, spec, issues, self.rep)
-            for i, p in enumerate(plans):
-                self.rep.check_cancel()
-                if p.status == "FAILED":
-                    continue
-                if cfg.existing_mode == "skip" and p.existing_match.startswith("MATCH"):
-                    p.status = "SKIPPED (already in drawing)"
-                    continue
-                try:
-                    p.handle = writer.add(p)
-                    p.status = "PLACED"
-                except Exception as exc:  # noqa: BLE001 - one bad callout must not stop the run
-                    p.status = "FAILED"
-                    p.notes = f"Write error: {exc}"
-                    issues.add("ERROR", "CAD Write", p.uid, str(exc))
-                if i % 200 == 0:
-                    self.rep.progress(86 + 7 * i / max(1, len(plans)), f"Writing callouts ({i}/{len(plans)})")
-            self.rep.progress(94, "Saving outputs")
-            if src.doc is not None:
-                dxf_path = out_dir / f"{stem}_FIBER_CALLOUTS_{stamp}.dxf"
-                doc.saveas(str(dxf_path))
-                outputs["DXF"] = str(dxf_path)
-                self.rep.log(f"Saved drawing (DXF): {dxf_path}")
-                want_dwg = cfg.export_dwg or src.kind == "dwg-oda"
-                if want_dwg:
-                    oda = find_oda_converter(cfg.oda_path)
-                    if _configure_oda(oda):
-                        from ezdxf.addons import odafc
-                        dwg_path = out_dir / f"{stem}_FIBER_CALLOUTS_{stamp}.dwg"
-                        try:
-                            odafc.export_dwg(doc, str(dwg_path), version=cfg.dwg_version, replace=True)
-                            outputs["DWG"] = str(dwg_path)
-                            self.rep.log(f"Saved drawing (DWG {cfg.dwg_version}): {dwg_path}")
-                        except Exception as exc:  # noqa: BLE001
-                            issues.add("WARNING", "Export", "DWG", f"DWG export failed: {exc}")
-                    elif cfg.export_dwg and src.kind == "dxf":
-                        issues.add("INFO", "Export", "DWG", "ODA File Converter not installed - DXF written (open it in AutoCAD and SAVEAS DWG)")
-            else:
-                dxf_path = out_dir / f"{stem}_CALLOUTS_ONLY_{stamp}.dxf"
-                doc.saveas(str(dxf_path))
-                scr_path = out_dir / f"{stem}_APPLY_CALLOUTS_{stamp}.scr"
-                handles = [ex.handle for ex in model.existing] if cfg.existing_mode == "replace" else []
-                write_apply_script(scr_path, dxf_path, handles, cfg.existing_mode == "replace")
-                outputs["Callouts DXF"] = str(dxf_path)
-                outputs["AutoCAD script"] = str(scr_path)
-                self.rep.log(f"Saved callouts (DXF, same coordinates as the DWG): {dxf_path}")
-                self.rep.log(f"Saved AutoCAD script: {scr_path} - open the DWG in AutoCAD and run SCRIPT with this file")
-            result = self._result(issues, book, reports, model, planner, src, placement, existing_rows, outputs, "generate")
-            qa_path = out_dir / f"{stem}_FIBER_CALLOUTS_QA_{stamp}.xlsx"
-            result.outputs["QA workbook"] = str(qa_path)
-            result.summary["Output QA workbook"] = str(qa_path)
-            self.rep.progress(97, "Writing QA/QC workbook")
-            write_qa_workbook(qa_path, cfg, result)
-            self.rep.log(f"Saved QA/QC workbook: {qa_path}")
-            self._log_issues(issues)
-            self.rep.log(f"DONE - {result.summary['Fiber-number callouts']} fiber-number + "
-                         f"{result.summary['BFO callouts']} BFO callouts", "SUCCESS")
-            self.rep.progress(100, "Done")
-            return result
-        finally:
-            self.collector.cleanup()
+            probe = out_dir / f".fcs_write_test_{os.getpid()}"
+            probe.write_bytes(b"")
+            probe.unlink()
+        except OSError as exc:
+            raise RuntimeError(f"Cannot write to the output folder {out_dir} ({exc.strerror or exc}). "
+                               "Choose another output folder.") from exc
+        stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        stem = Path(cfg.drawing_path).stem
+        self.rep.progress(86, "Writing callouts")
+        doc = ezdxf.new("R2018", setup=True)
+        doc.header["$INSUNITS"] = 0
+        doc.header["$MEASUREMENT"] = 0
+        writer = CalloutWriter(doc, result.spec, result.issues, self.rep)
+        plans = result.plans
+        for i, p in enumerate(plans):
+            self.rep.check_cancel()
+            if p.status == "FAILED":
+                continue
+            try:
+                p.handle = writer.add(p)
+                p.status = "PLACED"
+            except Exception as exc:  # noqa: BLE001 - one bad callout must not stop the run
+                p.status = "FAILED"
+                p.notes = f"Write error: {exc}"
+                result.issues.add("ERROR", "CAD Write", p.uid, str(exc))
+            if i % 200 == 0:
+                self.rep.progress(86 + 8 * i / max(1, len(plans)), f"Writing callouts ({i}/{len(plans)})")
+        self.rep.progress(95, "Saving outputs")
+        dxf_path = out_dir / f"{stem}_FIBER_CALLOUTS_{stamp}.dxf"
+        doc.saveas(str(dxf_path))
+        qa_path = out_dir / f"{stem}_FIBER_CALLOUTS_QA_{stamp}.xlsx"
+        result.outputs = {"Callouts DXF": str(dxf_path), "QA workbook": str(qa_path)}
+        result.summary["Callouts written"] = sum(1 for p in plans if p.status == "PLACED")
+        result.summary["Errors"] = result.issues.count("ERROR")
+        result.summary["Output callouts DXF"] = str(dxf_path)
+        result.summary["Output QA workbook"] = str(qa_path)
+        write_qa_workbook(qa_path, cfg, result)
+        self.rep.log(f"Saved callouts: {dxf_path}")
+        self.rep.log(f"Saved QA/QC workbook: {qa_path}")
+        self.rep.log(f"DONE - {result.summary['Fiber-number callouts']} fiber-number + {result.summary['BFO callouts']} "
+                     f"BFO callouts. In AutoCAD: open the callouts DXF, Ctrl+A, Ctrl+C, switch to the design, PASTEORIG.",
+                     "SUCCESS")
+        self.rep.progress(100, "Done")
+        return result
+
+    def generate(self, previous: Optional[RunResult] = None) -> RunResult:
+        """Analyse (or reuse an unchanged analysis) and export."""
+        if previous is not None and previous.signature and previous.signature == input_signature(self.cfg):
+            self.rep.log("Inputs unchanged since the last analysis - exporting it directly")
+            result = previous
+        else:
+            result = self.analyze()
+        return self.export(result)
 
 
 def resource_path(name: str) -> str:

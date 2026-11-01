@@ -397,9 +397,9 @@ def run_selftest(verbose: bool = True, workdir: Optional[str] = None,
         out(f"Synthetic region {OLM}: {len(reg.pos)} closures, {len(reg.terminals)} terminals, {reg.total} fibers, "
             f"{len(reg.report_closures)} splice reports, 1x{PORTS} splitters; {len(exp)} expected callouts")
         cfg = RunConfig(drawing_path=str(dxf), splice_paths=[str(zpath)], address_paths=[str(addr)],
-                        output_dir=str(tmp / "output"), export_dwg=False)
+                        output_dir=str(tmp / "output"))
         res = CalloutEngine(cfg, Reporter(lambda m, l: None)).generate()
-        doc = ezdxf.readfile(res.outputs["DXF"])
+        doc = ezdxf.readfile(res.outputs["Callouts DXF"])
         gen = []
         for ml in doc.modelspace().query("MULTILEADER"):
             c = ml.context
@@ -474,7 +474,7 @@ def run_selftest(verbose: bool = True, workdir: Optional[str] = None,
             for row in wb.active.iter_rows(values_only=True):
                 w.writerow(["" if v is None else v for v in row])
         cfg2 = RunConfig(drawing_path=str(dxf), splice_paths=[str(tmp / "input" / "reports")],
-                         address_paths=[str(csv_path)], output_dir=str(tmp / "output_csv"), export_dwg=False)
+                         address_paths=[str(csv_path)], output_dir=str(tmp / "output_csv"))
         res2 = CalloutEngine(cfg2, Reporter(lambda m, l: None)).validate()
         same = sorted(p.text for p in res2.plans if p.status != "FAILED") == sorted(p.text for p in res.plans if p.status not in ("FAILED",))
         checks.append(("CSV address list + folder of reports give identical callouts", same, ""))

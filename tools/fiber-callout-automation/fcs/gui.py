@@ -1,108 +1,137 @@
 # -*- coding: utf-8 -*-
-"""FiberCallout Studio - PyQt6 desktop interface."""
+"""FiberCallout Studio - PyQt6 desktop interface.
+
+Two steps only: *Inputs* (drawing + data + output folder) and *Results*. Everything about the network - closures,
+handholes, cables, address-list columns, splitter size, drawing units - is detected from the files on every run.
+"""
 from __future__ import annotations
 
 import datetime as _dt
-import json
 import os
 import sys
 import threading
 import traceback
+import zipfile
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from PyQt6.QtCore import QObject, QPointF, QSettings, QSortFilterProxyModel, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (QAction, QBrush, QColor, QDesktopServices, QFont, QKeySequence, QPainter, QPen, QPolygonF,
                          QStandardItem, QStandardItemModel, QTextCharFormat, QTextCursor)
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-                             QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
-                             QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-                             QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QStyleFactory,
-                             QTableView, QTabWidget, QTextBrowser, QTextEdit, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QComboBox, QDialog, QDialogButtonBox,
+                             QDockWidget, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                             QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton,
+                             QScrollArea, QSizePolicy, QStackedWidget, QStyleFactory, QTableView, QTabWidget,
+                             QTextBrowser, QTextEdit, QVBoxLayout, QWidget)
 
 from . import APP_NAME, APP_ORG, APP_VERSION
 from .branding import app_icon, logo_pixmap
-from .engine import (ADDRESS_FIELDS, CadMap, CalloutEngine, CalloutSpec, Cancelled, ColumnMap, Reporter, RunConfig,
-                     RunResult, ScanResult, find_oda_converter, fmt_numbers)
+from .engine import CalloutEngine, CalloutSpec, Cancelled, Reporter, RunConfig, RunResult, fmt_numbers
 
-AUTO = "(auto-detect)"
-LEVEL_COLORS = {"ERROR": "#C62828", "WARNING": "#B26A00", "SUCCESS": "#1B7F3B", "DEBUG": "#7A8594", "INFO": "#1F2933"}
+DRAWING_EXTS = (".dwg", ".dxf")
+DATA_EXTS = (".xlsx", ".xlsm", ".xls", ".csv")
+LEVEL_COLORS = {"ERROR": "#C62828", "WARNING": "#9A5B00", "SUCCESS": "#1B7F3B", "DEBUG": "#7A8594", "INFO": "#1F2933"}
+NAVY = "#0B2545"
 PRIMARY = "#0B3954"
 ACCENT = "#13808C"
+UI_FONT = "Segoe UI" if os.name == "nt" else "DejaVu Sans"
+MONO_FONT = "Consolas" if os.name == "nt" else "DejaVu Sans Mono"
 
 QSS = f"""
-QMainWindow, QWidget#page {{ background: #F3F5F8; }}
+QMainWindow, QWidget#page {{ background: #F4F6F9; }}
 QWidget {{ font-size: 10pt; color: #1F2933; }}
-QFrame#header {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0B2545, stop:1 {ACCENT}); }}
-QLabel#appTitle {{ color: white; font-size: 17pt; font-weight: 600; }}
+QFrame#header {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {NAVY}, stop:1 {ACCENT}); }}
+QLabel#appTitle {{ color: white; font-size: 16pt; font-weight: 600; }}
 QLabel#appSub {{ color: #CFE8EC; font-size: 9.5pt; }}
 QLabel#appVer {{ color: #CFE8EC; font-size: 9pt; }}
-QListWidget#nav {{ background: #FFFFFF; border: none; border-right: 1px solid #DDE3EA; padding-top: 8px; outline: 0; }}
-QListWidget#nav::item {{ padding: 11px 14px; margin: 2px 8px; border-radius: 6px; color: #3E4C59; }}
-QListWidget#nav::item:selected {{ background: #E3F1F3; color: {PRIMARY}; font-weight: 600; }}
-QListWidget#nav::item:hover {{ background: #F0F4F8; }}
-QFrame#card {{ background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 8px; }}
+QFrame#stepBar {{ background: white; border-bottom: 1px solid #DDE3EA; }}
+QPushButton#step {{ background: transparent; border: none; border-bottom: 3px solid transparent; border-radius: 0;
+    padding: 12px 18px 9px 18px; color: #66788A; font-size: 10.5pt; font-weight: 600; min-width: 112px; }}
+QPushButton#step:hover {{ color: {PRIMARY}; background: #F4F8FA; }}
+QPushButton#step:checked {{ color: {PRIMARY}; border-bottom-color: {ACCENT}; font-weight: 600; }}
+QPushButton#step:disabled {{ color: #B4BEC8; }}
+QFrame#card {{ background: white; border: 1px solid #DDE3EA; border-radius: 10px; }}
 QLabel#cardTitle {{ font-size: 11pt; font-weight: 600; color: {PRIMARY}; }}
+QLabel#cardNum {{ background: {ACCENT}; color: white; border-radius: 11px; font-weight: 600; font-size: 9pt; }}
 QLabel#hint {{ color: #66788A; font-size: 9pt; }}
-QLabel#pageTitle {{ font-size: 15pt; font-weight: 600; color: {PRIMARY}; }}
-QPushButton {{ background: #FFFFFF; border: 1px solid #C5CED8; border-radius: 6px; padding: 6px 14px; }}
+QLabel#ok {{ color: #1B7F3B; font-size: 9pt; }}
+QLabel#bad {{ color: #C62828; font-size: 9pt; }}
+QLabel#specLine {{ color: #3E4C59; font-size: 9pt; }}
+QPushButton {{ background: white; border: 1px solid #C5CED8; border-radius: 6px; padding: 6px 14px; }}
 QPushButton:hover {{ border-color: {ACCENT}; background: #F2FAFB; }}
-QPushButton:disabled {{ color: #A0AAB4; background: #F3F5F8; }}
-QPushButton#primary {{ background: {ACCENT}; color: white; border: none; font-weight: 600; padding: 8px 20px; }}
+QPushButton:disabled {{ color: #A0AAB4; background: #F4F6F9; border-color: #DDE3EA; }}
+QPushButton#primary {{ background: {ACCENT}; color: white; border: none; font-weight: 600; padding: 9px 24px; }}
 QPushButton#primary:hover {{ background: #0F6E78; }}
-QPushButton#primary:disabled {{ background: #9CC7CC; }}
-QPushButton#secondary {{ background: {PRIMARY}; color: white; border: none; font-weight: 600; padding: 8px 18px; }}
-QPushButton#secondary:hover {{ background: #0A2F45; }}
-QPushButton#danger {{ color: #C62828; }}
-QLineEdit, QComboBox {{ background: white; border: 1px solid #C5CED8; border-radius: 5px;
-    padding: 4px 6px; min-height: 22px; }}
-QSpinBox, QDoubleSpinBox {{ background: white; min-height: 26px; }}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{ border-color: {ACCENT}; }}
-QListWidget#files {{ background: #FAFBFC; border: 1px dashed #B8C4CF; border-radius: 6px; }}
-QProgressBar {{ border: 1px solid #C5CED8; border-radius: 6px; background: white; text-align: center; height: 18px; }}
-QProgressBar::chunk {{ background: {ACCENT}; border-radius: 5px; }}
-QFrame#actionBar {{ background: #FFFFFF; border-top: 1px solid #DDE3EA; }}
-QFrame#kpi {{ background: white; border: 1px solid #DDE3EA; border-radius: 8px; }}
-QLabel#kpiValue {{ font-size: 20pt; font-weight: 600; }}
+QPushButton#primary:disabled {{ background: #A9CDD1; color: #EEF6F7; }}
+QPushButton#secondary {{ background: white; color: {PRIMARY}; border: 1px solid {PRIMARY}; font-weight: 600;
+    padding: 8px 20px; }}
+QPushButton#secondary:hover {{ background: #EEF4F8; }}
+QPushButton#secondary:disabled {{ color: #A0AAB4; border-color: #C5CED8; }}
+QPushButton#link {{ background: transparent; border: none; color: {ACCENT}; padding: 4px 6px; }}
+QPushButton#link:hover {{ text-decoration: underline; }}
+QPushButton#danger {{ color: #C62828; border-color: #E3B7B7; }}
+QLineEdit, QComboBox {{ background: white; border: 1px solid #C5CED8; border-radius: 6px; padding: 5px 8px;
+    min-height: 22px; }}
+QLineEdit:focus, QComboBox:focus {{ border-color: {ACCENT}; }}
+QListWidget#files {{ background: #FAFBFC; border: 1px dashed #AEBBC8; border-radius: 8px; padding: 4px; }}
+QListWidget#files::item {{ padding: 4px 2px; }}
+QProgressBar {{ border: none; background: #E3E8EE; border-radius: 2px; max-height: 4px; }}
+QProgressBar::chunk {{ background: {ACCENT}; border-radius: 2px; }}
+QFrame#actionBar {{ background: white; border-top: 1px solid #DDE3EA; }}
+QFrame#kpi {{ background: white; border: 1px solid #DDE3EA; border-radius: 10px; }}
+QLabel#kpiValue {{ font-size: 19pt; font-weight: 600; }}
 QLabel#kpiTitle {{ color: #66788A; font-size: 9pt; }}
-QTableView {{ background: white; border: 1px solid #DDE3EA; gridline-color: #EEF1F4; selection-background-color: #D7ECEF;
-    selection-color: #1F2933; }}
-QHeaderView::section {{ background: #EEF2F6; border: none; border-right: 1px solid #DDE3EA; padding: 5px; font-weight: 600; }}
-QTabWidget::pane {{ border: 1px solid #DDE3EA; background: white; border-radius: 6px; }}
-QTabBar::tab {{ padding: 7px 16px; background: #E9EDF2; border-top-left-radius: 6px; border-top-right-radius: 6px; margin-right: 2px; }}
+QFrame#bannerOk {{ background: #E8F5EC; border: 1px solid #B9DFC5; border-radius: 10px; }}
+QFrame#bannerInfo {{ background: #E8F3F5; border: 1px solid #B5D8DD; border-radius: 10px; }}
+QFrame#bannerWarn {{ background: #FFF5E5; border: 1px solid #F0D29E; border-radius: 10px; }}
+QLabel#bannerTitle {{ font-size: 12pt; font-weight: 600; color: {PRIMARY}; }}
+QLabel#bannerDetail {{ color: #66788A; font-size: 9pt; }}
+QTableView {{ background: white; border: 1px solid #DDE3EA; gridline-color: #EEF1F4;
+    selection-background-color: #D7ECEF; selection-color: #1F2933; alternate-background-color: #FAFBFC; }}
+QHeaderView::section {{ background: #EEF2F6; border: none; border-right: 1px solid #DDE3EA; padding: 5px;
+    font-weight: 600; }}
+QTabWidget::pane {{ border: 1px solid #DDE3EA; background: white; border-radius: 8px; top: -1px; }}
+QTabBar::tab {{ padding: 7px 16px; background: #E9EDF2; border-top-left-radius: 6px; border-top-right-radius: 6px;
+    margin-right: 2px; color: #3E4C59; }}
 QTabBar::tab:selected {{ background: white; color: {PRIMARY}; font-weight: 600; }}
 QDockWidget::title {{ background: #E9EDF2; padding: 5px; }}
+QScrollArea {{ background: transparent; }}
 """
 
 QUICK_GUIDE = f"""
 <h2>{APP_NAME}</h2>
 <p>Generates the magenta <b>DES_FIBER_SPL</b> multileader callouts of an FTTx design from its splice reports and
-address lists, exactly as drafted in the reference design.</p>
-<h3>Workflow</h3>
+address lists, exactly as drafted in the reference design. It works for any region: closures, handholes, cables,
+address-list columns, splitter size and drawing units are detected from the files on every run.</p>
+<h3>1 &nbsp;Inputs</h3>
 <ol>
-<li><b>Project</b> - pick the design drawing (.dwg or .dxf), add the splice reports and address lists (files, folders
-or .zip archives) and an output folder. Drag &amp; drop works everywhere.</li>
-<li><b>Scan &amp; Auto-Detect</b> - reads everything and fills <b>Columns</b> and <b>CAD Mapping</b> automatically
-(closure blocks + name attribute, handhole blocks, cable layers, address-list columns, splitter size, units).
-Review and override anything; <i>(auto-detect)</i> means the tool decides on every run.</li>
-<li><b>Validate</b> - dry run: missing closures, address-list / splice-report mismatches, orphan addresses,
-missing cable geometry and placement problems. Nothing is written.</li>
-<li><b>Generate Callouts</b> - writes the drawing and the QA/QC workbook. Results shows every callout and how its
-numbers were calculated.</li>
+<li><b>Design drawing</b> - the region's .dwg (AutoCAD 2010-2025) or .dxf.</li>
+<li><b>Splice reports &amp; address lists</b> - add everything for the region in one list: files, folders or .zip
+archives. Splice reports and address lists are told apart automatically; duplicates are ignored.</li>
+<li><b>Output folder</b> - defaults to <tt>callout_output</tt> next to the drawing.</li>
+</ol>
+<p>Drag &amp; drop works anywhere in the window: a drawing goes to the drawing field, everything else to the list.</p>
+<h3>2 &nbsp;Validate or Generate</h3>
+<ul>
+<li><b>Validate</b> analyses the network and lists every problem (missing closures, address-list / splice-report
+mismatches, orphan addresses, missing cable geometry, crowded placements). Nothing is written.</li>
+<li><b>Generate Callouts</b> writes <tt>*_FIBER_CALLOUTS_*.dxf</tt> (the callouts only, at the drawing's own
+coordinates) and the QA/QC workbook <tt>*_FIBER_CALLOUTS_QA_*.xlsx</tt>.</li>
+</ul>
+<h3>3 &nbsp;Paste into the design</h3>
+<ol>
+<li>Open the callouts DXF in AutoCAD, press <b>Ctrl+A</b> then <b>Ctrl+C</b>.</li>
+<li>Switch to the design drawing and type <b>PASTEORIG</b> - the callouts land at their original coordinates.</li>
+<li>Delete the old fiber callouts first if the design already has some (the Results page compares them).</li>
 </ol>
 <h3>Rules</h3>
 <ul>
 <li>Fiber number <b>N = (PON - 1) x splitter size + PON PORT</b>, per OLM.</li>
-<li><b>Fiber-number callout</b>: one per terminal + drop closure (per contiguous run): <tt>12</tt>, <tt>218-219</tt>;
-arrow on the handhole hosting the drop closure.</li>
-<li><b>BFO callout</b>: one per live cable segment leaving a closure that has a splice report:
+<li><b>Fiber-number callout</b>: one per terminal + drop closure (per contiguous run), e.g. <tt>69</tt> or
+<tt>218-219</tt>; arrow on the handhole hosting the drop closure.</li>
+<li><b>BFO callout</b>: one per live cable segment leaving a closure that has a splice report, e.g.
 <tt>BFO 72 / 70-115</tt> = cable fiber count / lowest-highest fiber number carried; arrow on the cable.</li>
 </ul>
-<h3>DWG files</h3>
-<p>DWG 2010-2025 drawings are read by the built-in reader. Without the ODA File Converter the tool writes a
-<b>callouts DXF</b> (same coordinates) and an <b>AutoCAD script</b>: open the DWG in AutoCAD, type <tt>SCRIPT</tt>
-and pick the .scr file - existing fiber callouts are replaced and the new ones inserted. With the free ODA File
-Converter installed the complete drawing is written directly as DWG.</p>
 """
 
 
@@ -115,9 +144,9 @@ class Worker(QObject):
     finished = pyqtSignal(str, object)
     failed = pyqtSignal(str, str)
 
-    def __init__(self, task: str, cfg: RunConfig, cancel: threading.Event) -> None:
+    def __init__(self, task: str, cfg: RunConfig, cancel: threading.Event, previous: Optional[RunResult] = None) -> None:
         super().__init__()
-        self.task, self.cfg, self.cancel = task, cfg, cancel
+        self.task, self.cfg, self.cancel, self.previous = task, cfg, cancel, previous
 
     def run(self) -> None:
         rep = Reporter(lambda m, l: self.log.emit(m, l), lambda p, m: self.progress.emit(p, m), self.cancel)
@@ -128,7 +157,7 @@ class Worker(QObject):
                 self.finished.emit(self.task, (ok, text))
                 return
             eng = CalloutEngine(self.cfg, rep)
-            res = {"scan": eng.scan, "validate": eng.validate, "generate": eng.generate}[self.task]()
+            res = eng.generate(self.previous) if self.task == "generate" else eng.analyze()
             self.finished.emit(self.task, res)
         except Cancelled:
             self.failed.emit(self.task, "Cancelled by user")
@@ -140,21 +169,39 @@ class Worker(QObject):
 # =============================================================================
 # Widgets
 # =============================================================================
-def card(title: str, hint: str = "") -> tuple:
+def card(title: str, number: str = "", hint: str = "") -> tuple:
     f = QFrame()
     f.setObjectName("card")
     lay = QVBoxLayout(f)
-    lay.setContentsMargins(16, 12, 16, 14)
+    lay.setContentsMargins(18, 14, 18, 16)
     lay.setSpacing(8)
+    row = QHBoxLayout()
+    row.setSpacing(10)
+    if number:
+        n = QLabel(number)
+        n.setObjectName("cardNum")
+        n.setFixedSize(22, 22)
+        n.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row.addWidget(n)
     t = QLabel(title)
     t.setObjectName("cardTitle")
-    lay.addWidget(t)
+    row.addWidget(t)
+    row.addStretch(1)
+    lay.addLayout(row)
     if hint:
         h = QLabel(hint)
         h.setObjectName("hint")
         h.setWordWrap(True)
         lay.addWidget(h)
     return f, lay
+
+
+def accepts_urls(e: Any) -> bool:
+    return bool(e.mimeData().hasUrls() and any(u.isLocalFile() for u in e.mimeData().urls()))
+
+
+def dropped_paths(e: Any) -> List[str]:
+    return [u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile()]
 
 
 class PathEdit(QLineEdit):
@@ -164,77 +211,135 @@ class PathEdit(QLineEdit):
         super().__init__()
         self.setPlaceholderText(placeholder)
         self.setAcceptDrops(True)
+        self.setClearButtonEnabled(True)
 
     def dragEnterEvent(self, e: Any) -> None:  # noqa: N802
-        if e.mimeData().hasUrls():
+        if accepts_urls(e):
             e.acceptProposedAction()
 
     def dropEvent(self, e: Any) -> None:  # noqa: N802
-        urls = e.mimeData().urls()
-        if urls:
-            self.setText(urls[0].toLocalFile())
-            self.dropped.emit(self.text())
+        paths = dropped_paths(e)
+        if paths:
+            self.setText(paths[0])
+            self.dropped.emit(paths[0])
 
 
-class FileList(QWidget):
+def count_sheets(path: str) -> int:
+    """Number of spreadsheet files in a file / folder / zip (what the engine will look at)."""
+    p = Path(path)
+    try:
+        if p.is_dir():
+            return sum(1 for f in p.rglob("*") if f.suffix.lower() in DATA_EXTS and not f.name.startswith("~$"))
+        if p.suffix.lower() == ".zip":
+            with zipfile.ZipFile(p) as z:
+                return sum(1 for n in z.namelist() if Path(n).suffix.lower() in DATA_EXTS
+                           and not Path(n).name.startswith("~$"))
+        return 1 if p.suffix.lower() in DATA_EXTS + (".txt",) else 0
+    except (OSError, zipfile.BadZipFile):
+        return 0
+
+
+class DataList(QWidget):
+    """One list for every splice report and address list of the region (files, folders or .zip)."""
+
     changed = pyqtSignal()
+    drawing_found = pyqtSignal(str)
+    rejected = pyqtSignal(list)
 
-    def __init__(self, filt: str, hint: str) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.filt = filt
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
         self.list = QListWidget()
         self.list.setObjectName("files")
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.list.setMinimumHeight(74)
+        self.list.setMinimumHeight(150)
         self.list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setAcceptDrops(True)
         self.list.dragEnterEvent = self._drag_enter  # type: ignore[assignment]
         self.list.dragMoveEvent = self._drag_enter  # type: ignore[assignment]
         self.list.dropEvent = self._drop  # type: ignore[assignment]
-        self.list.setToolTip(hint)
+        self.empty = QLabel("Drop splice reports and address lists here\nfiles, folders or .zip archives")
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty.setObjectName("hint")
+        self.empty.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        grid = QGridLayout()
+        grid.addWidget(self.list, 0, 0)
+        grid.addWidget(self.empty, 0, 0)
+        lay.addLayout(grid)
         row = QHBoxLayout()
-        for label, fn in (("Add files...", self.add_files), ("Add folder...", self.add_folder),
-                          ("Remove", self.remove), ("Clear", self.clear)):
-            b = QPushButton(label)
-            b.clicked.connect(fn)
+        self.btn_files = QPushButton("Add files...")
+        self.btn_folder = QPushButton("Add folder...")
+        self.btn_remove = QPushButton("Remove")
+        self.btn_files.clicked.connect(self.add_files)
+        self.btn_folder.clicked.connect(self.add_folder)
+        self.btn_remove.clicked.connect(self.remove)
+        for b in (self.btn_files, self.btn_folder, self.btn_remove):
             row.addWidget(b)
         row.addStretch(1)
-        self.count = QLabel("")
-        self.count.setObjectName("hint")
-        row.addWidget(self.count)
-        lay.addWidget(self.list)
+        self.summary = QLabel("")
+        self.summary.setObjectName("hint")
+        row.addWidget(self.summary)
         lay.addLayout(row)
+        self.list.itemSelectionChanged.connect(self._update)
+        self.start_dir: Callable[[], str] = lambda: ""
         self._update()
 
     def _drag_enter(self, e: Any) -> None:
-        if e.mimeData().hasUrls():
+        if accepts_urls(e):
             e.acceptProposedAction()
 
     def _drop(self, e: Any) -> None:
-        for u in e.mimeData().urls():
-            self.add(u.toLocalFile())
+        self.add_many(dropped_paths(e))
+        e.acceptProposedAction()
 
     def add_files(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(self, "Select files", "", self.filt)
-        for f in files:
-            self.add(f)
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Add splice reports and address lists", self.start_dir(),
+            "Spreadsheets and archives (*.xlsx *.xlsm *.xls *.csv *.zip);;All files (*)")
+        self.add_many(files)
 
     def add_folder(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "Select folder")
+        d = QFileDialog.getExistingDirectory(self, "Add a folder of splice reports / address lists", self.start_dir())
         if d:
-            self.add(d)
+            self.add_many([d])
 
-    def add(self, path: str) -> None:
-        if path and path not in self.paths():
-            pp = Path(path)
-            kind = "Folder" if pp.is_dir() else ("ZIP" if pp.suffix.lower() == ".zip" else pp.suffix.upper().lstrip("."))
-            it = QListWidgetItem(f"{pp.name}    [{kind}]    {pp.parent}")
-            it.setToolTip(path)
-            it.setData(Qt.ItemDataRole.UserRole, path)
-            self.list.addItem(it)
+    def add_many(self, paths: Sequence[str]) -> None:
+        skipped = []
+        for p in paths:
+            pp = Path(p)
+            if pp.suffix.lower() in DRAWING_EXTS:
+                self.drawing_found.emit(p)
+            elif pp.is_dir() or pp.suffix.lower() in DATA_EXTS + (".zip", ".txt"):
+                self.add(p, update=False)
+            else:
+                skipped.append(pp.name)
+        self._update()
+        if skipped:
+            self.rejected.emit(skipped)
+
+    def add(self, path: str, update: bool = True) -> None:
+        if not path:
+            return
+        norm = os.path.normcase(os.path.abspath(path))
+        if any(os.path.normcase(os.path.abspath(x)) == norm for x in self.paths()):
+            return
+        pp = Path(path)
+        n = count_sheets(path)
+        if pp.is_dir():
+            kind = f"folder - {n} spreadsheet(s)"
+        elif pp.suffix.lower() == ".zip":
+            kind = f"zip - {n} spreadsheet(s)"
+        else:
+            kind = pp.suffix.lower().lstrip(".")
+        it = QListWidgetItem(f"{pp.name}     ({kind})")
+        it.setToolTip(path)
+        it.setData(Qt.ItemDataRole.UserRole, path)
+        it.setData(Qt.ItemDataRole.UserRole + 1, n)
+        self.list.addItem(it)
+        if update:
             self._update()
 
     def remove(self) -> None:
@@ -246,64 +351,65 @@ class FileList(QWidget):
         self.list.clear()
         self._update()
 
-    def set_paths(self, paths: List[str]) -> None:
-        self.list.clear()
-        for p in paths:
-            self.add(p)
-        self._update()
-
     def paths(self) -> List[str]:
         return [self.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.list.count())]
 
+    def sheet_count(self) -> int:
+        return sum(int(self.list.item(i).data(Qt.ItemDataRole.UserRole + 1) or 0) for i in range(self.list.count()))
+
     def _update(self) -> None:
         n = self.list.count()
-        self.count.setText(f"{n} item(s)" if n else "drop files, folders or .zip here")
+        self.empty.setVisible(n == 0)
+        self.btn_remove.setEnabled(bool(self.list.selectedItems()))
+        self.summary.setText(f"{self.sheet_count()} spreadsheet(s) in {n} item(s)" if n else "")
         self.changed.emit()
 
 
 class CalloutPreview(QWidget):
-    """Shows how the callouts will look in AutoCAD (dark model space)."""
+    """How the callouts look in AutoCAD model space."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.prefix = "BFO"
-        self.setMinimumSize(360, 230)
+        self.setMinimumSize(300, 190)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(200)
 
     def paintEvent(self, _e: Any) -> None:  # noqa: N802
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QColor("#212830"))
-        mag = QColor("#FF00FF")
-        green = QColor("#3DBE3D")
-        p.setPen(QPen(QColor("#E0E0E0"), 1))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#212830"))
+        p.drawRoundedRect(0, 0, w, h, 8, 8)
+        mag, green, grey = QColor("#FF00FF"), QColor("#3DBE3D"), QColor("#C9CED4")
+        p.setPen(QPen(grey, 1))
         p.drawLine(0, int(h * 0.30), w, int(h * 0.30))
-        p.drawLine(0, int(h * 0.82), w, int(h * 0.82))
+        p.drawLine(0, int(h * 0.84), w, int(h * 0.84))
+        cy = h * 0.57
         p.setPen(QPen(green, 3))
-        cy = h * 0.56
         p.drawLine(0, int(cy), w, int(cy))
         cx = w * 0.55
         p.setBrush(green)
         p.setPen(Qt.PenStyle.NoPen)
-        p.drawPolygon(QPolygonF([QPointF(cx - 22, cy - 13), QPointF(cx, cy), QPointF(cx - 22, cy + 13)]))
-        p.drawPolygon(QPolygonF([QPointF(cx + 22, cy - 13), QPointF(cx, cy), QPointF(cx + 22, cy + 13)]))
+        p.drawPolygon(QPolygonF([QPointF(cx - 20, cy - 12), QPointF(cx, cy), QPointF(cx - 20, cy + 12)]))
+        p.drawPolygon(QPolygonF([QPointF(cx + 20, cy - 12), QPointF(cx, cy), QPointF(cx + 20, cy + 12)]))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(QColor("#E0E0E0"), 1.5))
-        hx, hy = w * 0.80, h * 0.70
-        p.drawRect(int(hx - 12), int(hy - 12), 24, 24)
-        font = QFont("Consolas" if os.name == "nt" else "DejaVu Sans Mono")
-        font.setPixelSize(15)
+        p.setPen(QPen(grey, 1.5))
+        hx, hy = w * 0.82, h * 0.71
+        p.drawRect(int(hx - 11), int(hy - 11), 22, 22)
+        font = QFont(MONO_FONT)
+        font.setPixelSize(14)
         p.setFont(font)
         fm = p.fontMetrics()
 
         def callout(land: QPointF, lines: List[str], tip: QPointF) -> None:
-            # MLEADER: the landing sits under the first text line, on the side facing the arrow
+            # MLEADER: the landing underlines the first text line on the side facing the arrow
             tw = max(fm.horizontalAdvance(x) for x in lines)
             text_left = tip.x() >= land.x()
             x0 = land.x() - 3 - tw if text_left else land.x() + 3
             p.setPen(mag)
             for i, t in enumerate(lines):
-                p.drawText(QPointF(x0, land.y() - 4 + i * 19), t)
+                p.drawText(QPointF(x0, land.y() - 4 + i * 18), t)
             p.setPen(QPen(mag, 1.2))
             p.drawLine(QPointF(x0, land.y()), QPointF(x0 + tw, land.y()))
             p.drawLine(QPointF(x0 + tw if text_left else x0, land.y()), land)
@@ -311,20 +417,16 @@ class CalloutPreview(QWidget):
             dx, dy = tip.x() - land.x(), tip.y() - land.y()
             ln = max(1e-6, (dx * dx + dy * dy) ** 0.5)
             ux, uy = dx / ln, dy / ln
-            b = QPointF(tip.x() - ux * 11, tip.y() - uy * 11)
+            b = QPointF(tip.x() - ux * 10, tip.y() - uy * 10)
             p.setBrush(mag)
-            p.drawPolygon(QPolygonF([tip, QPointF(b.x() - uy * 3.5, b.y() + ux * 3.5), QPointF(b.x() + uy * 3.5, b.y() - ux * 3.5)]))
+            p.drawPolygon(QPolygonF([tip, QPointF(b.x() - uy * 3.2, b.y() + ux * 3.2),
+                                     QPointF(b.x() + uy * 3.2, b.y() - ux * 3.2)]))
             p.setBrush(Qt.BrushStyle.NoBrush)
-        callout(QPointF(w * 0.30, h * 0.16), [f"{self.prefix} 72", "70-115"], QPointF(cx - 60, cy))
-        callout(QPointF(w * 0.48, h * 0.73), [f"{self.prefix} 72", "2-69"], QPointF(cx + 55, cy))
-        callout(QPointF(w * 0.70, h * 0.90), ["69"], QPointF(hx - 12, hy + 12))
-        p.setPen(QColor("#8A96A3"))
-        f2 = QFont()
-        f2.setPixelSize(11)
-        p.setFont(f2)
-        p.drawText(8, h - 8, "Preview - layer DES_FIBER_SPL (ACI 6), MULTILEADER")
-        p.end()
 
+        callout(QPointF(w * 0.30, h * 0.15), ["BFO 72", "70-115"], QPointF(cx - 58, cy))
+        callout(QPointF(w * 0.47, h * 0.74), ["BFO 72", "2-69"], QPointF(cx + 52, cy))
+        callout(QPointF(w * 0.70, h * 0.93), ["69"], QPointF(hx - 11, hy + 11))
+        p.end()
 
 
 class Kpi(QFrame):
@@ -333,15 +435,17 @@ class Kpi(QFrame):
         self.setObjectName("kpi")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(2)
         bar = QFrame()
-        bar.setFixedHeight(4)
-        bar.setStyleSheet(f"background:{color}; border-radius:2px;")
+        bar.setFixedHeight(3)
+        bar.setStyleSheet(f"background:{color}; border-radius:1px;")
         self.value = QLabel("-")
         self.value.setObjectName("kpiValue")
         self.value.setStyleSheet(f"color:{color};")
         t = QLabel(title)
         t.setObjectName("kpiTitle")
         lay.addWidget(bar)
+        lay.addSpacing(4)
         lay.addWidget(self.value)
         lay.addWidget(t)
 
@@ -350,12 +454,29 @@ class Kpi(QFrame):
 
 
 class Table(QWidget):
-    def __init__(self, placeholder: str = "Search...") -> None:
+    """Searchable table with an optional quick filter."""
+
+    def __init__(self, placeholder: str, filters: Optional[Dict[str, Callable[[Dict[str, Any]], bool]]] = None) -> None:
         super().__init__()
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+        top = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText(placeholder)
+        self.search.setClearButtonEnabled(True)
+        top.addWidget(self.search, 1)
+        self.filters = filters or {}
+        self.combo: Optional[QComboBox] = None
+        if self.filters:
+            self.combo = QComboBox()
+            self.combo.addItems(list(self.filters))
+            self.combo.currentIndexChanged.connect(lambda _i: self._refill())
+            top.addWidget(self.combo)
+        self.count = QLabel("")
+        self.count.setObjectName("hint")
+        top.addWidget(self.count)
+        lay.addLayout(top)
         self.model = QStandardItemModel()
         self.proxy = QSortFilterProxyModel()
         self.proxy.setSourceModel(self.model)
@@ -367,40 +488,66 @@ class Table(QWidget):
         self.view.setAlternatingRowColors(True)
         self.view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.view.setWordWrap(False)
         self.view.verticalHeader().setVisible(False)
+        self.view.verticalHeader().setDefaultSectionSize(26)
         self.view.horizontalHeader().setStretchLastSection(True)
-        self.search.textChanged.connect(self.proxy.setFilterFixedString)
-        lay.addWidget(self.search)
+        self.search.textChanged.connect(self._search)
         lay.addWidget(self.view)
+        self.rows: List[Dict[str, Any]] = []
+        self.colors: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None
+
+    def _search(self, text: str) -> None:
+        self.proxy.setFilterFixedString(text)
+        self._count()
+
+    def _count(self) -> None:
+        shown, total = self.proxy.rowCount(), self.model.rowCount()
+        self.count.setText(f"{shown} of {len(self.rows)}" if shown != len(self.rows) or total != len(self.rows)
+                           else f"{len(self.rows)} row(s)")
+
+    def set_filter(self, name: str) -> None:
+        if self.combo is not None:
+            self.combo.setCurrentText(name)
 
     def fill(self, rows: List[Dict[str, Any]], colors: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None) -> None:
+        self.rows, self.colors = rows, colors
+        self._refill()
+
+    def _refill(self) -> None:
+        rows = self.rows
+        if self.combo is not None:
+            pred = self.filters.get(self.combo.currentText())
+            if pred is not None:
+                rows = [r for r in rows if pred(r)]
+        self.view.setSortingEnabled(False)
         self.model.clear()
-        if not rows:
-            return
         headers: List[str] = []
-        for r in rows:
+        for r in self.rows:
             for k in r:
                 if k not in headers:
                     headers.append(k)
         self.model.setHorizontalHeaderLabels(headers)
         for r in rows:
-            col = colors(r) if colors else None
+            col = self.colors(r) if self.colors else None
             items = []
             for h in headers:
                 v = r.get(h)
                 it = QStandardItem("" if v is None else str(v))
                 if isinstance(v, (int, float)) and not isinstance(v, bool):
-                    it.setData(v, Qt.ItemDataRole.UserRole)
+                    it.setData(v, Qt.ItemDataRole.EditRole)
                 if col:
                     it.setBackground(QBrush(QColor(col)))
                 items.append(it)
             self.model.appendRow(items)
+        self.view.setSortingEnabled(True)
         hdr = self.view.horizontalHeader()
         for i in range(len(headers)):
             hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
             self.view.resizeColumnToContents(i)
-            if self.view.columnWidth(i) > 380:
-                self.view.setColumnWidth(i, 380)
+            if self.view.columnWidth(i) > 420:
+                self.view.setColumnWidth(i, 420)
+        self._count()
 
 
 # =============================================================================
@@ -411,17 +558,26 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
         self.setWindowIcon(app_icon())
-        self.resize(1320, 900)
+        self.resize(1280, 860)
+        self.setMinimumSize(980, 660)
+        self.setAcceptDrops(True)
         self.settings = QSettings(APP_ORG, APP_NAME)
         self.thread: Optional[QThread] = None
         self.worker: Optional[Worker] = None
         self.cancel = threading.Event()
         self.outputs: Dict[str, str] = {}
-        self.scan: Optional[ScanResult] = None
+        self.last_result: Optional[RunResult] = None
         self.log_lines: List[tuple] = []
+        self._output_user_set = False
+        self._closing = False
+        self.have_results = False
+        self.result_status = ""
         self._build()
-        self._restore()
-        QTimer.singleShot(0, self._startup_info)
+        geo = self.settings.value("geometry")
+        if geo is not None:
+            self.restoreGeometry(geo)
+        self._refresh_ready()
+        self._log(f"{APP_NAME} {APP_VERSION} ready - DWG 2010-2025 and DXF drawings supported.", "INFO")
 
     # ----------------------------------------------------------------- layout
     def _build(self) -> None:
@@ -431,82 +587,99 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         root.addWidget(self._header())
-        body = QHBoxLayout()
-        body.setSpacing(0)
-        self.nav = QListWidget()
-        self.nav.setObjectName("nav")
-        self.nav.setFixedWidth(210)
-        for t in ("1   Project", "2   Columns", "3   CAD Mapping", "4   Callout Style", "5   Results"):
-            self.nav.addItem(QListWidgetItem(t))
+        root.addWidget(self._step_bar())
         self.stack = QStackedWidget()
-        for page in (self._page_project(), self._page_columns(), self._page_cad(), self._page_style(), self._page_results()):
-            self.stack.addWidget(page)
-        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
-        self.nav.setCurrentRow(0)
-        body.addWidget(self.nav)
-        body.addWidget(self.stack, 1)
-        root.addLayout(body, 1)
+        self.stack.addWidget(self._page_inputs())
+        self.stack.addWidget(self._page_results())
+        root.addWidget(self.stack, 1)
         root.addWidget(self._action_bar())
         self.setCentralWidget(central)
         self._log_dock()
-        self.statusBar().showMessage("Ready")
+        self.statusBar().hide()
 
     def _menus(self) -> None:
         mb = self.menuBar()
         m = mb.addMenu("&File")
-        for text, fn, key in (("New project", self.new_project, "Ctrl+N"), ("Open project...", self.open_project, "Ctrl+O"),
-                              ("Save project...", self.save_project, "Ctrl+S")):
-            a = QAction(text, self)
-            a.setShortcut(QKeySequence(key))
-            a.triggered.connect(fn)
-            m.addAction(a)
+        self._act(m, "New region", self.new_region, "Ctrl+N")
+        self._act(m, "Add drawing...", self.pick_drawing, "Ctrl+O")
+        self._act(m, "Add splice reports / address lists...", lambda: self.data.add_files(), "Ctrl+Shift+O")
         m.addSeparator()
-        a = QAction("Exit", self)
-        a.triggered.connect(self.close)
-        m.addAction(a)
-        m = mb.addMenu("&Tools")
-        a = QAction("Run built-in self-test", self)
-        a.triggered.connect(lambda: self.start("selftest"))
-        m.addAction(a)
-        a = QAction("Locate ODA File Converter", self)
-        a.triggered.connect(self._locate_oda)
-        m.addAction(a)
-        a = QAction("Open output folder", self)
-        a.triggered.connect(self.open_output_folder)
-        m.addAction(a)
+        self._act(m, "Open output folder", self.open_output_folder)
+        m.addSeparator()
+        self._act(m, "Exit", self.close, "Alt+F4")
+        m = mb.addMenu("&View")
+        self.act_log = self._act(m, "Activity log", self.toggle_log, "Ctrl+L")
+        self.act_log.setCheckable(True)
         m = mb.addMenu("&Help")
-        a = QAction("Quick guide", self)
-        a.setShortcut(QKeySequence("F1"))
-        a.triggered.connect(self.show_guide)
-        m.addAction(a)
-        a = QAction(f"About {APP_NAME}", self)
-        a.triggered.connect(self.show_about)
-        m.addAction(a)
+        self._act(m, "Quick guide", self.show_guide, "F1")
+        self.act_selftest = self._act(m, "Run self-test", lambda: self.start("selftest"))
+        m.addSeparator()
+        self._act(m, f"About {APP_NAME}", self.show_about)
+
+    def _act(self, menu: Any, text: str, fn: Callable[[], Any], key: str = "") -> QAction:
+        a = QAction(text, self)
+        if key:
+            a.setShortcut(QKeySequence(key))
+        a.triggered.connect(lambda _checked=False: fn())
+        menu.addAction(a)
+        return a
 
     def _header(self) -> QWidget:
         f = QFrame()
         f.setObjectName("header")
-        f.setFixedHeight(78)
+        f.setFixedHeight(72)
         lay = QHBoxLayout(f)
-        lay.setContentsMargins(18, 8, 18, 8)
+        lay.setContentsMargins(20, 8, 22, 8)
+        lay.setSpacing(14)
         logo = QLabel()
-        logo.setPixmap(logo_pixmap(56))
+        logo.setPixmap(logo_pixmap(52))
         lay.addWidget(logo)
         col = QVBoxLayout()
         col.setSpacing(0)
         t = QLabel(APP_NAME)
         t.setObjectName("appTitle")
-        s = QLabel("Automated DES_FIBER_SPL fiber-number callouts for FTTx OSP designs - splice reports + address lists -> CAD")
+        s = QLabel("Fiber-number and BFO callouts for FTTx designs, built from splice reports and address lists")
         s.setObjectName("appSub")
+        col.addStretch(1)
         col.addWidget(t)
         col.addWidget(s)
+        col.addStretch(1)
         lay.addLayout(col, 1)
         v = QLabel(f"v{APP_VERSION}")
         v.setObjectName("appVer")
         lay.addWidget(v)
         return f
 
-    def _scroll(self, title: str, subtitle: str) -> tuple:
+    def _step_bar(self) -> QWidget:
+        f = QFrame()
+        f.setObjectName("stepBar")
+        lay = QHBoxLayout(f)
+        lay.setContentsMargins(14, 0, 14, 0)
+        lay.setSpacing(0)
+        self.steps = QButtonGroup(self)
+        self.steps.setExclusive(True)
+        self.btn_step_inputs = QPushButton("1  Inputs")
+        self.btn_step_results = QPushButton("2  Results")
+        for i, b in enumerate((self.btn_step_inputs, self.btn_step_results)):
+            b.setObjectName("step")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.steps.addButton(b, i)
+            lay.addWidget(b)
+        self.btn_step_inputs.setChecked(True)
+        self.btn_step_results.setEnabled(False)
+        self.btn_step_results.setToolTip("Available after Validate or Generate")
+        self.steps.idClicked.connect(self.go)
+        lay.addStretch(1)
+        return f
+
+    def go(self, index: int) -> None:
+        self.stack.setCurrentIndex(index)
+        b = self.steps.button(index)
+        if b is not None and not b.isChecked():
+            b.setChecked(True)
+
+    def _scroll_page(self) -> tuple:
         page = QWidget()
         page.setObjectName("page")
         outer = QVBoxLayout(page)
@@ -517,297 +690,212 @@ class MainWindow(QMainWindow):
         inner = QWidget()
         inner.setObjectName("page")
         lay = QVBoxLayout(inner)
-        lay.setContentsMargins(24, 18, 24, 18)
-        lay.setSpacing(14)
-        tl = QLabel(title)
-        tl.setObjectName("pageTitle")
-        st = QLabel(subtitle)
-        st.setObjectName("hint")
-        st.setWordWrap(True)
-        lay.addWidget(tl)
-        lay.addWidget(st)
+        lay.setContentsMargins(26, 20, 26, 20)
+        lay.setSpacing(16)
         sc.setWidget(inner)
         outer.addWidget(sc)
         return page, lay
 
-    def _row(self, *widgets: QWidget) -> QWidget:
+    @staticmethod
+    def _row(*widgets: QWidget) -> QWidget:
         w = QWidget()
         h = QHBoxLayout(w)
         h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(8)
         for x in widgets:
             h.addWidget(x)
         return w
 
-    def _browse_btn(self, fn: Callable[[], None]) -> QPushButton:
-        b = QPushButton("Browse...")
-        b.clicked.connect(fn)
-        return b
+    def _page_inputs(self) -> QWidget:
+        page, lay = self._scroll_page()
+        cols = QHBoxLayout()
+        cols.setSpacing(16)
+        left = QVBoxLayout()
+        left.setSpacing(16)
 
-    def _page_project(self) -> QWidget:
-        page, lay = self._scroll("Project", "Select the design drawing, its splice reports and address lists. Files, folders "
-                                            "and .zip archives are accepted; drag & drop works on every field.")
-        c, cl = card("Design drawing", "AutoCAD DWG (2010-2025) or DXF of the FTTx design. DWG files are read by the "
-                                       "built-in reader, or by the ODA File Converter when installed.")
-        self.ed_drawing = PathEdit("Drop a .dwg / .dxf here or click Browse")
-        self.ed_drawing.dropped.connect(lambda _p: self._drawing_changed())
-        self.ed_drawing.editingFinished.connect(self._drawing_changed)
-        cl.addWidget(self._row(self.ed_drawing, self._browse_btn(self.pick_drawing)))
+        c, cl = card("Design drawing", "1", "The region's FTTx design: AutoCAD .dwg (2010-2025) or .dxf.")
+        self.ed_drawing = PathEdit("Drop the .dwg / .dxf here or click Browse")
+        self.ed_drawing.textChanged.connect(lambda _t: self._drawing_changed())
+        b = QPushButton("Browse...")
+        b.clicked.connect(self.pick_drawing)
+        cl.addWidget(self._row(self.ed_drawing, b))
         self.lbl_drawing = QLabel("")
         self.lbl_drawing.setObjectName("hint")
+        self.lbl_drawing.setWordWrap(True)
         cl.addWidget(self.lbl_drawing)
-        lay.addWidget(c)
-        grid = QGridLayout()
-        grid.setSpacing(14)
-        c1, l1 = card("Splice reports", "Splice Connections Report or Fiber Optic Splice Guide workbooks (.xlsx/.xls/.csv).")
-        self.fl_splice = FileList("Splice reports (*.xlsx *.xlsm *.xls *.csv *.zip);;All files (*)", "Drop splice reports here")
-        l1.addWidget(self.fl_splice)
-        c2, l2 = card("Address lists", "One or more address lists (PON, port, address, terminal, drop splice).")
-        self.fl_addr = FileList("Address lists (*.xlsx *.xlsm *.xls *.csv *.zip);;All files (*)", "Drop address lists here")
-        self.fl_addr.changed.connect(self._addresses_changed)
-        l2.addWidget(self.fl_addr)
-        grid.addWidget(c1, 0, 0)
-        grid.addWidget(c2, 0, 1)
-        lay.addLayout(grid)
-        c, cl = card("Output & options")
-        form = QFormLayout()
-        form.setHorizontalSpacing(18)
-        self.ed_output = PathEdit("Default: <drawing folder>\\callout_output")
-        form.addRow("Output folder:", self._row(self.ed_output, self._browse_btn(self.pick_output)))
-        self.cb_existing = QComboBox()
-        self.cb_existing.addItems(["Replace existing fiber callouts", "Keep existing, add only missing callouts",
-                                   "Keep existing, add all callouts"])
-        form.addRow("Existing callouts:", self.cb_existing)
-        self.cb_reader = QComboBox()
-        self.cb_reader.addItems(["Automatic (ODA if installed, else built-in)", "Built-in DWG reader", "ODA File Converter"])
-        form.addRow("DWG reader:", self.cb_reader)
-        self.ed_oda = PathEdit("Optional - ODAFileConverter.exe (auto-detected in Program Files)")
-        form.addRow("ODA File Converter:", self._row(self.ed_oda, self._browse_btn(self.pick_oda)))
-        self.chk_dwg = QCheckBox("Write DWG output when the ODA File Converter is available")
-        self.chk_dwg.setChecked(True)
-        self.cb_dwgver = QComboBox()
-        self.cb_dwgver.addItems(["R2018", "R2013", "R2010", "R2007", "R2004", "R2000"])
-        form.addRow("DWG output:", self._row(self.chk_dwg, QLabel("version"), self.cb_dwgver))
-        self.cb_units = QComboBox()
-        self.cb_units.addItems(["auto", "feet", "meters", "inches"])
-        form.addRow("Drawing units:", self.cb_units)
-        self.sp_ports = QSpinBox()
-        self.sp_ports.setRange(0, 1024)
-        self.sp_ports.setSpecialValueText("auto (splitter size from splice reports)")
-        form.addRow("Ports per PON:", self.sp_ports)
-        cl.addLayout(form)
-        lay.addWidget(c)
-        lay.addStretch(1)
-        return page
+        left.addWidget(c)
 
-    def _page_columns(self) -> QWidget:
-        page, lay = self._scroll("Address-list columns", "Columns are matched automatically per file by name (synonyms "
-                                 "and fuzzy matching). Override a field only if the auto-detection picked the wrong column.")
-        c, cl = card("Column mapping", "* required.  The fiber number is computed as (PON - 1) x splitter size + PORT.")
-        form = QFormLayout()
-        self.col_boxes: Dict[str, QComboBox] = {}
-        for k, (req, _syn, desc) in ADDRESS_FIELDS.items():
-            cb = QComboBox()
-            cb.setEditable(True)
-            cb.addItem(AUTO)
-            self.col_boxes[k] = cb
-            form.addRow(f"{desc}{' *' if req else ''}:", cb)
-        cl.addLayout(form)
-        lay.addWidget(c)
-        lay.addStretch(1)
-        return page
+        c, cl = card("Splice reports & address lists", "2",
+                     "Add everything for the region in one list - files, folders or .zip archives. Splice reports and "
+                     "address lists are recognised automatically; duplicates are ignored.")
+        self.data = DataList()
+        self.data.start_dir = lambda: self._start_dir()
+        self.data.changed.connect(self._data_changed)
+        self.data.drawing_found.connect(self._set_drawing)
+        self.data.rejected.connect(self._rejected)
+        cl.addWidget(self.data)
+        left.addWidget(c, 1)
 
-    def _page_cad(self) -> QWidget:
-        page, lay = self._scroll("CAD mapping", "How the network is drawn. Leave (auto-detect) to let the tool identify it "
-                                 "on every run from geometry and the closure names in your data - recommended for new regions.")
-        c, cl = card("Network objects")
-        form = QFormLayout()
-        self.cb_cl_layer, self.cb_cl_block, self.cb_cl_tag = QComboBox(), QComboBox(), QComboBox()
-        self.cb_hh_layer, self.cb_term_layer = QComboBox(), QComboBox()
-        for cb in (self.cb_cl_layer, self.cb_cl_block, self.cb_cl_tag, self.cb_hh_layer, self.cb_term_layer):
-            cb.setEditable(True)
-            cb.addItem(AUTO)
-        self.cb_cl_layer.currentTextChanged.connect(self._refresh_closure_blocks)
-        self.cb_hh_layer.currentTextChanged.connect(lambda _t: self._refresh_hh_blocks(None))
-        form.addRow("Splice closure layer:", self.cb_cl_layer)
-        form.addRow("Splice closure block:", self.cb_cl_block)
-        form.addRow("Closure name attribute:", self.cb_cl_tag)
-        form.addRow("Handhole layer:", self.cb_hh_layer)
-        self.lst_hh = QListWidget()
-        self.lst_hh.setMaximumHeight(120)
-        form.addRow("Handhole blocks (checked; none = auto):", self.lst_hh)
-        form.addRow("Terminal layer:", self.cb_term_layer)
-        self.lst_cables = QListWidget()
-        self.lst_cables.setMaximumHeight(160)
-        form.addRow("Cable layers (checked; none = auto):", self.lst_cables)
-        self.sp_snap = QDoubleSpinBox()
-        self.sp_snap.setRange(0.0, 50.0)
-        self.sp_snap.setDecimals(2)
-        self.sp_snap.setSpecialValueText("auto")
-        form.addRow("Cable-to-closure snap tolerance:", self.sp_snap)
-        cl.addLayout(form)
-        b = QPushButton("Reset all to auto-detect")
-        b.clicked.connect(self._reset_cad)
-        cl.addWidget(b, 0, Qt.AlignmentFlag.AlignLeft)
-        lay.addWidget(c)
-        lay.addStretch(1)
-        return page
+        c, cl = card("Output folder", "3", "The callouts DXF and the QA/QC workbook are saved here.")
+        self.ed_output = PathEdit("callout_output next to the drawing")
+        self.ed_output.textEdited.connect(self._output_edited)
+        b = QPushButton("Browse...")
+        b.clicked.connect(self.pick_output)
+        cl.addWidget(self._row(self.ed_output, b))
+        left.addWidget(c)
+        cols.addLayout(left, 3)
 
-    def _page_style(self) -> QWidget:
-        page, lay = self._scroll("Callout style", "Defaults reproduce the reference DES_FIBER_SPL standard exactly "
-                                 "(lengths in feet; converted automatically for metric drawings).")
-        h = QHBoxLayout()
-        c, cl = card("Drafting standard")
-        form = QFormLayout()
+        right = QVBoxLayout()
+        right.setSpacing(16)
+        c, cl = card("Callout standard", "", "Every callout is written exactly like the reference design.")
+        cl.addWidget(CalloutPreview())
         s = CalloutSpec()
-        self.style_w: Dict[str, Any] = {}
-
-        def add(name: str, label: str, w: QWidget) -> None:
-            self.style_w[name] = w
-            form.addRow(label, w)
-
-        def ds(val: float, lo: float, hi: float, dec: int = 2) -> QDoubleSpinBox:
-            sp = QDoubleSpinBox()
-            sp.setRange(lo, hi)
-            sp.setDecimals(dec)
-            sp.setValue(val)
-            return sp
-        add("cable_layer", "BFO callout layer:", QLineEdit(s.cable_layer))
-        add("terminal_layer", "Fiber-number callout layer:", QLineEdit(s.terminal_layer))
-        sp = QSpinBox()
-        sp.setRange(1, 255)
-        sp.setValue(s.layer_color)
-        add("layer_color", "Layer color (ACI, for new layers):", sp)
-        add("text_style", "Text style:", QLineEdit(s.text_style))
-        add("text_style_font", "Font (new style):", QLineEdit(s.text_style_font))
-        add("mleader_style", "MLEADER style:", QLineEdit(s.mleader_style))
-        add("text_height", "Text height:", ds(s.text_height, 0.01, 1000))
-        add("arrow_size", "Arrow size:", ds(s.arrow_size, 0.0, 1000))
-        add("landing_gap", "Landing gap:", ds(s.landing_gap, 0.0, 100, 3))
-        add("dogleg_length", "Dogleg length:", ds(s.dogleg_length, 0.0, 100, 3))
-        add("terminal_leader_length", "Fiber-number leader length:", ds(s.terminal_leader_length, 0.5, 1000))
-        add("cable_leader_length", "BFO leader length:", ds(s.cable_leader_length, 0.5, 1000))
-        add("cable_offset_along", "BFO arrow distance from closure:", ds(s.cable_offset_along, 0.0, 1000))
-        add("handhole_search_radius", "Handhole search radius:", ds(s.handhole_search_radius, 1.0, 5000, 1))
-        ed = QLineEdit(s.cable_prefix)
-        ed.textChanged.connect(self._update_preview)
-        add("cable_prefix", "Cable callout prefix:", ed)
-        sp = QSpinBox()
-        sp.setRange(0, 6)
-        sp.setValue(s.zero_pad)
-        sp.setSpecialValueText("none (3, 12)")
-        add("zero_pad", "Zero padding:", sp)
-        cb = QComboBox()
-        cb.addItems(["span", "exact"])
-        add("cable_range_mode", "BFO range (span = lowest-highest):", cb)
-        ch = QCheckBox("One callout per contiguous run (reference behaviour)")
-        ch.setChecked(s.split_terminal_runs)
-        add("split_terminal_runs", "Non-contiguous terminals:", ch)
-        cl.addLayout(form)
-        b = QPushButton("Reset to DES_FIBER_SPL standard")
-        b.clicked.connect(self._reset_style)
-        cl.addWidget(b, 0, Qt.AlignmentFlag.AlignLeft)
-        h.addWidget(c, 3)
-        c2, cl2 = card("Preview", "Magenta MULTILEADER, MText underlined top line, closed-filled arrow, dogleg landing.")
-        self.preview = CalloutPreview()
-        cl2.addWidget(self.preview)
-        cl2.addStretch(1)
-        h.addWidget(c2, 2)
-        lay.addLayout(h)
-        lay.addStretch(1)
+        for line in (f"MULTILEADER on layer {s.terminal_layer} (magenta, ACI {s.layer_color})",
+                     f"Text style {s.text_style}, height {s.text_height:g}, closed-filled arrow {s.arrow_size:g}",
+                     "Fiber number  N = (PON - 1) x splitter size + PON PORT",
+                     f"Cable callout  {s.cable_prefix} <fiber count> / <lowest>-<highest>"):
+            lb = QLabel("•  " + line)
+            lb.setObjectName("specLine")
+            lb.setWordWrap(True)
+            cl.addWidget(lb)
+        auto = QLabel("Detected from your files on every run: closures, handholes, cables, address-list columns, "
+                      "splitter size and drawing units - nothing to configure for a new region.")
+        auto.setObjectName("hint")
+        auto.setWordWrap(True)
+        cl.addSpacing(4)
+        cl.addWidget(auto)
+        right.addWidget(c)
+        right.addStretch(1)
+        cols.addLayout(right, 2)
+        lay.addLayout(cols, 1)
         return page
 
     def _page_results(self) -> QWidget:
         page = QWidget()
         page.setObjectName("page")
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(24, 18, 24, 12)
-        t = QLabel("Results")
-        t.setObjectName("pageTitle")
-        lay.addWidget(t)
-        self.lbl_result = QLabel("Run Validate or Generate to see results.")
-        self.lbl_result.setObjectName("hint")
-        lay.addWidget(self.lbl_result)
+        lay.setContentsMargins(26, 18, 26, 12)
+        lay.setSpacing(14)
+
+        self.banner = QFrame()
+        self.banner.setObjectName("bannerInfo")
+        bl = QHBoxLayout(self.banner)
+        bl.setContentsMargins(16, 12, 16, 12)
+        bl.setSpacing(16)
+        txt = QVBoxLayout()
+        txt.setSpacing(3)
+        self.banner_title = QLabel("")
+        self.banner_title.setObjectName("bannerTitle")
+        self.banner_title.setWordWrap(True)
+        self.banner_text = QLabel("")
+        self.banner_text.setWordWrap(True)
+        self.banner_text.setTextFormat(Qt.TextFormat.RichText)
+        self.banner_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.banner_detail = QLabel("")
+        self.banner_detail.setObjectName("bannerDetail")
+        self.banner_detail.setWordWrap(True)
+        txt.addWidget(self.banner_title)
+        txt.addWidget(self.banner_text)
+        txt.addWidget(self.banner_detail)
+        bl.addLayout(txt, 1)
+        self.btn_open_dxf = QPushButton("Open callouts DXF")
+        self.btn_open_dxf.setObjectName("primary")
+        self.btn_open_qa = QPushButton("Open QA workbook")
+        self.btn_open_folder = QPushButton("Open folder")
+        self.btn_open_dxf.clicked.connect(lambda: self._open(self.outputs.get("Callouts DXF")))
+        self.btn_open_qa.clicked.connect(lambda: self._open(self.outputs.get("QA workbook")))
+        self.btn_open_folder.clicked.connect(self.open_output_folder)
+        for b in (self.btn_open_dxf, self.btn_open_qa, self.btn_open_folder):
+            b.setVisible(False)
+            bl.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(self.banner)
+
         k = QHBoxLayout()
+        k.setSpacing(12)
         self.kpi_t = Kpi("Fiber-number callouts", ACCENT)
         self.kpi_c = Kpi("BFO callouts", PRIMARY)
         self.kpi_clean = Kpi("Clean placement", "#1B7F3B")
         self.kpi_e = Kpi("Errors", "#C62828")
-        self.kpi_w = Kpi("Warnings", "#B26A00")
+        self.kpi_w = Kpi("Warnings", "#9A5B00")
         for w in (self.kpi_t, self.kpi_c, self.kpi_clean, self.kpi_e, self.kpi_w):
             k.addWidget(w)
         lay.addLayout(k)
+
         self.tabs = QTabWidget()
-        self.tbl_callouts = Table("Search callouts (text, closure, OLM, status...)")
-        self.tbl_issues = Table("Search issues...")
+        self.tbl_issues = Table("Search issues...", {
+            "Errors and warnings": lambda r: r["Severity"] in ("ERROR", "WARNING"),
+            "Errors": lambda r: r["Severity"] == "ERROR",
+            "Warnings": lambda r: r["Severity"] == "WARNING",
+            "All, including info": lambda r: True})
+        self.tbl_callouts = Table("Search callouts - text, closure, OLM...", {
+            "All callouts": lambda r: True,
+            "Fiber number": lambda r: r["Kind"] == "Fiber number",
+            "BFO": lambda r: r["Kind"] == "BFO",
+            "Placement to review": lambda r: "PLACEMENT REVIEW" in (r["Notes"] or ""),
+            "Failed": lambda r: r["Status"] == "FAILED"})
         self.tbl_network = Table("Search...")
-        self.tbl_existing = Table("Search...")
+        self.tbl_existing = Table("Search...", {
+            "All": lambda r: True,
+            "Differences only": lambda r: not str(r.get("Result", "")).startswith("MATCH")})
+        self.tabs.addTab(self.tbl_issues, "Issues")
         self.tabs.addTab(self.tbl_callouts, "Callouts")
-        self.tabs.addTab(self.tbl_issues, "Validation issues")
-        self.tabs.addTab(self.tbl_network, "Network summary")
-        self.tabs.addTab(self.tbl_existing, "Existing vs computed")
+        self.tabs.addTab(self.tbl_network, "Network")
+        self.tabs.addTab(self.tbl_existing, "Existing callouts")
         lay.addWidget(self.tabs, 1)
-        row = QHBoxLayout()
-        self.btn_open_folder = QPushButton("Open output folder")
-        self.btn_open_qa = QPushButton("Open QA workbook")
-        self.btn_open_dwg = QPushButton("Open drawing output")
-        self.btn_open_folder.clicked.connect(self.open_output_folder)
-        self.btn_open_qa.clicked.connect(lambda: self._open(self.outputs.get("QA workbook")))
-        self.btn_open_dwg.clicked.connect(lambda: self._open(self.outputs.get("DWG") or self.outputs.get("DXF")
-                                                             or self.outputs.get("Callouts DXF")))
-        for b in (self.btn_open_folder, self.btn_open_qa, self.btn_open_dwg):
-            b.setEnabled(False)
-            row.addWidget(b)
-        row.addStretch(1)
-        lay.addLayout(row)
         return page
 
     def _action_bar(self) -> QWidget:
         f = QFrame()
         f.setObjectName("actionBar")
         lay = QHBoxLayout(f)
-        lay.setContentsMargins(18, 10, 18, 10)
-        self.btn_scan = QPushButton("Scan && Auto-Detect")
-        self.btn_validate = QPushButton("Validate")
-        self.btn_validate.setObjectName("secondary")
-        self.btn_generate = QPushButton("Generate Callouts")
-        self.btn_generate.setObjectName("primary")
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setObjectName("danger")
-        self.btn_cancel.setEnabled(False)
-        self.btn_scan.clicked.connect(lambda: self.start("scan"))
-        self.btn_validate.clicked.connect(lambda: self.start("validate"))
-        self.btn_generate.clicked.connect(lambda: self.start("generate"))
-        self.btn_cancel.clicked.connect(self.cancel_job)
-        for b in (self.btn_scan, self.btn_validate, self.btn_generate, self.btn_cancel):
-            lay.addWidget(b)
-        lay.addSpacing(16)
+        lay.setContentsMargins(22, 10, 22, 10)
+        lay.setSpacing(10)
         col = QVBoxLayout()
-        col.setSpacing(2)
+        col.setSpacing(5)
+        self.status = QLabel("")
+        self.status.setObjectName("hint")
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
-        self.status = QLabel("Ready")
-        self.status.setObjectName("hint")
-        col.addWidget(self.progress)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(4)
+        self.progress.setVisible(False)
         col.addWidget(self.status)
+        col.addWidget(self.progress)
         lay.addLayout(col, 1)
+        self.btn_log = QPushButton("Show log")
+        self.btn_log.setObjectName("link")
+        self.btn_log.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_log.clicked.connect(self.toggle_log)
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setObjectName("danger")
+        self.btn_cancel.setVisible(False)
+        self.btn_validate = QPushButton("Validate")
+        self.btn_validate.setObjectName("secondary")
+        self.btn_validate.setToolTip("Analyse the inputs and list every problem - nothing is written")
+        self.btn_generate = QPushButton("Generate Callouts")
+        self.btn_generate.setObjectName("primary")
+        self.btn_generate.setToolTip("Write the callouts DXF and the QA/QC workbook")
+        self.btn_cancel.clicked.connect(self.cancel_job)
+        self.btn_validate.clicked.connect(lambda: self.start("validate"))
+        self.btn_generate.clicked.connect(lambda: self.start("generate"))
+        for b in (self.btn_log, self.btn_cancel, self.btn_validate, self.btn_generate):
+            lay.addWidget(b)
         return f
 
     def _log_dock(self) -> None:
-        dock = QDockWidget("Activity log", self)
-        dock.setObjectName("logDock")
-        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+        self.dock = QDockWidget("Activity log", self)
+        self.dock.setObjectName("logDock")
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(6, 4, 6, 6)
+        lay.setContentsMargins(8, 4, 8, 8)
         row = QHBoxLayout()
         self.cb_level = QComboBox()
-        self.cb_level.addItems(["All messages", "Warnings and errors", "Errors only"])
+        self.cb_level.addItems(["All messages", "Warnings and errors"])
         self.cb_level.currentIndexChanged.connect(self._render_log)
         b1 = QPushButton("Clear")
         b1.clicked.connect(self._clear_log)
         b2 = QPushButton("Save log...")
         b2.clicked.connect(self._save_log)
-        row.addWidget(QLabel("Show:"))
         row.addWidget(self.cb_level)
         row.addStretch(1)
         row.addWidget(b1)
@@ -815,29 +903,173 @@ class MainWindow(QMainWindow):
         lay.addLayout(row)
         self.console = QTextEdit()
         self.console.setReadOnly(True)
-        self.console.setFont(QFont("Consolas" if os.name == "nt" else "DejaVu Sans Mono", 9))
+        self.console.setFont(QFont(MONO_FONT, 9))
+        self.console.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         lay.addWidget(self.console)
-        dock.setWidget(w)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
-        self.resizeDocks([dock], [230], Qt.Orientation.Vertical)
+        self.dock.setWidget(w)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.dock)
+        self.resizeDocks([self.dock], [240], Qt.Orientation.Vertical)
+        self.dock.visibilityChanged.connect(self._dock_visibility)
+        self.dock.hide()
 
-    # ----------------------------------------------------------------- helpers
-    def _startup_info(self) -> None:
-        oda = find_oda_converter(self.ed_oda.text().strip())
-        self.statusBar().showMessage(f"ODA File Converter: {oda}" if oda else
-                                     "ODA File Converter not found - DWG files are read with the built-in reader")
-        self._log(f"{APP_NAME} {APP_VERSION} ready. " + ("ODA File Converter found: " + oda if oda else
-                  "DWG 2010-2025 supported by the built-in reader (ODA File Converter optional)."), "INFO")
+    # ----------------------------------------------------------------- input handling
+    def _start_dir(self) -> str:
+        d = self.ed_drawing.text().strip()
+        if d and Path(d).parent.exists():
+            return str(Path(d).parent)
+        return str(self.settings.value("lastDir", "") or "")
+
+    def _set_drawing(self, path: str) -> None:
+        self.ed_drawing.setText(path)
+
+    def pick_drawing(self) -> None:
+        f, _ = QFileDialog.getOpenFileName(self, "Design drawing", self._start_dir(),
+                                           "CAD drawings (*.dwg *.dxf);;All files (*)")
+        if f:
+            self.settings.setValue("lastDir", str(Path(f).parent))
+            self._set_drawing(f)
+
+    def pick_output(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "Output folder", self.ed_output.text() or self._start_dir())
+        if d:
+            self.ed_output.setText(d)
+            self._output_user_set = True
+
+    def _output_edited(self, text: str) -> None:
+        self._output_user_set = bool(text.strip())
+
+    @staticmethod
+    def drawing_check(p: str) -> tuple:
+        """(message, usable) for a drawing path."""
+        path = Path(p)
+        if not path.is_file():
+            return "File not found", False
+        if path.suffix.lower() not in DRAWING_EXTS:
+            return "Not a .dwg or .dxf file", False
+        info = f"{path.suffix.upper().lstrip('.')}  \u00b7  {path.stat().st_size / 1e6:.1f} MB"
+        if path.suffix.lower() == ".dwg":
+            from .dwg_native import KNOWN, SUPPORTED
+            try:
+                with path.open("rb") as fh:
+                    ver = fh.read(6).decode("ascii", "replace")
+            except OSError as exc:
+                return f"Cannot read the file: {exc}", False
+            if ver not in SUPPORTED:
+                return (f"{info}  \u00b7  {KNOWN.get(ver, 'unrecognised')} format - save it as AutoCAD 2010 or newer "
+                        "DWG (or as DXF) and try again"), False
+            info += f"  \u00b7  {SUPPORTED[ver]} format"
+        return info, True
+
+    def _drawing_changed(self) -> None:
+        raw = self.ed_drawing.text()
+        p = raw.strip().strip('"').strip()
+        if p != raw:
+            self.ed_drawing.setText(p)      # re-enters with the cleaned path
+            return
+        self.result_status = ""
+        if not p:
+            self._set_drawing_status("", "hint")
+        else:
+            msg, ok = self.drawing_check(p)
+            self._set_drawing_status(("\u2713  " if ok else "\u26a0  ") + msg, "ok" if ok else "bad")
+            if ok:
+                self.settings.setValue("lastDir", str(Path(p).parent))
+                if not self._output_user_set:
+                    self.ed_output.setText(str(Path(p).parent / "callout_output"))
+        self._refresh_ready()
+
+    def _set_drawing_status(self, text: str, kind: str) -> None:
+        self.lbl_drawing.setText(text)
+        self.lbl_drawing.setObjectName(kind)
+        self.lbl_drawing.style().unpolish(self.lbl_drawing)
+        self.lbl_drawing.style().polish(self.lbl_drawing)
+
+    def _rejected(self, names: List[str]) -> None:
+        shown = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+        self._log(f"Not added (not a spreadsheet, folder or .zip): {', '.join(names)}", "WARNING")
+        QMessageBox.information(self, APP_NAME, f"Not added: {shown}\n\nAdd splice reports and address lists as "
+                                ".xlsx / .xls / .csv files, folders or .zip archives. Drawings go in the drawing field.")
+
+    def _data_changed(self) -> None:
+        self.result_status = ""
+        self._refresh_ready()
+
+    def _ready(self) -> str:
+        """Empty when Validate / Generate can run, otherwise what is missing."""
+        p = self.ed_drawing.text().strip()
+        if not p:
+            return "Add the design drawing and its splice reports / address lists to begin."
+        if not self.drawing_check(p)[1]:
+            return "The design drawing cannot be used - see the message under the drawing."
+        if not self.data.paths():
+            return "Add the splice reports and address lists of the region."
+        return ""
+
+    def _refresh_ready(self) -> None:
+        if self.thread is not None:
+            return
+        why = self._ready()
+        for b in (self.btn_validate, self.btn_generate):
+            b.setEnabled(not why)
+        self.status.setText(why or self.result_status or "Ready - Validate to check the inputs, or Generate Callouts.")
+
+    def config(self) -> RunConfig:
+        cfg = RunConfig()
+        cfg.drawing_path = self.ed_drawing.text().strip()
+        data = self.data.paths()
+        cfg.splice_paths = list(data)
+        cfg.address_paths = list(data)
+        cfg.output_dir = self.ed_output.text().strip() or str(Path(cfg.drawing_path).parent / "callout_output")
+        return cfg
+
+    def new_region(self) -> None:
+        if self.thread is not None:
+            return
+        self.ed_drawing.clear()
+        self.data.clear()
+        self.ed_output.clear()
+        self._output_user_set = False
+        self.last_result = None
+        self.outputs = {}
+        self.have_results = False
+        self.result_status = ""
+        self.btn_step_results.setEnabled(False)
+        self.go(0)
+        self._refresh_ready()
+        self._log("New region - inputs cleared", "INFO")
+
+    # ----------------------------------------------------------------- drag & drop anywhere
+    def dragEnterEvent(self, e: Any) -> None:  # noqa: N802
+        if accepts_urls(e) and self.thread is None:
+            e.acceptProposedAction()
+
+    def dragMoveEvent(self, e: Any) -> None:  # noqa: N802
+        self.dragEnterEvent(e)
+
+    def dropEvent(self, e: Any) -> None:  # noqa: N802
+        if self.thread is not None:
+            return
+        self.go(0)
+        self.data.add_many(dropped_paths(e))
+
+    # ----------------------------------------------------------------- log
+    def toggle_log(self) -> None:
+        self.dock.setVisible(not self.dock.isVisible())
+
+    def _dock_visibility(self, visible: bool) -> None:
+        self.btn_log.setText("Hide log" if visible else "Show log")
+        self.act_log.setChecked(visible)
 
     def _log(self, msg: str, level: str) -> None:
         stamp = _dt.datetime.now().strftime("%H:%M:%S")
         self.log_lines.append((stamp, level, msg))
+        if len(self.log_lines) > 20000:
+            del self.log_lines[:5000]
         if self._visible(level):
             self._append(stamp, level, msg)
 
     def _visible(self, level: str) -> bool:
-        i = self.cb_level.currentIndex()
-        return i == 0 or (i == 1 and level in ("WARNING", "ERROR", "SUCCESS")) or (i == 2 and level == "ERROR")
+        return self.cb_level.currentIndex() == 0 or level in ("WARNING", "ERROR", "SUCCESS")
 
     def _append(self, stamp: str, level: str, msg: str) -> None:
         fmt = QTextCharFormat()
@@ -861,342 +1093,103 @@ class MainWindow(QMainWindow):
         self.console.clear()
 
     def _save_log(self) -> None:
-        f, _ = QFileDialog.getSaveFileName(self, "Save log", "fibercallout_log.txt", "Text (*.txt)")
+        f, _ = QFileDialog.getSaveFileName(self, "Save log", str(Path(self._start_dir() or ".") / "fibercallout_log.txt"),
+                                           "Text (*.txt)")
         if f:
             Path(f).write_text("\n".join(f"[{s}] {l:<7} {m}" for s, l, m in self.log_lines), encoding="utf-8")
 
+    # ----------------------------------------------------------------- outputs
     def _open(self, path: Optional[str]) -> None:
         if path and Path(path).exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        elif path:
+            QMessageBox.warning(self, APP_NAME, f"File not found:\n{path}")
 
     def open_output_folder(self) -> None:
-        p = next(iter(self.outputs.values()), "") if self.outputs else ""
-        folder = str(Path(p).parent) if p else (self.ed_output.text() or "")
-        if folder and Path(folder).exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
-
-    def pick_drawing(self) -> None:
-        f, _ = QFileDialog.getOpenFileName(self, "Design drawing", self.settings.value("lastDir", ""),
-                                           "CAD drawings (*.dwg *.dxf);;All files (*)")
-        if f:
-            self.settings.setValue("lastDir", str(Path(f).parent))
-            self.ed_drawing.setText(f)
-            self._drawing_changed()
-
-    def pick_output(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "Output folder", self.ed_output.text())
-        if d:
-            self.ed_output.setText(d)
-
-    def pick_oda(self) -> None:
-        f, _ = QFileDialog.getOpenFileName(self, "ODA File Converter executable", "", "Executable (*.exe);;All files (*)")
-        if f:
-            self.ed_oda.setText(f)
-
-    def _locate_oda(self) -> None:
-        oda = find_oda_converter(self.ed_oda.text().strip())
-        if oda:
-            self.ed_oda.setText(oda)
-            QMessageBox.information(self, APP_NAME, f"ODA File Converter found:\n{oda}")
+        p = self.outputs.get("Callouts DXF", "")
+        folder = Path(p).parent if p else Path(self.ed_output.text().strip() or ".")
+        if folder.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
         else:
-            QMessageBox.information(self, APP_NAME, "ODA File Converter was not found. DWG files are still supported by "
-                                    "the built-in reader; output is then a callouts DXF + AutoCAD script.\n\n"
-                                    "Free download: https://www.opendesign.com/guestfiles/oda_file_converter")
-
-    def _drawing_changed(self) -> None:
-        p = self.ed_drawing.text().strip()
-        if not p:
-            self.lbl_drawing.setText("")
-            return
-        path = Path(p)
-        if not path.exists():
-            self.lbl_drawing.setText("File not found")
-            return
-        info = f"{path.suffix.upper().lstrip('.')} - {path.stat().st_size / 1e6:.1f} MB"
-        if path.suffix.lower() == ".dwg":
-            try:
-                ver = path.open("rb").read(6).decode("ascii", "replace")
-                from .dwg_native import KNOWN, SUPPORTED
-                info += f" - format {ver} ({SUPPORTED.get(ver) or KNOWN.get(ver, 'unknown')})"
-            except OSError:
-                pass
-        self.lbl_drawing.setText(info)
-        if not self.ed_output.text().strip():
-            self.ed_output.setText(str(path.parent / "callout_output"))
-        if self.scan is not None:
-            self._reset_cad()
-            self._log("Drawing changed - CAD mapping reset to auto-detect (run Scan to review)", "INFO")
-
-    def _addresses_changed(self) -> None:
-        for cb in getattr(self, "col_boxes", {}).values():
-            cb.setCurrentIndex(0)
-
-    def _reset_cad(self) -> None:
-        for cb in (self.cb_cl_layer, self.cb_cl_block, self.cb_cl_tag, self.cb_hh_layer, self.cb_term_layer):
-            cb.setCurrentText(AUTO)
-        for lst in (self.lst_hh, self.lst_cables):
-            for i in range(lst.count()):
-                lst.item(i).setCheckState(Qt.CheckState.Unchecked)
-        self.sp_snap.setValue(0.0)
-
-    def _reset_style(self) -> None:
-        self._apply_spec(CalloutSpec())
-
-    def _update_preview(self) -> None:
-        self.preview.prefix = self.style_w["cable_prefix"].text() or "BFO"
-        self.preview.update()
-
-    def _refresh_closure_blocks(self) -> None:
-        if not self.scan:
-            return
-        layer = self.cb_cl_layer.currentText()
-        cur_b, cur_t = self.cb_cl_block.currentText(), self.cb_cl_tag.currentText()
-        self.cb_cl_block.blockSignals(True)
-        self.cb_cl_block.clear()
-        self.cb_cl_block.addItem(AUTO)
-        self.cb_cl_block.addItems([b for l, b, _n in self.scan.insert_pairs if l == layer])
-        self.cb_cl_block.setCurrentText(cur_b)
-        self.cb_cl_block.blockSignals(False)
-        tags = sorted({t for key, ts in self.scan.insert_tags.items() if key.split("|")[0] == layer for t in ts})
-        self.cb_cl_tag.clear()
-        self.cb_cl_tag.addItem(AUTO)
-        self.cb_cl_tag.addItems(tags)
-        self.cb_cl_tag.setCurrentText(cur_t)
-
-    def _refresh_hh_blocks(self, checked: Optional[List[str]]) -> None:
-        if not self.scan:
-            return
-        layer = self.cb_hh_layer.currentText()
-        keep = set(checked) if checked is not None else {self.lst_hh.item(i).text() for i in range(self.lst_hh.count())
-                                                          if self.lst_hh.item(i).checkState() == Qt.CheckState.Checked}
-        self.lst_hh.clear()
-        for l, b, n in self.scan.insert_pairs:
-            if l == layer:
-                it = QListWidgetItem(b)
-                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                it.setCheckState(Qt.CheckState.Checked if b in keep else Qt.CheckState.Unchecked)
-                it.setToolTip(f"{n} instance(s)")
-                self.lst_hh.addItem(it)
-
-    # ----------------------------------------------------------------- config
-    @staticmethod
-    def _auto(text: str) -> str:
-        t = text.strip()
-        return "" if t in ("", AUTO) else t
-
-    def collect_config(self) -> RunConfig:
-        cfg = RunConfig()
-        cfg.drawing_path = self.ed_drawing.text().strip()
-        cfg.output_dir = self.ed_output.text().strip()
-        cfg.oda_path = self.ed_oda.text().strip()
-        cfg.splice_paths = self.fl_splice.paths()
-        cfg.address_paths = self.fl_addr.paths()
-        cfg.existing_mode = ("replace", "skip", "append")[self.cb_existing.currentIndex()]
-        cfg.dwg_reader = ("auto", "builtin", "oda")[self.cb_reader.currentIndex()]
-        cfg.export_dwg = self.chk_dwg.isChecked()
-        cfg.dwg_version = self.cb_dwgver.currentText()
-        cfg.units = self.cb_units.currentText()
-        cfg.ports_per_pon = self.sp_ports.value()
-        for k, cb in self.col_boxes.items():
-            setattr(cfg.columns, k, self._auto(cb.currentText()) or None)
-        cfg.cad = CadMap(
-            closure_layer=self._auto(self.cb_cl_layer.currentText()),
-            closure_block=self._auto(self.cb_cl_block.currentText()),
-            closure_name_tag=self._auto(self.cb_cl_tag.currentText()),
-            handhole_layer=self._auto(self.cb_hh_layer.currentText()),
-            handhole_blocks=[self.lst_hh.item(i).text() for i in range(self.lst_hh.count())
-                             if self.lst_hh.item(i).checkState() == Qt.CheckState.Checked],
-            terminal_layer=self._auto(self.cb_term_layer.currentText()),
-            cable_layers=[self.lst_cables.item(i).text() for i in range(self.lst_cables.count())
-                          if self.lst_cables.item(i).checkState() == Qt.CheckState.Checked],
-            snap_tolerance=self.sp_snap.value())
-        sp = CalloutSpec()
-        for name, w in self.style_w.items():
-            if isinstance(w, (QDoubleSpinBox, QSpinBox)):
-                setattr(sp, name, w.value())
-            elif isinstance(w, QLineEdit):
-                setattr(sp, name, w.text().strip() or getattr(CalloutSpec(), name))
-            elif isinstance(w, QComboBox):
-                setattr(sp, name, w.currentText())
-            elif isinstance(w, QCheckBox):
-                setattr(sp, name, w.isChecked())
-        cfg.spec = sp
-        return cfg
-
-    def _apply_spec(self, sp: CalloutSpec) -> None:
-        for name, w in self.style_w.items():
-            v = getattr(sp, name)
-            if isinstance(w, (QDoubleSpinBox, QSpinBox)):
-                w.setValue(v)
-            elif isinstance(w, QLineEdit):
-                w.setText(str(v))
-            elif isinstance(w, QComboBox):
-                w.setCurrentText(str(v))
-            elif isinstance(w, QCheckBox):
-                w.setChecked(bool(v))
-        self._update_preview()
-
-    def apply_config(self, cfg: RunConfig) -> None:
-        self.ed_drawing.setText(cfg.drawing_path)
-        self.ed_output.setText(cfg.output_dir)
-        self.ed_oda.setText(cfg.oda_path)
-        self.fl_splice.set_paths(cfg.splice_paths)
-        self.fl_addr.set_paths(cfg.address_paths)
-        self.cb_existing.setCurrentIndex(("replace", "skip", "append").index(cfg.existing_mode)
-                                         if cfg.existing_mode in ("replace", "skip", "append") else 0)
-        self.cb_reader.setCurrentIndex(("auto", "builtin", "oda").index(cfg.dwg_reader) if cfg.dwg_reader in ("auto", "builtin", "oda") else 0)
-        self.chk_dwg.setChecked(cfg.export_dwg)
-        self.cb_dwgver.setCurrentText(cfg.dwg_version)
-        self.cb_units.setCurrentText(cfg.units)
-        self.sp_ports.setValue(cfg.ports_per_pon)
-        for k, cb in self.col_boxes.items():
-            cb.setCurrentText(getattr(cfg.columns, k) or AUTO)
-        c = cfg.cad
-        self.cb_cl_layer.setCurrentText(c.closure_layer or AUTO)
-        self.cb_cl_block.setCurrentText(c.closure_block or AUTO)
-        self.cb_cl_tag.setCurrentText(c.closure_name_tag or AUTO)
-        self.cb_hh_layer.setCurrentText(c.handhole_layer or AUTO)
-        self.cb_term_layer.setCurrentText(c.terminal_layer or AUTO)
-        for lst, vals in ((self.lst_hh, c.handhole_blocks), (self.lst_cables, c.cable_layers)):
-            lst.clear()
-            for v in vals:
-                it = QListWidgetItem(v)
-                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                it.setCheckState(Qt.CheckState.Checked)
-                lst.addItem(it)
-        self.sp_snap.setValue(c.snap_tolerance)
-        self._apply_spec(cfg.spec)
-        self._drawing_changed()
-
-    def apply_scan(self, res: ScanResult) -> None:
-        self.scan = res
-        for k, cb in self.col_boxes.items():
-            cb.clear()
-            cb.addItem(AUTO)
-            cb.addItems(res.headers)
-            cb.setCurrentText(getattr(res.columns, k) or AUTO)
-        if res.cad:
-            for cb in (self.cb_cl_layer, self.cb_hh_layer, self.cb_term_layer):
-                cb.blockSignals(True)
-                cb.clear()
-                cb.addItem(AUTO)
-                cb.addItems(res.layers)
-                cb.blockSignals(False)
-            self.cb_cl_layer.setCurrentText(res.cad.closure_layer or AUTO)
-            self._refresh_closure_blocks()
-            self.cb_cl_block.setCurrentText(res.cad.closure_block or AUTO)
-            self.cb_cl_tag.setCurrentText(res.cad.closure_name_tag or AUTO)
-            self.cb_hh_layer.setCurrentText(res.cad.handhole_layer or AUTO)
-            self._refresh_hh_blocks(res.cad.handhole_blocks)
-            self.cb_term_layer.setCurrentText(res.cad.terminal_layer or AUTO)
-            self.lst_cables.clear()
-            for l, n in res.line_layers:
-                it = QListWidgetItem(l)
-                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                it.setCheckState(Qt.CheckState.Checked if l in res.cad.cable_layers else Qt.CheckState.Unchecked)
-                it.setToolTip(f"{n} linear entities")
-                self.lst_cables.addItem(it)
-            self.sp_snap.setValue(res.cad.snap_tolerance)
-            self.lbl_drawing.setText(res.drawing_info)
+            QMessageBox.information(self, APP_NAME, "The output folder is created when the callouts are generated.")
 
     def show_results(self, res: RunResult) -> None:
         s = res.summary
-        self.kpi_t.set(s.get("Fiber-number callouts", 0))
-        self.kpi_c.set(s.get("BFO callouts", 0))
-        total = s.get("Fiber-number callouts", 0) + s.get("BFO callouts", 0)
-        self.kpi_clean.set(f"{s.get('Placement - clean', 0)}/{total}")
-        self.kpi_e.set(s.get("Errors", 0))
-        self.kpi_w.set(s.get("Warnings", 0))
-        mode = "Generated" if res.outputs else "Validation (dry run)"
-        self.lbl_result.setText(f"{mode} - {s.get('OLMs', '')} - {s.get('Formula', '')} - reader: {s.get('Drawing reader', '')}")
-        rows = [dict(ID=p.uid, Kind="Fiber number" if p.kind == "TERMINAL" else "BFO", OLM=p.olm,
-                     Text=p.text.replace("\\P", " / "), Closure=p.closure, Anchor=p.anchor,
-                     Numbers=fmt_numbers(p.numbers, "exact", 0), Status=p.status, Existing=p.existing_match,
-                     Notes=p.notes, Calculation=p.calculation) for p in res.plans]
+        n_t, n_c = s.get("Fiber-number callouts", 0), s.get("BFO callouts", 0)
+        n_e, n_w = s.get("Errors", 0), s.get("Warnings", 0)
+        self.kpi_t.set(n_t)
+        self.kpi_c.set(n_c)
+        self.kpi_clean.set(f"{s.get('Placement - clean', 0)} / {n_t + n_c}")
+        self.kpi_e.set(n_e)
+        self.kpi_w.set(n_w)
+        self.outputs = dict(res.outputs)
+        generated = bool(self.outputs)
+        self.banner_detail.setText(
+            f"{s.get('OLMs', '')}  \u00b7  {s.get('Formula', '')}  \u00b7  {s.get('Splice reports', 0)} splice report(s), "
+            f"{s.get('Address rows (PON assigned)', 0)} address rows, {s.get('Closures in drawing', 0)} closures")
+        total = n_t + n_c
+        errs = f" - {n_e} error(s) to review" if n_e else ""
+        if generated:
+            self.banner.setObjectName("bannerOk" if not n_e else "bannerWarn")
+            self.banner_title.setText(f"{total:,} callouts ready{errs}")
+            self.banner_text.setText(
+                f"Saved <b>{Path(self.outputs['Callouts DXF']).name}</b> and the QA workbook.<br>"
+                "To place them: open the callouts DXF in AutoCAD &rarr; <b>Ctrl+A</b>, <b>Ctrl+C</b> &rarr; switch to the "
+                "design drawing &rarr; <b>PASTEORIG</b> (pastes at the original coordinates).")
+        else:
+            self.banner.setObjectName("bannerInfo" if not n_e else "bannerWarn")
+            self.banner_title.setText(f"Validation complete - {total:,} callouts planned{errs}")
+            self.banner_text.setText("Nothing was written. Review the issues below, then <b>Generate Callouts</b>.")
+        self.banner.style().unpolish(self.banner)
+        self.banner.style().polish(self.banner)
+        for b in (self.btn_open_dxf, self.btn_open_qa, self.btn_open_folder):
+            b.setVisible(generated)
+
+        rows = [{"Kind": "Fiber number" if p.kind == "TERMINAL" else "BFO", "Text": p.text.replace("\\P", " / "),
+                 "OLM": p.olm, "Closure": p.closure, "Anchor": p.anchor, "Numbers": fmt_numbers(p.numbers, "exact", 0),
+                 "Status": p.status, "Existing": p.existing_match, "Notes": p.notes, "Calculation": p.calculation,
+                 "ID": p.uid} for p in res.plans]
         self.tbl_callouts.fill(rows, lambda r: "#FDECEA" if r["Status"] == "FAILED" else
                                ("#FFF6E0" if "PLACEMENT REVIEW" in (r["Notes"] or "") else None))
-        issues = [dict(Severity=i.severity, Category=i.category, Object=i.obj, Message=i.message) for i in res.issues.items]
+        issues = [{"Severity": i.severity, "Category": i.category, "Object": i.obj, "Message": i.message}
+                  for i in res.issues.items]
+        order = {"ERROR": 0, "WARNING": 1, "INFO": 2}
+        issues.sort(key=lambda r: (order.get(r["Severity"], 3), r["Category"]))
         self.tbl_issues.fill(issues, lambda r: {"ERROR": "#FDECEA", "WARNING": "#FFF6E0"}.get(r["Severity"]))
+        self.tbl_issues.set_filter("Errors and warnings" if n_e + n_w else "All, including info")
+        self.tabs.setTabText(0, f"Issues ({n_e + n_w})" if n_e + n_w else "Issues")
+        self.tabs.setTabText(1, f"Callouts ({len(rows)})")
         self.tbl_network.fill(res.network)
-        self.tbl_existing.fill(res.existing_rows, lambda r: "#E8F5E9" if str(r.get("Result", "")).startswith("MATCH") else None)
-        self.outputs = dict(res.outputs)
-        for b in (self.btn_open_folder, self.btn_open_qa, self.btn_open_dwg):
-            b.setEnabled(bool(self.outputs))
-        self.nav.setCurrentRow(4)
-
-    # ----------------------------------------------------------------- projects / settings
-    def new_project(self) -> None:
-        self.apply_config(RunConfig())
-        self.scan = None
-        self._log("New project", "INFO")
-
-    def open_project(self) -> None:
-        f, _ = QFileDialog.getOpenFileName(self, "Open project", "", "FiberCallout project (*.fcsproj.json *.json)")
-        if f:
-            try:
-                self.apply_config(RunConfig.from_dict(json.loads(Path(f).read_text(encoding="utf-8"))))
-                self._log(f"Project loaded: {f}", "INFO")
-            except (OSError, ValueError, TypeError) as exc:
-                QMessageBox.critical(self, APP_NAME, f"Cannot open project:\n{exc}")
-
-    def save_project(self) -> None:
-        f, _ = QFileDialog.getSaveFileName(self, "Save project", "region.fcsproj.json", "FiberCallout project (*.fcsproj.json)")
-        if f:
-            Path(f).write_text(json.dumps(self.collect_config().to_dict(), indent=2), encoding="utf-8")
-            self._log(f"Project saved: {f}", "INFO")
-
-    def _restore(self) -> None:
-        geo = self.settings.value("geometry")
-        if geo is not None:
-            self.restoreGeometry(geo)
-        raw = self.settings.value("lastConfig", "")
-        if raw:
-            try:
-                cfg = RunConfig.from_dict(json.loads(raw))
-                cfg.cad = CadMap()
-                cfg.columns = ColumnMap()
-                self.apply_config(cfg)
-            except (ValueError, TypeError):
-                pass
-        self._update_preview()
-
-    def closeEvent(self, event: Any) -> None:  # noqa: N802
-        if self.thread is not None:
-            self.cancel.set()
-            self.thread.quit()
-            self.thread.wait(5000)
-        self.settings.setValue("geometry", self.saveGeometry())
-        self.settings.setValue("lastConfig", json.dumps(self.collect_config().to_dict()))
-        event.accept()
+        self.tbl_existing.fill(res.existing_rows, lambda r: "#E8F5E9" if str(r.get("Result", "")).startswith("MATCH")
+                               else None)
+        self.tabs.setTabVisible(3, bool(res.existing_rows))
+        if res.existing_rows:
+            ok = s.get("Existing callouts matched", 0)
+            self.tabs.setTabText(3, f"Existing callouts ({ok}/{s.get('Existing callouts found', 0)} identical)")
+        self.tabs.setCurrentIndex(0 if n_e + n_w else 1)
+        self.have_results = True
+        self.btn_step_results.setEnabled(True)
+        self.go(1)
 
     # ----------------------------------------------------------------- jobs
     def start(self, task: str) -> None:
         if self.thread is not None:
             return
-        cfg = self.collect_config()
+        cfg = self.config()
         if task in ("validate", "generate"):
-            missing = [n for n, ok in (("design drawing", bool(cfg.drawing_path)), ("address list(s)", bool(cfg.address_paths)))
-                       if not ok]
-            if missing:
-                QMessageBox.warning(self, APP_NAME, "Please add the " + " and ".join(missing) + " on the Project page.")
-                self.nav.setCurrentRow(0)
+            why = self._ready()
+            if why:
+                QMessageBox.information(self, APP_NAME, why)
+                self.go(0)
                 return
-            if not cfg.splice_paths:
-                if QMessageBox.question(self, APP_NAME, "No splice reports added - only fiber-number callouts can be "
-                                        "produced (no BFO cable callouts). Continue?") != QMessageBox.StandardButton.Yes:
-                    return
-        if task == "scan" and not (cfg.drawing_path or cfg.address_paths or cfg.splice_paths):
-            QMessageBox.warning(self, APP_NAME, "Add a drawing, splice reports or address lists first.")
-            return
-        if task == "generate" and not cfg.output_dir:
-            cfg.output_dir = str(Path(cfg.drawing_path).parent / "callout_output")
-            self.ed_output.setText(cfg.output_dir)
+            if not self._output_user_set and not self.ed_output.text().strip():
+                self.ed_output.setText(cfg.output_dir)
         self.cancel.clear()
         self.progress.setValue(0)
         self._log(f"--- {task.upper()} ---", "INFO")
-        self._busy(True)
+        self._busy(True, task)
         self.thread = QThread(self)
-        self.worker = Worker(task, cfg, self.cancel)
+        self.worker = Worker(task, cfg, self.cancel, self.last_result if task == "generate" else None)
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.log.connect(self._log)
@@ -1216,65 +1209,88 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.thread = None
         self._busy(False)
+        if self._closing:
+            self.close()
 
-    def _busy(self, busy: bool) -> None:
-        for b in (self.btn_scan, self.btn_validate, self.btn_generate):
-            b.setEnabled(not busy)
+    def _busy(self, busy: bool, task: str = "") -> None:
+        self.btn_cancel.setVisible(busy)
         self.btn_cancel.setEnabled(busy)
-        self.nav.setEnabled(not busy)
-        self.stack.setEnabled(not busy)
+        self.btn_validate.setVisible(not busy)
+        self.btn_generate.setVisible(not busy)
+        self.progress.setVisible(busy)
+        self.stack.widget(0).setEnabled(not busy)
+        for b in (self.btn_step_inputs, self.btn_step_results):
+            b.setEnabled(not busy and (b is self.btn_step_inputs or self.have_results))
+        self.act_selftest.setEnabled(not busy)
         if busy:
+            self.status.setText({"validate": "Validating...", "generate": "Generating callouts...",
+                                 "selftest": "Running self-test..."}.get(task, "Working..."))
             QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
         else:
             QApplication.restoreOverrideCursor()
+            self._refresh_ready()
 
     def cancel_job(self) -> None:
         self.cancel.set()
+        self.btn_cancel.setEnabled(False)
+        self.status.setText("Cancelling...")
         self._log("Cancelling...", "WARNING")
 
     def _progress(self, pct: int, msg: str) -> None:
         self.progress.setValue(pct)
-        if msg:
-            self.status.setText(msg)
+        if msg and not self.cancel.is_set():
+            self.status.setText(f"{msg}...")
 
     def _done(self, task: str, res: Any) -> None:
-        if task == "scan" and isinstance(res, ScanResult):
-            self.apply_scan(res)
-            self.status.setText("Scan complete - mapping filled in; review Columns and CAD Mapping")
-            self._log("Scan complete - review the Columns and CAD Mapping pages, then Validate or Generate.", "SUCCESS")
-            self.nav.setCurrentRow(2 if res.cad else 1)
-        elif task in ("validate", "generate") and isinstance(res, RunResult):
+        if task in ("validate", "generate") and isinstance(res, RunResult):
+            self.last_result = res
             self.show_results(res)
             s = res.summary
-            msg = (f"{s.get('Fiber-number callouts', 0)} fiber-number + {s.get('BFO callouts', 0)} BFO callouts; "
-                   f"{s.get('Errors', 0)} error(s), {s.get('Warnings', 0)} warning(s)")
-            self.status.setText(("Generated: " if task == "generate" else "Validated: ") + msg)
-            if task == "generate":
-                files = "\n".join(f"  {k}: {v}" for k, v in res.outputs.items())
-                extra = ""
-                if "AutoCAD script" in res.outputs:
-                    extra = ("\n\nTo apply: open the DWG in AutoCAD, type SCRIPT and pick the .scr file. Existing fiber "
-                             "callouts are replaced and the new ones inserted at the same coordinates.")
-                QMessageBox.information(self, APP_NAME, f"Callouts generated.\n\n{msg}\n\n{files}{extra}")
+            self.result_status = (("Generated: " if res.outputs else "Validated: ") +
+                                  f"{s.get('Fiber-number callouts', 0)} fiber-number + {s.get('BFO callouts', 0)} BFO "
+                                  f"callouts  \u00b7  {s.get('Errors', 0)} error(s), {s.get('Warnings', 0)} warning(s)")
         elif task == "selftest":
             ok, _text = res
             (QMessageBox.information if ok else QMessageBox.warning)(
-                self, APP_NAME, "Self-test PASSED - all checks succeeded." if ok else "Self-test FAILED - see the log.")
+                self, APP_NAME, "Self-test passed - every check succeeded." if ok else
+                "Self-test FAILED - details are in the activity log.")
+            if not ok:
+                self.dock.show()
 
     def _failed(self, task: str, msg: str) -> None:
+        if msg == "Cancelled by user":
+            self._log("Cancelled", "WARNING")
+            self.result_status = "Cancelled"
+            return
         self._log(f"{task} failed: {msg}", "ERROR")
-        self.status.setText(f"{task} failed")
-        if msg != "Cancelled by user":
-            QMessageBox.critical(self, APP_NAME, f"{task.capitalize()} failed:\n\n{msg}")
+        self.result_status = f"{task.capitalize()} failed - see the log"
+        self.dock.show()
+        if not self._closing:
+            QMessageBox.critical(self, APP_NAME, f"{task.capitalize()} failed:\n\n{msg}\n\nDetails are in the activity log.")
+
+    def closeEvent(self, event: Any) -> None:  # noqa: N802
+        if self.thread is not None:
+            if not self._closing:
+                if QMessageBox.question(self, APP_NAME, "A job is still running. Cancel it and exit?") != \
+                        QMessageBox.StandardButton.Yes:
+                    event.ignore()
+                    return
+                self._closing = True
+                self.cancel.set()
+            event.ignore()          # closes from _cleanup_thread once the worker has stopped
+            return
+        self.settings.setValue("geometry", self.saveGeometry())
+        event.accept()
 
     # ----------------------------------------------------------------- help
     def show_guide(self) -> None:
         d = QDialog(self)
         d.setWindowTitle(f"{APP_NAME} - Quick guide")
-        d.resize(760, 640)
+        d.resize(720, 640)
         lay = QVBoxLayout(d)
         tb = QTextBrowser()
         tb.setHtml(QUICK_GUIDE)
+        tb.setOpenExternalLinks(True)
         lay.addWidget(tb)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         bb.rejected.connect(d.reject)
@@ -1284,34 +1300,41 @@ class MainWindow(QMainWindow):
     def show_about(self) -> None:
         d = QDialog(self)
         d.setWindowTitle(f"About {APP_NAME}")
-        lay = QHBoxLayout(d)
+        lay = QVBoxLayout(d)
+        row = QHBoxLayout()
         logo = QLabel()
-        logo.setPixmap(logo_pixmap(128))
-        lay.addWidget(logo, 0, Qt.AlignmentFlag.AlignTop)
-        txt = QLabel(f"<h2>{APP_NAME}</h2><p>Version {APP_VERSION}</p>"
-                     "<p>Automated DES_FIBER_SPL fiber-number callouts for FTTx OSP designs.<br>"
-                     "Reads DWG/DXF drawings, splice reports and address lists; writes MULTILEADER callouts "
-                     "identical to the reference drafting standard plus a QA/QC workbook.</p>"
-                     f"<p>Python {sys.version.split()[0]} &middot; PyQt6 &middot; ezdxf &middot; openpyxl</p>")
+        logo.setPixmap(logo_pixmap(112))
+        row.addWidget(logo, 0, Qt.AlignmentFlag.AlignTop)
+        txt = QLabel(f"<h2 style='margin-bottom:2px'>{APP_NAME}</h2><p>Version {APP_VERSION}</p>"
+                     "<p>DES_FIBER_SPL fiber-number and BFO callouts for FTTx OSP designs, computed from splice reports "
+                     "and address lists and written as MULTILEADERs identical to the reference drafting standard, "
+                     "with a QA/QC workbook.</p>"
+                     f"<p style='color:#66788A'>Python {sys.version.split()[0]} &middot; PyQt6 &middot; ezdxf &middot; "
+                     "openpyxl</p>")
         txt.setWordWrap(True)
         txt.setMinimumWidth(380)
-        lay.addWidget(txt)
+        row.addWidget(txt, 1)
+        lay.addLayout(row)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        bb.accepted.connect(d.accept)
+        lay.addWidget(bb)
         d.exec()
 
 
 def run_gui(on_ready: Optional[Callable[[Any, Any], None]] = None) -> int:
-    app = QApplication.instance() or QApplication(sys.argv)
-    app.setApplicationName(APP_NAME)
-    app.setOrganizationName(APP_ORG)
-    app.setStyle(QStyleFactory.create("Fusion"))
-    app.setStyleSheet(QSS)
-    app.setWindowIcon(app_icon())
     if os.name == "nt":
         try:
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FTTx.FiberCalloutStudio")
         except Exception:  # noqa: BLE001 - taskbar grouping only
             pass
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setOrganizationName(APP_ORG)
+    app.setStyle(QStyleFactory.create("Fusion"))
+    app.setFont(QFont(UI_FONT, 10))
+    app.setStyleSheet(QSS)
+    app.setWindowIcon(app_icon())
     win = MainWindow()
     win.show()
     if on_ready is not None:
