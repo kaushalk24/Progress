@@ -389,7 +389,8 @@ class _Obj:
 
 
 # ----------------------------------------------------------------------------------------------- reader
-ENTITY_TYPES = {1: "TEXT", 2: "ATTRIB", 3: "ATTDEF", 7: "INSERT", 10: "VERTEX_2D", 15: "POLYLINE_2D",
+ENTITY_TYPES = {1: "TEXT", 2: "ATTRIB", 3: "ATTDEF", 7: "INSERT", 10: "VERTEX_2D", 11: "VERTEX_3D", 15: "POLYLINE_2D",
+                16: "POLYLINE_3D",
                 17: "ARC", 18: "CIRCLE", 19: "LINE", 31: "SOLID", 44: "MTEXT", 77: "LWPOLYLINE"}
 
 
@@ -477,6 +478,99 @@ class NativeDwg:
         except (IndexError, ValueError):
             pass
         return out
+
+    def header_vars(self) -> Dict[str, Any]:
+        """INSUNITS / EXTMIN / EXTMAX / LUNITS from the AcDb:Header section (AutoCAD 2010+ layout, data stream only:
+        strings and handles live in their own streams). Empty when the values fail the sanity checks."""
+        try:
+            data = self.c.section("AcDb:Header")
+            br = _Bits(data, 16 * 8)
+            br.RL()
+            if self.r2013 or self.c.maint > 3:
+                br.RL()
+            br.RL()                                         # data size in bits
+
+            def cmc() -> None:
+                br.BS()
+                br.BL()
+                br.RC()                                     # colour / book names are in the string stream
+
+            def p3() -> Tuple[float, float, float]:
+                return (br.BD(), br.BD(), br.BD())
+            if self.r2013:
+                br.BLL()                                    # REQUIREDVERSIONS
+            for _ in range(4):
+                br.BD()
+            br.BL()
+            br.BL()
+            for _ in range(21):                             # DIMASO ... PELLIPSE
+                br.B()
+            bs = [br.BS() for _ in range(8)]                # PROXYGRAPHICS TREEDEPTH LUNITS LUPREC AUNITS AUPREC ...
+            for _ in range(3):
+                br.BL()
+            for _ in range(19):                             # USERI1-5 ... TEXTQLTY
+                br.BS()
+            for _ in range(21):                             # LTSCALE ... CELTSCALE
+                br.BD()
+            for _ in range(11):                             # TDCREATE TDUPDATE (+3) TDINDWG TDUSRTIMER
+                br.BL()
+            cmc()                                           # CECOLOR
+            br.H()                                          # HANDSEED (data stream from R2007)
+            br.BD()                                         # PSVPSCALE
+            for _ in range(3):
+                p3()                                        # PINSBASE PEXTMIN PEXTMAX
+            br.RD(), br.RD(), br.RD(), br.RD()
+            br.BD()
+            for _ in range(3):
+                p3()
+            br.BS()
+            for _ in range(6):
+                p3()
+            p3()                                            # INSBASE
+            extmin, extmax = p3(), p3()
+            br.RD(), br.RD(), br.RD(), br.RD()              # LIMMIN LIMMAX
+            br.BD()
+            for _ in range(3):
+                p3()
+            br.BS()
+            for _ in range(6):
+                p3()
+            for _ in range(9):                              # DIMSCALE ... DIMTM
+                br.BD()
+            br.BD(), br.BD(), br.BS()                       # DIMFXL DIMJOGANG DIMTFILL
+            cmc()                                           # DIMTFILLCLR
+            for _ in range(6):
+                br.B()
+            for _ in range(4):                              # DIMTAD DIMZIN DIMAZIN DIMARCSYM
+                br.BS()
+            for _ in range(9):                              # DIMTXT ... DIMALTRND
+                br.BD()
+            br.B(), br.BS()
+            for _ in range(4):
+                br.B()
+            for _ in range(3):
+                cmc()                                       # DIMCLRD DIMCLRE DIMCLRT
+            for _ in range(11):
+                br.BS()
+            br.B(), br.B()
+            for _ in range(4):
+                br.BS()
+            br.B(), br.BS(), br.B()                         # DIMUPT DIMATFIT DIMFXLON
+            br.B(), br.BD(), br.BD()                        # DIMTXTDIRECTION DIMALTMZF DIMMZF (R2010+)
+            br.BS(), br.BS()                                # DIMLWD DIMLWE
+            br.BS(), br.BS()                                # TSTACKALIGN TSTACKSIZE
+            br.BL()                                         # FLAGS
+            insunits = br.BS()
+            cepsntype = br.BS()
+            sortents, _ix, _ht, _xc, dimassoc, _hg = (br.RC() for _ in range(6))
+            obscolor, isecolor = br.BS(), br.BS()
+        except (IndexError, ValueError, struct.error, OverflowError, KeyError):
+            return {}
+        finite = all(math.isfinite(x) and abs(x) < 1e12 for x in extmin + extmax)
+        if not (0 <= insunits <= 24 and 0 <= cepsntype <= 3 and 1 <= bs[2] <= 5 and dimassoc <= 2
+                and sortents <= 127 and obscolor <= 257 and isecolor <= 257 and finite):
+            return {}
+        return dict(INSUNITS=insunits, LUNITS=bs[2], EXTMIN=extmin, EXTMAX=extmax)
 
     def _header(self, handle: int) -> Optional[_Obj]:
         loc = self.omap.get(handle)
@@ -661,7 +755,7 @@ class NativeDwg:
                     if a and a.get("tag"):
                         att[a["tag"].upper()] = a.get("text", "")
                 e["attribs"] = att
-            elif t == "POLYLINE_2D":
+            elif t in ("POLYLINE_2D", "POLYLINE_3D"):     # GIS exports often draw cables as 3D polylines
                 pts = []
                 for vh in e.pop("vertex_handles", []):
                     v = raw.get(vh)
@@ -669,7 +763,7 @@ class NativeDwg:
                         pts.append(v["point"])
                 e["points"] = pts
                 e["type"] = "LWPOLYLINE"
-            if t in ("ATTRIB", "VERTEX_2D"):
+            if t in ("ATTRIB", "VERTEX_2D", "VERTEX_3D"):
                 continue
             out.append(e)
         self._progress(66, "DWG decoded")
@@ -874,6 +968,20 @@ class NativeDwg:
         n = br.BL()
         e["vertex_handles"] = [hs.H(o.handle) for _ in range(n)]
         e["closed"] = bool(fl & 1)
+
+    def _e_POLYLINE_3D(self, e: Dict[str, Any], o: _Obj) -> None:  # noqa: N802
+        br, hs = o.br, o.hs
+        br.RC()                         # spline / fit flags
+        fl = br.RC()                    # bit 0: closed
+        n = br.BL()                     # owned vertex count (R2004+)
+        e["vertex_handles"] = [hs.H(o.handle) for _ in range(n)]
+        e["closed"] = bool(fl & 1)
+
+    def _e_VERTEX_3D(self, e: Dict[str, Any], o: _Obj) -> None:  # noqa: N802
+        br = o.br
+        br.RC()
+        p = br.P3()
+        e["point"] = (p[0], p[1])
 
     def _e_VERTEX_2D(self, e: Dict[str, Any], o: _Obj) -> None:  # noqa: N802
         br = o.br

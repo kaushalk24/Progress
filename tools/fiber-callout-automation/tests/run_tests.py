@@ -90,6 +90,102 @@ def test_report_parsers() -> None:
           and r.conns[0].b_seg == ("ABC-00001G TO ABC-00009G FC048", 3))
 
 
+def test_decorated_segment_ends() -> None:
+    rows = [["Splice Connections Report"], ["Splice name:", "DMI-15122G"],
+            ["Segment", "Count", "Start Splice", "End Splice"],
+            ["Segment 3 of DMI-15001G TO DMI-15200 FC072 - Underground", 72, "Splice Case: DMI-15100",
+             "Splice Case: DMI-15122G (HH 12)"],
+            ["Segment 1 of DMI-15122G TO DMI-15140 FC048 - Underground", 48, "DMI-15122G HH", "DMI-15140"]]
+    r = E.parse_connections_report(rows, "x.xlsx")
+    check("segment direction with decorated closure names",
+          r is not None and [s.direction for s in r.segments] == ["in", "out"], str(r and r.segments))
+
+
+def test_junction_rule() -> None:
+    pl = E.CalloutPlanner.__new__(E.CalloutPlanner)
+    S = E.ReportSegment
+
+    def rep(name, segs):
+        return [E.SpliceReport(name=name, file="x", fmt="t", segments=segs)]
+    closures = {"A-1", "A-2", "A-3", "A-4", "A-9"}
+    trunk_in = S("A-1 TO A-9 FC144", 4, 144, "Underground", "A-1", "A-2", "in")
+    trunk_out = S("A-1 TO A-9 FC144", 5, 144, "Underground", "A-2", "A-3", "out")
+    pig = S("A-2 TO T-10 MAIN ST FC004", 1, 4, "Pigtail", "A-2", "T-10 MAIN ST", "out")
+    tap24 = S("A-2 TO T-10 MAIN ST FC024", 1, 24, "Underground", "A-2", "T-10 MAIN ST", "out")
+    tail12 = S("A-2 TO MST 7 FC012", 1, 12, "Underground", "A-2", "MST 7", "out")
+    branch = S("A-2 TO A-4 FC024", 1, 24, "Underground", "A-2", "A-4", "out")
+    taper = S("A-2 TO A-3 FC072", 1, 72, "Underground", "A-2", "A-3", "out")
+    j = lambda segs: pl.junction_info("A-2", rep("A-2", segs), closures)[0]  # noqa: E731
+    check("junction: cable branches (3 segments)", j([trunk_in, trunk_out, branch, pig]))
+    check("junction: 24F cable to a terminal counts", j([trunk_in, trunk_out, tap24]))
+    check("pass-through: pigtail does not count", not j([trunk_in, trunk_out, pig]))
+    check("pass-through: 12F terminal tail does not count", not j([trunk_in, trunk_out, tail12]))
+    check("pass-through: taper 144->72 is not a junction", not j([trunk_in, taper, pig]))
+    check("junction: feed not listed, 2 cables out", j([trunk_out, branch]))
+    check("pass-through: duplicate rows counted once", not j([trunk_in, trunk_out, trunk_out, pig]))
+
+
+def test_text_tables() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        def write(name: str, data: bytes) -> Path:
+            f = Path(tmp) / name
+            f.write_bytes(data)
+            return f
+        f = write("semi.csv", 'Splice name:;NMK-1\r\nCoordinates:;1552147,5;16207889,25\r\n"Addr";"12 RUE, \u00c9\nLINE2"\r\n'
+                  .encode("cp1252"))
+        rows = E.read_text_table(f)
+        check("csv semicolon / cp1252 / comma decimals", rows[0] == ["Splice name:", "NMK-1"]
+              and rows[1] == ["Coordinates:", 1552147.5, 16207889.25] and rows[2][1] == "12 RUE, \u00c9\nLINE2", str(rows))
+        f = write("u16.txt", "PON\tPORT\tADDRESS\r\n1\t12\t100 MAIN ST\r\n".encode("utf-16"))
+        rows = E.read_text_table(f)
+        check("utf-16 tab-delimited text", rows == [["PON", "PORT", "ADDRESS"], [1, 12, "100 MAIN ST"]], str(rows))
+        f = write("sep.csv", b"sep=;\ra;b\r1;2\r")
+        rows = E.read_text_table(f)
+        check("excel sep= line with CR line ends", rows == [["a", "b"], [1, 2]], str(rows))
+        f = write("bom.csv", b'\xef\xbb\xbfPON,PORT,ID,Z\n01,="00123",0012,\n')
+        rows = E.read_text_table(f)
+        check("csv BOM / leading zeros / trailing blanks", rows == [["PON", "PORT", "ID", "Z"], ["01", "00123", "0012"]], str(rows))
+        wb = E.openpyxl.Workbook()
+        for i in range(5):
+            wb.active.append([f"r{i}", i])
+        xf = Path(tmp) / "dim.xlsx"
+        wb.save(xf)
+        import zipfile as zf
+        tmpf = Path(tmp) / "dim2.xlsx"
+        with zf.ZipFile(xf) as zin, zf.ZipFile(tmpf, "w") as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename.endswith("sheet1.xml"):
+                    data = data.replace(b'<dimension ref="A1:B5"/>', b'<dimension ref="A1"/>')
+                zout.writestr(item, data)
+        tables = E.read_tables(tmpf)
+        check("xlsx with a wrong stored used range", len(tables[0][1]) == 5 and tables[0][1][4] == ["r4", 4], str(tables))
+        try:
+            import xlwt  # type: ignore
+        except ImportError:
+            return
+        book = xlwt.Workbook()
+        sh = book.add_sheet("NMK-R02")
+        for r, row in enumerate([["PON", "PORT", None, "ADDRESS"], [1, 12.0, None, "100 MAIN ST"]]):
+            for c, v in enumerate(row):
+                if v is not None:
+                    sh.write(r, c, v)
+        book.save(str(Path(tmp) / "old.xls"))
+        tables = E.read_tables(Path(tmp) / "old.xls")
+        check("legacy .xls", tables == [("NMK-R02", [["PON", "PORT", None, "ADDRESS"], [1, 12, None, "100 MAIN ST"]])],
+              str(tables))
+
+
+def test_units() -> None:
+    def f(code):
+        src = E.NetworkSource("dxf", "x", "AC1032", None, [], [], [], [], insunits=code)
+        return E.units_factor(src, "auto", E.Reporter(lambda m, l: None))
+    check("units: inches template default = feet", f(1) == 1.0)
+    check("units: feet / US survey feet", f(2) == 1.0 and f(21) == 1.0)
+    check("units: meters / millimeters rescale", abs(f(6) - 0.3048) < 1e-9 and abs(f(4) - 304.8) < 1e-9)
+    check("units: unknown = feet", f(None) == 1.0 and f(0) == 1.0)
+
+
 def test_input_signature() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         folder = Path(tmp) / "data"
@@ -122,7 +218,7 @@ def test_output_folder_error() -> None:
 
 def main() -> int:
     for fn in (test_numbering_helpers, test_callout_text_rules, test_address_rules, test_header_mapping,
-               test_splitter_detection, test_report_parsers, test_input_signature, test_output_folder_error):
+               test_splitter_detection, test_report_parsers, test_decorated_segment_ends, test_junction_rule, test_text_tables, test_units, test_input_signature, test_output_folder_error):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001

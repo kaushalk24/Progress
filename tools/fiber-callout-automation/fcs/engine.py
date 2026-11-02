@@ -145,7 +145,7 @@ class RunConfig:
 
 
 ADDRESS_EXTS = (".xlsx", ".xlsm", ".xls", ".csv", ".txt")
-REPORT_EXTS = (".xlsx", ".xlsm", ".xls", ".csv")
+REPORT_EXTS = (".xlsx", ".xlsm", ".xls", ".csv", ".txt")
 
 ADDRESS_FIELDS: Dict[str, Tuple[bool, List[str], str]] = {
     "pon": (True, ["PON NAME", "PON", "PON #", "PON NO", "PON NUMBER", "PON ID", "SPLITTER", "SPLITTER #",
@@ -516,39 +516,139 @@ class InputCollector:
         self._tmp.clear()
 
 
+PLAIN_NUMBER_RE = re.compile(r"[-+]?(?:0|[1-9]\d*)(?:\.\d+)?")
+COMMA_DECIMAL_RE = re.compile(r"[-+]?(?:0|[1-9]\d*),\d+")
+UNSUPPORTED_SHEETS = (".xlsb", ".ods", ".numbers")
+
+
+def _text_cell(value: str, comma_decimal: bool) -> Any:
+    """A CSV cell as a spreadsheet would hold it: trimmed, empty -> None, plain numbers as numbers."""
+    v = value.strip().replace("\u00a0", " ").strip()
+    if len(v) >= 3 and v.startswith('="') and v.endswith('"'):      # ="00123" keeps leading zeros in Excel exports
+        v = v[2:-1]
+    if not v:
+        return None
+    if PLAIN_NUMBER_RE.fullmatch(v):
+        f = float(v)
+        return int(f) if "." not in v else f
+    if comma_decimal and COMMA_DECIMAL_RE.fullmatch(v):
+        return float(v.replace(",", "."))
+    return v
+
+
+def _decode_text(raw: bytes) -> str:
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return raw[3:].decode("utf-8", errors="replace")
+    head = raw[:400]
+    if head and head.count(b"\x00") > len(head) // 4:                 # UTF-16 without a byte-order mark
+        return raw.decode("utf-16-le" if head[1:2] == b"\x00" else "utf-16-be", errors="replace")
+    for enc in ("utf-8", "cp1252"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("latin-1")
+
+
+def read_text_table(path: Path) -> List[List[Any]]:
+    """CSV / TXT export of a sheet: any common encoding (UTF-8, UTF-8 BOM, UTF-16, Windows-1252), delimiter
+    (comma, semicolon, tab, pipe), Excel's 'sep=' line, quoted fields with line breaks."""
+    import csv
+    import io
+    text = _decode_text(path.read_bytes()).replace("\x00", "")
+    lines = text.splitlines()
+    delim = None
+    if lines and re.fullmatch(r"\s*sep=(.)\s*", lines[0], re.I):
+        delim = re.fullmatch(r"\s*sep=(.)\s*", lines[0], re.I).group(1)  # type: ignore[union-attr]
+        text = re.sub(r"^[^\r\n]*(?:\r\n|\r|\n)?", "", text, count=1)
+    if delim is None:
+        best = (-1, ",")
+        sample = "\n".join(lines[:300])
+        for d in (",", ";", "\t", "|"):
+            try:
+                rows = list(csv.reader(io.StringIO(sample, newline=""), delimiter=d))
+            except csv.Error:
+                continue
+            score = sum(len(r) - 1 for r in rows if len(r) > 1)
+            if score > best[0]:
+                best = (score, d)
+        delim = best[1]
+    comma_decimal = delim in (";", "\t", "|")
+    rows = []
+    for r in csv.reader(io.StringIO(text, newline=""), delimiter=delim):
+        cells = [_text_cell(c, comma_decimal) for c in r]
+        while cells and cells[-1] is None:
+            cells.pop()
+        rows.append(cells)
+    return rows
+
+
+def _xls_tables(path: Path) -> List[Tuple[str, List[List[Any]]]]:
+    try:
+        import xlrd  # type: ignore
+    except ImportError as exc:
+        raise ValueError("legacy .xls support is not installed - save the file as .xlsx or .csv") from exc
+    book = xlrd.open_workbook(str(path), on_demand=True)
+    out = []
+    try:
+        for sh in book.sheets():
+            if getattr(sh, "visibility", 0):
+                continue
+            rows = []
+            for r in range(sh.nrows):
+                vals: List[Any] = []
+                for c in range(sh.ncols):
+                    cell = sh.cell(r, c)
+                    if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK, xlrd.XL_CELL_ERROR):
+                        vals.append(None)
+                    elif cell.ctype in (xlrd.XL_CELL_NUMBER, xlrd.XL_CELL_DATE):
+                        v = float(cell.value)
+                        vals.append(int(v) if v.is_integer() and abs(v) < 1e15 else v)
+                    elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                        vals.append(bool(cell.value))
+                    else:
+                        t = str(cell.value)
+                        vals.append(t if t.strip() else None)
+                while vals and vals[-1] is None:
+                    vals.pop()
+                rows.append(vals)
+            out.append((sh.name, rows))
+    finally:
+        book.release_resources()
+    return out
+
+
 def read_tables(path: Path) -> List[Tuple[str, List[List[Any]]]]:
+    """Every visible sheet of a workbook (.xlsx/.xlsm/.xls) or the table of a .csv/.txt file."""
     suffix = path.suffix.lower()
     if suffix in (".xlsx", ".xlsm"):
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
         try:
-            return [(ws.title, [list(r) for r in ws.iter_rows(values_only=True)]) for ws in wb.worksheets]
+            out = []
+            sheets = [ws for ws in wb.worksheets if getattr(ws, "sheet_state", "visible") == "visible"] or wb.worksheets
+            for ws in sheets:
+                if not hasattr(ws, "iter_rows"):          # chart sheets
+                    continue
+                if hasattr(ws, "reset_dimensions"):
+                    ws.reset_dimensions()               # some exporters write a wrong used range (e.g. A1:A1)
+                rows = []
+                for r in ws.iter_rows(values_only=True):
+                    vals = [None if (isinstance(v, str) and not v.strip()) else v for v in r]
+                    while vals and vals[-1] is None:
+                        vals.pop()
+                    rows.append(vals)
+                out.append((ws.title, rows))
+            return out
         finally:
             wb.close()
     if suffix == ".xls":
-        try:
-            import xlrd  # type: ignore
-        except ImportError as exc:
-            raise ValueError("legacy .xls needs the 'xlrd' package - save the file as .xlsx") from exc
-        book = xlrd.open_workbook(str(path))
-        return [(sh.name, [sh.row_values(r) for r in range(sh.nrows)]) for sh in book.sheets()]
+        return _xls_tables(path)
     if suffix in (".csv", ".txt"):
-        import csv
-        raw = path.read_bytes()
-        text = None
-        for enc in ("utf-8-sig", "cp1252", "latin-1"):
-            try:
-                text = raw.decode(enc)
-                break
-            except UnicodeDecodeError:
-                continue
-        if text is None:
-            raise ValueError("cannot decode text file")
-        try:
-            dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
-        except csv.Error:
-            dialect = csv.excel
-        rows = [[(c if c != "" else None) for c in r] for r in csv.reader(text.splitlines(), dialect)]
-        return [(path.stem, rows)]
+        return [(path.stem, read_text_table(path))]
+    if suffix in UNSUPPORTED_SHEETS:
+        raise ValueError(f"{suffix} files are not supported - save the file as .xlsx or .csv")
     raise ValueError(f"unsupported file type {suffix}")
 
 
@@ -580,7 +680,10 @@ class Terminal:
 
 
 def _match_header(headers: List[str], synonyms: List[str]) -> Optional[str]:
-    normed = {norm_header(h): h for h in headers if h}
+    normed: Dict[str, str] = {}
+    for h in headers:
+        if h:
+            normed.setdefault(norm_header(h), h)
     syn_n = [norm_header(s) for s in synonyms]
     for s in syn_n:
         if s in normed:
@@ -681,6 +784,8 @@ class AddressBook:
             except Exception as exc:  # noqa: BLE001
                 issues.add("ERROR", "Address List", f.name, f"Unreadable: {exc}")
                 continue
+            n_before = len(raw)
+            sheet_problems: List[Tuple[str, str]] = []
             for sheet, rows in tables:
                 if not rows:
                     continue
@@ -690,9 +795,13 @@ class AddressBook:
                     continue
                 hi, headers, score = detect_header_row(rows)
                 if score < 2:
-                    issues.add("INFO", "Address List", f"{f.name}:{sheet}", "Sheet has no address-list headers - skipped")
+                    if not quiet_cross:
+                        issues.add("INFO", "Address List", f"{f.name}:{sheet}", "Sheet has no address-list headers - skipped")
                     continue
-                idx = {h: i for i, h in enumerate(headers) if h}
+                idx: Dict[str, int] = {}
+                for i, h in enumerate(headers):
+                    if h:
+                        idx.setdefault(h, i)        # a repeated header name: the first column is the one mapped
                 auto = auto_map_columns(headers)
                 colmap: Dict[str, Optional[str]] = {}
                 for k in ADDRESS_FIELDS:
@@ -701,8 +810,9 @@ class AddressBook:
                 missing = [k for k, (req, _, _) in ADDRESS_FIELDS.items()
                            if req and k != "splice" and not colmap[k]]
                 if missing:
-                    issues.add("ERROR", "Address List", f"{f.name}:{sheet}",
-                               "Required column(s) not found: " + ", ".join(missing) + " - map them in the Column Mapper")
+                    sheet_problems.append((f"{f.name}:{sheet}", "Required column(s) not found: " + ", ".join(missing) +
+                                           " - the header row must name the PON, PON PORT, service address and "
+                                           "terminal (tap) columns"))
                     continue
                 default_olm = derive_olm(sheet, f.name)
                 for ri, r in enumerate(rows[hi + 1:], start=hi + 2):
@@ -720,6 +830,11 @@ class AddressBook:
                         continue
                     olm = norm_text(get("olm")) or default_olm
                     raw.append((olm, pon, port, {k: get(k) for k in ADDRESS_FIELDS}, f"{f.name}:{sheet}", ri))
+            for where, msg in sheet_problems:
+                if len(raw) > n_before:     # another sheet of this workbook is the address list
+                    issues.add("INFO", "Address List", where, "Sheet skipped - not an address table")
+                else:
+                    issues.add("ERROR", "Address List", where, msg)
         if not raw:
             issues.add("ERROR", "Address List", "-", "No PON-assigned rows found in the address list(s)")
             return
@@ -735,6 +850,7 @@ class AddressBook:
             issues.add("ERROR", "Address List", "-",
                        f"PON PORT {self.max_port} exceeds ports-per-PON {self.ports_per_pon}")
         no_splice: Counter = Counter()
+        repeated: Counter = Counter()
         for olm, pon, port, vals, src, ri in raw:
             number = (pon - 1) * self.ports_per_pon + port
             tap = norm_text(vals["tap"])
@@ -743,8 +859,13 @@ class AddressBook:
                                 cable=norm_text(vals["cable"]), source=src, row=ri)
             key = (olm, number)
             if key in self.by_number:
+                prev = self.by_number[key]
+                if prev.address == rec.address and prev.tap == (rec.tap or rec.address) and rec.splice in ("", prev.splice):
+                    repeated[src] += 1
+                    continue
                 issues.add("ERROR", "Address List", f"{src} row {ri}",
-                           f"Duplicate fiber number {number} in {olm} (PON {pon} port {port})")
+                           f"Duplicate fiber number {number} in {olm} (PON {pon} port {port}): {rec.address} here, "
+                           f"{prev.address} in {prev.source} row {prev.row}")
                 continue
             if not rec.tap:
                 rec.tap = rec.address
@@ -770,10 +891,13 @@ class AddressBook:
             self.by_addr[rec.address].append(rec)
             self.by_tap[rec.tap].append(rec)
             self.tap_names.add(rec.tap)
+        for src, n in repeated.items():
+            issues.add("INFO", "Address List", src, f"{n} row(s) repeat rows already read from another list - ignored")
         for src, n in no_splice.items():
             issues.add("WARNING", "Address List", src,
-                       f"{n} row(s) have no drop splice closure (map the 'Fiber Splice' column, or add splice reports "
-                       f"with pigtail segments) - their fiber-number callouts cannot be placed")
+                       f"{n} row(s) have no drop splice closure (add a drop splice / 'Fiber Splice' column to the "
+                       f"address list, or add the splice reports with pigtail segments) - their fiber-number "
+                       f"callouts cannot be placed")
         self.olms = sorted({r.olm for r in self.records})
         for lst in self.by_tap.values():
             lst.sort(key=lambda r: (r.olm, r.number))
@@ -868,6 +992,8 @@ USAGE_RE = re.compile(r"^(.*?):(\d+)\s+(.*)$")
 SPLITTER_RE = re.compile(r"PLC\s+COUPLER\s+(\d+)\s+\d+|\bF\d?PLC(\d+)\b|SPLITTER\s*1\s*[xX:]\s*(\d+)|"
                          r"\b1\s*[xX]\s*(\d+)\s*(?:PLC|SPLITTER)", re.I)
 DEAD_STATES = ("BROKEN", "SPARE", "DARK", "CUT", "DEAD")
+TAIL_KIND_RE = re.compile(r"PIG\s*TAIL|\bTAIL\b|\bSTUB\b|JUMPER|PATCH|\bDROP\b", re.I)
+TAIL_MAX_FIBERS = 12          # a short cable that ends at a terminal (not at a closure) is a terminal tail
 NON_ADDRESS_RE = re.compile(r"TRANSPORT|SPARES?\b|POWER PORT|^NO DESC|COUPLER|\bOLM\b", re.I)
 
 
@@ -892,6 +1018,12 @@ def _find_col(low: List[str], *names: str) -> Optional[int]:
             if c and n in c:
                 return j
     return None
+
+
+def _name_from_file(fname: str) -> Optional[str]:
+    """Splice reports are usually saved as '<closure name>.xlsx'."""
+    stem = norm_text(Path(fname).stem)
+    return stem if re.fullmatch(r"[A-Z0-9]+(?:-[A-Z0-9]+)+", stem) and re.search(r"\d", stem) else None
 
 
 def parse_connections_report(rows: List[List[Any]], fname: str) -> Optional[SpliceReport]:
@@ -925,6 +1057,8 @@ def parse_connections_report(rows: List[List[Any]], fname: str) -> Optional[Spli
             segs = [j for j, c in enumerate(low) if c == "segment"]
             conn_hdr = (i, dict(a_seg=segs[0], b_seg=segs[1], usage=low.index("usage"),
                                 state=low.index("state") if "state" in low else None))
+    if not name and (seg_hdr or conn_hdr):
+        name = _name_from_file(fname)
     if not name:
         return None
     rep = SpliceReport(name=name, file=fname, fmt="Splice Connections Report", xy=xy, splitters=splitters)
@@ -939,6 +1073,9 @@ def parse_connections_report(rows: List[List[Any]], fname: str) -> Optional[Spli
             cable = norm_cable(m.group(2))
             start = strip_kind(r[c["start"]]) if c["start"] < len(r) else None
             end = strip_kind(r[c["end"]]) if c["end"] < len(r) else None
+            # 'NMK-02001G (HH 12)' / 'SC NMK-02001G' -> the closure name itself
+            start = match_closure_name(start, {name}) if start else start
+            end = match_closure_name(end, {name}) if end else end
             cnt = to_int(r[c["count"]]) if c["count"] < len(r) else None
             direction = "out" if start == name else ("in" if end == name else "thru")
             rep.segments.append(ReportSegment(cable=cable, seg=int(m.group(1)), count=cnt or _fc_of(cable),
@@ -1057,6 +1194,10 @@ def load_splice_reports(files: List[Path], issues: IssueLog, rep: Reporter, quie
             if any(detect_header_row(rows)[2] >= 3 for _sheet, rows in tables if rows):
                 if not quiet_cross:
                     issues.add("INFO", "Splice Report", f.name, "This is an address list - not used as splice report")
+            elif f.suffix.lower() == ".txt":
+                issues.add("INFO", "Input", f.name, "Text file is not a splice report or an address list - ignored")
+            elif quiet_cross:
+                issues.add("WARNING", "Input", f.name, "Not recognised as a splice report or an address list - ignored")
             else:
                 issues.add("ERROR", "Splice Report", f.name, "Unrecognised splice report layout")
     names = Counter(r.name for r in reports)
@@ -1128,7 +1269,7 @@ class NetworkSource:
     inserts: List[GeoInsert]
     lines: List[GeoLine]
     texts: List[GeoText]
-    insunits: int = 0
+    insunits: Optional[int] = 0     # $INSUNITS of the design (None = not readable)
 
 
 def find_oda_converter(user_path: str = "") -> str:
@@ -1350,10 +1491,11 @@ def source_from_native(path: str, rep: Reporter) -> NetworkSource:
             hgt = e.get("height") or 1.0
             texts.append(GeoText(h, e["layer"], t, e.get("text", ""), loc, tip,
                                  text_extent_box(loc, hgt, e.get("text", ""), 0.0, 1 if e.get("dog", 1) > 0 else 3), hgt))
+    hdr = dwg.header_vars()
     rep.log(f"Built-in DWG reader: {dwg.release} ({dwg.version}), {len(dwg.layers)} layers, {len(inserts):,} block "
             f"references, {len(lines):,} linework entities, {len(texts):,} text/multileaders")
     return NetworkSource(kind="dwg-native", path=path, version=dwg.version, doc=None, layers=dwg.layer_names,
-                         inserts=inserts, lines=lines, texts=texts, insunits=0)
+                         inserts=inserts, lines=lines, texts=texts, insunits=hdr.get("INSUNITS"))
 
 
 def open_source(cfg: RunConfig, rep: Reporter) -> NetworkSource:
@@ -1379,18 +1521,30 @@ def open_source(cfg: RunConfig, rep: Reporter) -> NetworkSource:
     raise RuntimeError(f"Unsupported drawing type '{p.suffix}' - select a .dwg or .dxf file")
 
 
+INSUNITS_NAMES = {0: "unitless", 1: "inches", 2: "feet", 3: "miles", 4: "millimeters", 5: "centimeters", 6: "meters",
+                  7: "kilometers", 10: "yards", 14: "decimeters", 21: "US survey feet"}
+
+
 def units_factor(source: NetworkSource, setting: str, rep: Reporter) -> float:
+    """Scale of the drawing relative to feet (the callout standard is in feet).
+
+    OSP designs are drawn in feet (State Plane) or meters. $INSUNITS = inches is the AutoCAD template default and is
+    left in most feet designs (Credit River has it), so only metric units rescale the callouts."""
     table = {"feet": 1.0, "meters": 0.3048, "inches": 12.0, "millimeters": 304.8, "centimeters": 30.48}
     if setting in table:
         return table[setting]
     code = source.insunits
-    by_code = {1: ("inches", 12.0), 2: ("feet", 1.0), 4: ("millimeters", 304.8), 5: ("centimeters", 30.48),
-               6: ("meters", 0.3048), 21: ("US survey feet", 1.0)}
-    if code in by_code:
-        name, f = by_code[code]
+    metric = {4: 304.8, 5: 30.48, 6: 0.3048, 14: 3.048}
+    name = INSUNITS_NAMES.get(code, f"code {code}") if code is not None else "not readable"
+    if code in metric:
+        rep.log(f"Drawing units: {name} ($INSUNITS={code}) - callout sizes converted from feet")
+        return metric[code]
+    if code in (2, 21):
         rep.log(f"Drawing units: {name} ($INSUNITS={code})")
-        return f
-    rep.log("Drawing units not stored in the file - feet assumed (change in Callout Style if metric)")
+    elif code == 1:
+        rep.log("Drawing units: $INSUNITS=inches (the AutoCAD template default) - the design is taken to be in feet")
+    else:
+        rep.log(f"Drawing units: {name} - feet assumed")
     return 1.0
 
 
@@ -1443,7 +1597,8 @@ def auto_detect_cad(src: NetworkSource, closure_names: Set[str], report_xy: List
             rep.log(f"Closures: identified from {n} name labels next to block '{cad.closure_block}'")
     closure_pts = positions.get((cad.closure_layer, cad.closure_block), [])
     if not closure_pts:
-        rep.log("Closure blocks could not be auto-detected - set them in the CAD Mapping page", "WARNING")
+        rep.log("Closure blocks could not be identified: none of the closure names in the splice reports / address "
+                "lists was found in the drawing", "WARNING")
         return cad
     cgrid = GridIndex(25.0)
     for p in closure_pts:
@@ -1681,7 +1836,8 @@ class DrawingModel:
                      f"{len(self.existing)} existing fiber callouts on the output layer(s)")
         if not self.closures:
             self.issues.add("ERROR", "Drawing", cad.closure_layer or "(closure layer)",
-                            "No named closures found - check the CAD Mapping page")
+                            "No named closures found - the closure names used in the splice reports and address "
+                            "lists do not appear in the drawing (is it the right drawing for this region?)")
         if not self.handholes:
             self.issues.add("WARNING", "Drawing", cad.handhole_layer or "(handhole layer)",
                             "No handholes mapped - terminal callouts will point at closure symbols")
@@ -1829,6 +1985,37 @@ class CalloutPlanner:
         self.segments: List[SegmentPlanInfo] = []
         self.terminal_rows: List[Dict[str, Any]] = []
 
+    # ------------------------------------------------------------ junctions
+    def _far_ends(self, closure: str, sg: ReportSegment) -> Set[str]:
+        names = {strip_kind(sg.start or ""), strip_kind(sg.end or "")}
+        if " TO " in sg.cable:
+            a, b = sg.cable.split(" TO ", 1)
+            names |= {a.strip(), re.sub(r"\s+FC\s*\d+\s*$", "", b).strip()}
+        return {n for n in names if n and n != closure}
+
+    def is_tail(self, closure: str, sg: ReportSegment, closure_names: Set[str]) -> bool:
+        """Pigtails / terminal tails are not cable segments of the network."""
+        if TAIL_KIND_RE.search(sg.kind or ""):
+            return True
+        far = self._far_ends(closure, sg)
+        if far & closure_names:
+            return False
+        return bool(far) and sg.count is not None and sg.count <= TAIL_MAX_FIBERS
+
+    def junction_info(self, closure: str, reps: List[SpliceReport], closure_names: Set[str]) -> Tuple[bool, int, str]:
+        """(is a junction, cable segments, description). BFO callouts are drafted only where the cable branches:
+        three or more cable segments meet at the closure (pigtails and terminal tails do not count)."""
+        segs: Dict[Tuple[str, int], ReportSegment] = {}
+        for r in reps:
+            for sg in r.segments:
+                if not self.is_tail(closure, sg, closure_names):
+                    segs.setdefault((sg.cable, sg.seg), sg)
+        n_in = sum(1 for x in segs.values() if x.direction == "in")
+        n_out = sum(1 for x in segs.values() if x.direction == "out")
+        n = len(segs)
+        junction = n >= 3 or (n_in == 0 and n_out >= 2)
+        return junction, n, f"{n} cable segment(s) ({n_in} in, {n_out} out)"
+
     # ------------------------------------------------------------ geometry of a callout
     def text_location(self, last: Vec2, dog: int) -> Vec2:
         s = self.spec
@@ -1916,9 +2103,7 @@ class CalloutPlanner:
                     self.issues.add("ERROR", "Missing Data", t.tap,
                                     f"Drop splice closure of terminal {t.tap} ({fmt_numbers(t.numbers, 'exact', 0)}) is unknown")
                     row["Status"] = "NOT PLACED - drop closure unknown"
-                elif closure is None:
-                    self.issues.add("ERROR", "Missing Closure", t.splice,
-                                    f"Drop closure of terminal {t.tap} ({fmt_numbers(t.numbers, 'exact', 0)}) not found in drawing")
+                elif closure is None:           # reported once per closure by the cross-validation
                     row["Status"] = "NOT PLACED - closure missing"
                 else:
                     row["Status"] = "PLACED" if hh else "PLACED on closure symbol (no handhole found)"
@@ -2001,6 +2186,9 @@ class CalloutPlanner:
                 ends[(s.cable, s.seg)] = (st or s.start, en or s.end)
         done: Set[Tuple[str, str, int]] = set()
         uid = 0
+        closure_names = set(self.m.closures) | set(merged)
+        self.junctions = 0
+        self.pass_through = 0
         for n_rep, (name, reps) in enumerate(sorted(merged.items())):
             self.rep.check_cancel()
             if n_rep % 25 == 0:
@@ -2008,6 +2196,11 @@ class CalloutPlanner:
             closure = self.m.closures.get(name)
             if closure is None:
                 self.issues.add("ERROR", "Missing Closure", name, "Splice report closure not found in drawing")
+            junction, _n_cables, jdesc = self.junction_info(name, reps, closure_names)
+            if junction:
+                self.junctions += 1
+            else:
+                self.pass_through += 1
             for r in reps:
                 olm = self._report_olm(r)
                 r.olm = olm
@@ -2018,10 +2211,10 @@ class CalloutPlanner:
                     if (name, sg.cable, sg.seg) in done:
                         continue
                     done.add((name, sg.cable, sg.seg))
-                    dest = re.sub(r"\s+FC\s*\d+\s*$", "", sg.cable.split(" TO ", 1)[1]).strip() if " TO " in sg.cable else ""
-                    if sg.kind.lower() == "pigtail" or dest in self.book.tap_names:
+                    if self.is_tail(name, sg, closure_names) or self._far_ends(name, sg) & self.book.tap_names:
                         continue
                     end = sg.end or ends.get(key, (None, None))[1]
+                    dest = re.sub(r"\s+FC\s*\d+\s*$", "", sg.cable.split(" TO ", 1)[1]).strip() if " TO " in sg.cable else ""
                     piece = self._segment_piece(name, end, dest)
                     live: List[int] = []
                     unresolved: List[str] = []
@@ -2056,6 +2249,9 @@ class CalloutPlanner:
                                         f"{len(unresolved)} live fiber usage(s) not found in the address list, e.g. {unresolved[0]!r}")
                     if not info.live:
                         info.geometry = "no callout - no live fibers"
+                        continue
+                    if not junction:
+                        info.geometry = f"no callout - pass-through closure, not a junction: {jdesc}"
                         continue
                     if sg.count is None:
                         self.issues.add("WARNING", "Splice Report", f"{name} {sg.cable}",
@@ -2312,6 +2508,17 @@ class CalloutWriter:
 # =============================================================================
 # QA workbook
 # =============================================================================
+_XL_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _xl(value: Any) -> Any:
+    """A value Excel accepts: no control characters, at most 32,767 characters, plain types only."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value if not (isinstance(value, float) and not math.isfinite(value)) else str(value)
+    text = _XL_ILLEGAL.sub(" ", str(value))
+    return text if len(text) <= 32000 else text[:32000] + " ..."
+
+
 def _write_sheet(ws: Any, rows: List[Dict[str, Any]]) -> None:
     if not rows:
         rows = [{"Info": "No rows"}]
@@ -2320,9 +2527,9 @@ def _write_sheet(ws: Any, rows: List[Dict[str, Any]]) -> None:
         for k in r:
             if k not in headers:
                 headers.append(k)
-    ws.append(headers)
+    ws.append([_xl(h) for h in headers])
     for r in rows:
-        ws.append([r.get(h) for h in headers])
+        ws.append([_xl(r.get(h)) for h in headers])
     fill = PatternFill("solid", fgColor="0B3954")
     for c in ws[1]:
         c.font = Font(bold=True, color="FFFFFF")
@@ -2400,6 +2607,7 @@ class RunResult:
     placement: Dict[str, int]
     spec: CalloutSpec = field(default_factory=CalloutSpec)
     signature: str = ""
+    insunits: Optional[int] = 0         # written to the callouts DXF so AutoCAD pastes without unit scaling
 
 
 def input_signature(cfg: RunConfig) -> str:
@@ -2507,10 +2715,13 @@ class CalloutEngine:
     def _cross_validate(self, book: AddressBook, reports: List[SpliceReport], model: DrawingModel, issues: IssueLog) -> None:
         for c in sorted({r.splice for r in book.records if r.splice}):
             if c not in model.closures:
-                n = sum(1 for r in book.records if r.splice == c)
+                recs = [r for r in book.records if r.splice == c]
                 close = difflib.get_close_matches(c, list(model.closures), n=1, cutoff=0.85)
                 hint = f" (did you mean {close[0]}?)" if close else ""
-                issues.add("ERROR", "Missing Closure", c, f"Referenced by {n} address row(s) but not found in the drawing{hint}")
+                taps = sorted({f"{r.tap} ({r.number})" for r in recs})
+                issues.add("ERROR", "Missing Closure", c,
+                           f"Referenced by {len(recs)} address row(s) but not found in the drawing{hint} - fiber-number "
+                           f"callout(s) not placed for {', '.join(taps[:4])}{' ...' if len(taps) > 4 else ''}")
         report_closures = {r.name for r in reports}
         used: Set[Tuple[str, int]] = set()
         for r in reports:
@@ -2560,6 +2771,10 @@ class CalloutEngine:
         issues = IssueLog()
         try:
             src, book, reports, model, planner, spec, _scale = self._prepare(issues)
+            if src.insunits is None:
+                issues.add("WARNING", "Drawing", "Units", "The drawing units ($INSUNITS) could not be read from the DWG, so "
+                           "the callouts DXF is unitless. If AutoCAD rescales the callouts when pasting, set INSUNITS "
+                           "in the callouts DXF to the design's value first.")
             placement = planner.placement_qa()
             self.rep.progress(82, "Comparing with existing callouts")
             existing_rows = compare_existing(planner.plans, model.existing, 40.0 * spec.text_height) if model.existing else []
@@ -2577,6 +2792,8 @@ class CalloutEngine:
                 "Drawing reader": {"dxf": "DXF", "dwg-oda": "DWG (ODA File Converter)",
                                    "dwg-native": "DWG (built-in reader)"}[src.kind],
                 "Drawing version": src.version,
+                "Drawing units ($INSUNITS)": (f"{src.insunits} ({INSUNITS_NAMES.get(src.insunits, '?')})"
+                                              if src.insunits is not None else "not readable"),
                 "OLMs": ", ".join(book.olms),
                 "Ports per PON": f"{book.ports_per_pon} ({book.ports_source})",
                 "Formula": f"N = (PON - 1) x {book.ports_per_pon} + PON PORT (per OLM)",
@@ -2586,6 +2803,8 @@ class CalloutEngine:
                 "Closures in drawing": len(model.closures),
                 "Handholes in drawing": len(model.handholes),
                 "Cable segments evaluated": len(planner.segments),
+                "Junction closures (BFO drafted)": planner.junctions,
+                "Pass-through closures (no BFO)": planner.pass_through,
                 "Fiber-number callouts": n_t,
                 "BFO callouts": n_c,
                 "Callouts failed": sum(1 for p in plans if p.status == "FAILED"),
@@ -2596,12 +2815,14 @@ class CalloutEngine:
                 "Errors": issues.count("ERROR"),
                 "Warnings": issues.count("WARNING"),
             }
+            self.rep.log(f"Cable junctions: {planner.junctions} closure(s) where 3+ cable segments meet get BFO callouts; "
+                         f"{planner.pass_through} pass-through closure(s) get none")
             self.rep.log(f"Analysis: {n_t} fiber-number + {n_c} BFO callouts; {placement.get('clean', 0)} with clean placement")
             self._log_issues(issues)
             self.rep.progress(100, "Analysis complete")
             return RunResult(plans, planner.segments, planner.terminal_rows, issues, summary,
                              self._network_rows(book, reports, planner), existing_rows, {}, placement, spec,
-                             input_signature(self.cfg))
+                             input_signature(self.cfg), src.insunits)
         finally:
             self.collector.cleanup()
 
@@ -2623,8 +2844,9 @@ class CalloutEngine:
         stem = Path(cfg.drawing_path).stem
         self.rep.progress(86, "Writing callouts")
         doc = ezdxf.new("R2018", setup=True)
-        doc.header["$INSUNITS"] = 0
-        doc.header["$MEASUREMENT"] = 0
+        # same $INSUNITS as the design: AutoCAD rescales pasted objects when source and target units differ
+        doc.header["$INSUNITS"] = int(result.insunits or 0)
+        doc.header["$MEASUREMENT"] = 1 if result.insunits in (4, 5, 6, 7, 14) else 0
         writer = CalloutWriter(doc, result.spec, result.issues, self.rep)
         plans = result.plans
         for i, p in enumerate(plans):

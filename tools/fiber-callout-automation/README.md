@@ -20,7 +20,7 @@ drawing units from the files on every run, so there is nothing to configure.
 
 | Step | What to do |
 |---|---|
-| **1 Inputs** | Pick the design drawing (`.dwg` AutoCAD 2010-2025 or `.dxf`). Add every splice report and address list of the region to the one list: files, folders or `.zip` archives. Drag and drop works anywhere in the window. The output folder defaults to `callout_output` next to the drawing. |
+| **1 Inputs** | Pick the design drawing (`.dwg` AutoCAD 2010-2025 or `.dxf`). Add every splice report and address list of the region to the one list: files, folders or `.zip` archives. The files can be `.xlsx`, `.xls`, `.xlsm`, `.csv` or tab-delimited `.txt`, with any common encoding or delimiter. Drag and drop works anywhere in the window. The output folder defaults to `callout_output` next to the drawing. **Clear** (Ctrl+N) empties the inputs and results for the next region. |
 | **Validate** | Optional dry run that lists every problem: missing closures (with "did you mean" hints), splice-report vs address-list mismatches, orphan addresses, missing cable geometry and crowded placements. Nothing is written. |
 | **Generate Callouts** | Writes the callouts DXF and the QA/QC workbook and opens **2 Results**. |
 | **Paste into the design** | In AutoCAD, open the callouts DXF and press **Ctrl+A** then **Ctrl+C**. Switch to the design drawing and type **PASTEORIG**. Every callout lands at its original coordinates. If the design already has fiber callouts, delete them first. The *Existing callouts* tab compares them with the new ones. |
@@ -32,7 +32,7 @@ drawing units from the files on every run, so there is nothing to configure.
 | Callout | Rule (reverse-engineered, see [docs/PHASE1_REVERSE_ENGINEERING.md](docs/PHASE1_REVERSE_ENGINEERING.md)) | Example |
 |---|---|---|
 | Fiber number | `N = (PON - 1) x splitter size + PON PORT` per OLM. One callout per terminal + drop closure (per contiguous run), with the arrow on the handhole that hosts the drop closure. | `69`, `218-219` |
-| BFO (cable) | One callout for every cable segment that leaves a closure with a splice report and carries live fibers: `BFO <segment fiber count>` / `<lowest>-<highest> N` of the live (not broken or spare) fibers on that segment. The arrow sits on the cable near the closure. | `BFO 72` / `70-115` |
+| BFO (cable) | Only at cable **junctions**: closures with a splice report where 3 or more cable segments meet (pigtails and terminal tails don't count). One callout for every cable segment leaving the junction that carries live fibers: `BFO <segment fiber count>` / `<lowest>-<highest> N` of the live (not broken or spare) fibers on that segment. The arrow sits on the cable near the closure. Pass-through closures (one cable in, one out) get no BFO callout. | `BFO 72` / `70-115` |
 
 Entity properties match the reference:
 
@@ -78,7 +78,8 @@ options:
 ## Verified
 
 * **Credit River (4 OLMs, 867 closures, 884 fibers)**, read directly from the original DWG:
-  * 1,184 callouts generated, the same count as the reference.
+  * 707 fiber-number and 475 BFO callouts generated (reference 708 and 476). The junction rule leaves out exactly the
+    2 pass-through closures that have no BFO in the reference.
   * 705/708 fiber-number and 450/476 BFO texts are identical to the hand-drafted reference.
   * 698/706 arrows are on the same handhole and 448/452 on the same cable.
   * Every difference traces to a defect in the reference drawing or the input data, and the QA workbook lists each
@@ -90,6 +91,11 @@ options:
   * both splice-report layouts
   * a closure named only by a text label, and one located only from splice-report coordinates
   * commercial `C-` usages, a non-contiguous terminal and a closure typo
+  * pass-through closures (no BFO) and a junction formed by a 24F cable to a terminal (BFO)
+  * a CSV address list next to the workbook version
+* **Input formats**: the Credit River splice reports and address lists converted to `.csv`, `.xls`, semicolon /
+  Windows-1252 CSV with comma decimals, UTF-16 tab-delimited `.txt` and Excel's `sep=` CSV all give callouts and
+  issues identical to the `.xlsx` originals.
 
 ## Build from source
 

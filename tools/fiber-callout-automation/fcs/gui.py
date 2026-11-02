@@ -107,10 +107,12 @@ address-list columns, splitter size and drawing units are detected from the file
 <ol>
 <li><b>Design drawing</b> - the region's .dwg (AutoCAD 2010-2025) or .dxf.</li>
 <li><b>Splice reports &amp; address lists</b> - add everything for the region in one list: files, folders or .zip
-archives. Splice reports and address lists are told apart automatically; duplicates are ignored.</li>
+archives (.xlsx, .xls, .xlsm, .csv or tab-delimited .txt). Splice reports and address lists are told apart
+automatically; duplicates are ignored.</li>
 <li><b>Output folder</b> - defaults to <tt>callout_output</tt> next to the drawing.</li>
 </ol>
-<p>Drag &amp; drop works anywhere in the window: a drawing goes to the drawing field, everything else to the list.</p>
+<p>Drag &amp; drop works anywhere in the window: a drawing goes to the drawing field, everything else to the list.
+<b>Clear</b> (Ctrl+N) empties the inputs and results to start the next region.</p>
 <h3>2 &nbsp;Validate or Generate</h3>
 <ul>
 <li><b>Validate</b> analyses the network and lists every problem (missing closures, address-list / splice-report
@@ -129,8 +131,10 @@ coordinates) and the QA/QC workbook <tt>*_FIBER_CALLOUTS_QA_*.xlsx</tt>.</li>
 <li>Fiber number <b>N = (PON - 1) x splitter size + PON PORT</b>, per OLM.</li>
 <li><b>Fiber-number callout</b>: one per terminal + drop closure (per contiguous run), e.g. <tt>69</tt> or
 <tt>218-219</tt>; arrow on the handhole hosting the drop closure.</li>
-<li><b>BFO callout</b>: one per live cable segment leaving a closure that has a splice report, e.g.
-<tt>BFO 72 / 70-115</tt> = cable fiber count / lowest-highest fiber number carried; arrow on the cable.</li>
+<li><b>BFO callout</b>: only at cable <b>junctions</b> - closures with a splice report where 3 or more cable
+segments meet (pigtails and terminal tails do not count). One per live cable segment leaving the junction, e.g.
+<tt>BFO 72 / 70-115</tt> = cable fiber count / lowest-highest fiber number carried; arrow on the cable. Pass-through
+closures (one cable in, one out) get none.</li>
 </ul>
 """
 
@@ -239,11 +243,26 @@ def count_sheets(path: str) -> int:
         return 0
 
 
+def single_drawing(folder: str) -> str:
+    """The one .dwg / .dxf inside a region folder (empty when there are none or several)."""
+    found: List[str] = []
+    try:
+        for f in Path(folder).rglob("*"):
+            if f.suffix.lower() in DRAWING_EXTS and not f.name.startswith(("~", ".")) and f.is_file():
+                found.append(str(f))
+                if len(found) > 1:
+                    return ""
+    except OSError:
+        return ""
+    return found[0] if found else ""
+
+
 class DataList(QWidget):
     """One list for every splice report and address list of the region (files, folders or .zip)."""
 
     changed = pyqtSignal()
     drawing_found = pyqtSignal(str)
+    drawing_in_folder = pyqtSignal(str)
     rejected = pyqtSignal(list)
 
     def __init__(self) -> None:
@@ -284,12 +303,19 @@ class DataList(QWidget):
         row.addWidget(self.summary)
         lay.addLayout(row)
         self.list.itemSelectionChanged.connect(self._update)
+        self.list.keyPressEvent = self._key  # type: ignore[assignment]
         self.start_dir: Callable[[], str] = lambda: ""
         self._update()
 
     def _drag_enter(self, e: Any) -> None:
         if accepts_urls(e):
             e.acceptProposedAction()
+
+    def _key(self, e: Any) -> None:
+        if e.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.list.selectedItems():
+            self.remove()
+        else:
+            QListWidget.keyPressEvent(self.list, e)
 
     def _drop(self, e: Any) -> None:
         self.add_many(dropped_paths(e))
@@ -314,6 +340,10 @@ class DataList(QWidget):
                 self.drawing_found.emit(p)
             elif pp.is_dir() or pp.suffix.lower() in DATA_EXTS + (".zip", ".txt"):
                 self.add(p, update=False)
+                if pp.is_dir():
+                    dwg = single_drawing(p)
+                    if dwg:
+                        self.drawing_in_folder.emit(dwg)
             else:
                 skipped.append(pp.name)
         self._update()
@@ -361,6 +391,7 @@ class DataList(QWidget):
         n = self.list.count()
         self.empty.setVisible(n == 0)
         self.btn_remove.setEnabled(bool(self.list.selectedItems()))
+        self.btn_remove.setToolTip("Remove the selected items (Delete)")
         self.summary.setText(f"{self.sheet_count()} spreadsheet(s) in {n} item(s)" if n else "")
         self.changed.emit()
 
@@ -600,7 +631,7 @@ class MainWindow(QMainWindow):
     def _menus(self) -> None:
         mb = self.menuBar()
         m = mb.addMenu("&File")
-        self._act(m, "New region", self.new_region, "Ctrl+N")
+        self._act(m, "Clear - start a new region", self.new_region, "Ctrl+N")
         self._act(m, "Add drawing...", self.pick_drawing, "Ctrl+O")
         self._act(m, "Add splice reports / address lists...", lambda: self.data.add_files(), "Ctrl+Shift+O")
         m.addSeparator()
@@ -733,6 +764,7 @@ class MainWindow(QMainWindow):
         self.data.changed.connect(self._data_changed)
         self.data.drawing_found.connect(self._set_drawing)
         self.data.rejected.connect(self._rejected)
+        self.data.drawing_in_folder.connect(self._drawing_in_folder)
         cl.addWidget(self.data)
         left.addWidget(c, 1)
 
@@ -869,6 +901,9 @@ class MainWindow(QMainWindow):
         self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.setObjectName("danger")
         self.btn_cancel.setVisible(False)
+        self.btn_clear = QPushButton("Clear")
+        self.btn_clear.setToolTip("Clear the drawing, the data list and the results to start a new region (Ctrl+N)")
+        self.btn_clear.clicked.connect(self.new_region)
         self.btn_validate = QPushButton("Validate")
         self.btn_validate.setObjectName("secondary")
         self.btn_validate.setToolTip("Analyse the inputs and list every problem - nothing is written")
@@ -878,7 +913,7 @@ class MainWindow(QMainWindow):
         self.btn_cancel.clicked.connect(self.cancel_job)
         self.btn_validate.clicked.connect(lambda: self.start("validate"))
         self.btn_generate.clicked.connect(lambda: self.start("generate"))
-        for b in (self.btn_log, self.btn_cancel, self.btn_validate, self.btn_generate):
+        for b in (self.btn_log, self.btn_cancel, self.btn_clear, self.btn_validate, self.btn_generate):
             lay.addWidget(b)
         return f
 
@@ -984,6 +1019,11 @@ class MainWindow(QMainWindow):
         self.lbl_drawing.style().unpolish(self.lbl_drawing)
         self.lbl_drawing.style().polish(self.lbl_drawing)
 
+    def _drawing_in_folder(self, path: str) -> None:
+        if not self.ed_drawing.text().strip():
+            self._set_drawing(path)
+            self._log(f"Design drawing found in the added folder: {path}", "INFO")
+
     def _rejected(self, names: List[str]) -> None:
         shown = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
         self._log(f"Not added (not a spreadsheet, folder or .zip): {', '.join(names)}", "WARNING")
@@ -1011,6 +1051,7 @@ class MainWindow(QMainWindow):
         why = self._ready()
         for b in (self.btn_validate, self.btn_generate):
             b.setEnabled(not why)
+        self.btn_clear.setEnabled(bool(self.ed_drawing.text().strip() or self.data.paths() or self.have_results))
         self.status.setText(why or self.result_status or "Ready - Validate to check the inputs, or Generate Callouts.")
 
     def config(self) -> RunConfig:
@@ -1025,18 +1066,32 @@ class MainWindow(QMainWindow):
     def new_region(self) -> None:
         if self.thread is not None:
             return
+        self.have_results = False
+        self.result_status = ""
+        self.last_result = None
+        self.outputs = {}
         self.ed_drawing.clear()
         self.data.clear()
         self.ed_output.clear()
         self._output_user_set = False
-        self.last_result = None
-        self.outputs = {}
-        self.have_results = False
-        self.result_status = ""
+        self._set_drawing_status("", "hint")
+        self._reset_results()
         self.btn_step_results.setEnabled(False)
         self.go(0)
         self._refresh_ready()
-        self._log("New region - inputs cleared", "INFO")
+        self._log("Cleared - ready for a new region", "INFO")
+
+    def _reset_results(self) -> None:
+        for k in (self.kpi_t, self.kpi_c, self.kpi_clean, self.kpi_e, self.kpi_w):
+            k.set("-")
+        for t in (self.tbl_issues, self.tbl_callouts, self.tbl_network, self.tbl_existing):
+            t.search.clear()
+            t.fill([])
+        for b in (self.btn_open_dxf, self.btn_open_qa, self.btn_open_folder):
+            b.setVisible(False)
+        self.banner_title.setText("")
+        self.banner_text.setText("")
+        self.banner_detail.setText("")
 
     # ----------------------------------------------------------------- drag & drop anywhere
     def dragEnterEvent(self, e: Any) -> None:  # noqa: N802
@@ -1217,6 +1272,7 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setEnabled(busy)
         self.btn_validate.setVisible(not busy)
         self.btn_generate.setVisible(not busy)
+        self.btn_clear.setVisible(not busy)
         self.progress.setVisible(busy)
         self.stack.widget(0).setEnabled(not busy)
         for b in (self.btn_step_inputs, self.btn_step_results):

@@ -67,10 +67,18 @@ N = (PON NAME − 1) × 64 + PON PORT            (numbered independently per OLM
 ### 2.3 Cable ("BFO") callouts — Splice Report driven
 
 ```
-For every splice report (closure S) and every cable segment whose Start Splice = S
-(non-pigtail) and that carries ≥ 1 live fiber:
+For every splice report (closure S) that is a cable JUNCTION (3 or more cable segments meet at S;
+pigtails / terminal tails do not count) and every cable segment whose Start Splice = S
+(non-pigtail, not a cable ending at a terminal) and that carries ≥ 1 live fiber:
     text = "BFO " + <segment fiber count> + "\P" + <min N> + "-" + <max N>
 ```
+
+* **Junctions only.** A BFO label is drafted where the cable branches (e.g. 72F in, 24F + 48F out; or a 144F passing
+  through with a 24F branch). A pass-through closure (one cable in, one out, plus pigtails to terminals) gets no BFO
+  label, even when the cable tapers (NMK-05138: 96F in, 72F out). In Credit River, 234 of the 236 closures with a
+  splice report are junctions. The 2 pass-through closures (NMK-05021, NMK-05138) are the only ones whose out
+  segments carry no BFO label in the reference. A real 24F cable to a terminal (NMK-03132, NMK-04003) counts as a
+  third segment, and those closures are labelled.
 
 * *Live* = connection rows on that segment whose `State` is not Broken / Spare (dark), resolved to an address-list
   row through the `Usage` column (`<terminal>:<k> <address>`). `<terminal>:<k>` is the k-th fiber of the terminal,
@@ -163,7 +171,7 @@ the same figures are obtained from a DXF rebuild of the network:
 
 | Check | Result |
 |---|---|
-| Callouts generated | 707 terminal + 477 BFO = 1,184 (reference 1,184) |
+| Callouts generated | 707 terminal + 475 BFO = 1,182 (reference 708 + 476 = 1,184; per-callout differences in §2.2 / §2.3 and the QA workbook) |
 | Terminal callout text identical to reference | 705 / 708 (2 drafting errors in the reference + 1 address-list closure typo `NKM-02133`) |
 | Terminal callouts on the same handhole as reference | 698 / 706 |
 | BFO text identical to reference | 450 / 476 (reference-vs-report discrepancies, see §2.3) |

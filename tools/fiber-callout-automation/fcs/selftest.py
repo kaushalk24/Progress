@@ -108,8 +108,19 @@ class Region:
         self.no_attr_label = _c(7012)          # closure with a TEXT label instead of an attribute
         self.no_attr_coords = _c(7014)         # closure found only via splice-report coordinates
         self.guide_closure = _c(7006)          # splice report in "Fiber Optic Splice Guide" layout
+        self.tap_cable_closure = _c(7013)      # terminal fed by a 24F cable (a 3rd cable segment -> junction)
         self.report_closures = [self.hub, _c(7002), _c(7003), _c(7005), _c(7006), _c(7011), _c(7013), _c(7014),
                                 _c(7021), _c(7023)]
+
+    def tail(self, s: str, t: Dict[str, Any]) -> Tuple[str, int]:
+        """Cable from closure s to terminal t: a 4F pigtail, or a 24F cable at the tap-cable closure."""
+        cnt = 24 if s == self.tap_cable_closure else 4
+        return f"{s} TO {t['tap']} FC{cnt:03d}", cnt
+
+    def is_junction(self, s: str) -> bool:
+        """BFO callouts are drafted only where 3+ cable segments meet (pigtails do not count)."""
+        n_tail_cables = sum(1 for t in self.terminals if t["closure"] == s and self.tail(s, t)[1] > 4)
+        return 1 + len(self.children[s]) + n_tail_cables >= 3
 
     def downstream(self, n: str) -> List[int]:
         out = [num for num, c in self.number_closure.items() if c == n]
@@ -133,6 +144,8 @@ class Region:
             for r in runs:
                 exp.append(dict(kind="TERMINAL", text=str(r[0]) if len(r) == 1 else f"{r[0]}-{r[-1]}", closure=t["closure"]))
         for s in self.report_closures:
+            if not self.is_junction(s):
+                continue
             for ch, cab, _k in self.children[s]:
                 d = self.downstream(ch)
                 if d:
@@ -260,7 +273,8 @@ def _write_connections_report(reg: Region, s: str, path: Path) -> None:
         segs.append((cab, k, reg.fc[cab], f"Splice Case: {s}", f"Splice Case: {ch}"))
     terms = [t for t in reg.terminals if t["closure"] == s]
     for t in terms:
-        segs.append((f"{s} TO {t['tap']} FC004", 1, 4, f"Splice Case: {s}", f"MAX10 Enclosure(M Bulk): {t['tap']}"))
+        tail, cnt = reg.tail(s, t)
+        segs.append((tail, 1, cnt, f"Splice Case: {s}", f"MAX10 Enclosure(M Bulk): {t['tap']}"))
     for cab, k, cnt, st, en in segs:
         kind = "Pigtail" if cnt == 4 else "Underground"
         ws.append([f"Segment {k} of {cab} - {kind}", cnt, st, en, "Owner", 100, 0])
@@ -284,7 +298,7 @@ def _write_connections_report(reg: Region, s: str, path: Path) -> None:
         c = reg.number_closure[n]
         if c == s:
             t = next(t for t in terms if any(f[0] == n for f in t["fibers"]))
-            out = _seg_label(f"{s} TO {t['tap']} FC004", 1)
+            out = _seg_label(reg.tail(s, t)[0], 1)
         else:
             node = c
             while reg.parent[node][0] != s:
@@ -312,7 +326,7 @@ def _write_guide_report(reg: Region, s: str, path: Path) -> None:
     ins = [f"{cab_in}: Seg{k_in}-{reg.fc[cab_in]}ct"]
     outs = [f"{cab}: Seg{k}-{reg.fc[cab]}ct" for _ch, cab, k in reg.children[s]]
     terms = [t for t in reg.terminals if t["closure"] == s]
-    outs += [f"{s} TO {t['tap']} FC004 : Seg1-4ct" for t in terms]
+    outs += [f"{reg.tail(s, t)[0]} : Seg1-{reg.tail(s, t)[1]}ct" for t in terms]
     rows = [[None, "Fiber Optic Splice Guide"], [None, f"Westbrook {OLM}", None, None, None, None, None, None, None, None, "In", None, None, None, "Out"],
             [None, "Splice Name:", None, None, s], [None, "Date Created:", None, None, "1/1/2026"],
             [None, "Enclosure Make/Model:", None, None, "SPLICE CASE"], [None, "Location:", None, None, reg.street[s]]]
@@ -331,7 +345,7 @@ def _write_guide_report(reg: Region, s: str, path: Path) -> None:
         c = reg.number_closure[n]
         if c == s:
             t = next(t for t in terms if any(f[0] == n for f in t["fibers"]))
-            out = f"{s} TO {t['tap']} FC004 SEG-1"
+            out = f"{reg.tail(s, t)[0]} SEG-1"
         else:
             node = c
             while reg.parent[node][0] != s:
@@ -456,6 +470,8 @@ def run_selftest(verbose: bool = True, workdir: Optional[str] = None,
         layer = doc.layers.get("DES_FIBER_SPL")
         checks.append(("layer DES_FIBER_SPL = ACI 6 / Continuous", layer.dxf.color == 6 and layer.dxf.linetype.upper() == "CONTINUOUS", ""))
         checks.append(("output DXF passes audit", len(doc.audit().errors) == 0, ""))
+        checks.append(("callouts DXF has the design's units (pastes without scaling)",
+                       doc.header.get("$INSUNITS") == 2, f"$INSUNITS={doc.header.get('$INSUNITS')}"))
         errs = [i for i in res.issues.items if i.severity == "ERROR"]
         typo_flagged = any("WKB-07022" in i.obj and "did you mean" in i.message for i in errs)
         checks.append(("closure typo detected with suggestion", typo_flagged, str([i.message for i in errs])))
