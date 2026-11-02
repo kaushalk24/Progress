@@ -7,7 +7,7 @@ These are the rules the tool applies to every line of the OLM BOM template, one 
 - **Non-Grant** is whatever lies inside the Non-Grant boundaries.
 - **Grant** is the network total minus Non-Grant.
 - **OLM equipment** (Z-14 ped, OLM bundle, power supply, enclosures, batteries) is booked to Grant, 1 per OLM. When the whole OLM area is Non-Grant, it all moves to Non-Grant.
-- **Structures on the boundary:** a pedestal or vault on the Non-Grant boundary (less than 5 ft inside the edge) counts as Grant.
+- **Structures on the boundary:** a pedestal or vault on the Non-Grant boundary (less than 5 ft inside the edge) counts as Grant. So do the cable span that feeds it, the closure in it, and its ground and upgrade kits.
 - **Cable** is split at its splice and structure points. Each span belongs to the area of the ped or splice it feeds, so a span entering a Non-Grant area is Non-Grant from its start. The slack loops at that ped go with it.
 
 ## Scope: what belongs to this design
@@ -26,7 +26,7 @@ These are the rules the tool applies to every line of the OLM BOM template, one 
 |---|---|---|
 | Footage | Total route mileage, UG and aerial footage | Fiber-drafting route length: CX1-FTG-N2 labels on the trench / strand layers inside the boundary (as the CalcFTG routine). Strand counts only where fiber is lashed to it. |
 | Footage | Total drop footage | FX_DROPS drop lines (ped edge to the address PED, rounded to the foot). Non-Grant = drops of addresses inside the Non-Grant boundaries; Grant = total − Non-Grant, written in the Grant column. Not counted in the route rows. |
-| Passings | Residential, commercial, MDU | Served addresses from the address list. Grant = served addresses on the GRANTADDRESS layer (commercial / MDU: outside the Non-Grant boundaries). |
+| Passings | Residential, commercial, MDU | Served addresses from the address list (network total). Non-Grant = served address blocks inside the Non-Grant boundaries, one per address; Grant = total − Non-Grant. MDU units by the building's location. The GRANTADDRESS layer is a cross-check: an address whose layer disagrees with the boundary is listed and its cell marked for review. |
 | UG structures | Z-14 OLM ped | 1 per OLM, in Grant. |
 | UG structures | MAX10 / MAX5 peds | Count of pedestals inside the OLM boundary, split by location (on the boundary = Grant). |
 | UG structures | GOAT peds, MAX / GOAT ped with tap | 0: the design uses MAX peds with fiber bulkheads. |

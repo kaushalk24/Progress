@@ -9,6 +9,19 @@ DWG/DXF + address lists + splice reports (+ template, + optional approved BOM)
 
 ## 1. Install (Windows, once)
 
+### Windows application (recommended)
+
+Run **FTTx-BOM-Tool-Setup-<version>.exe**. It installs for the current user without administrator rights and adds a Start-menu entry; a desktop shortcut is optional. Nothing else is needed: the DWG reader and its runtime are included. LibreOffice is optional; when it is installed, it is used to recalculate every formula.
+
+- **FTTx BOM Tool** opens the application in its own window.
+- **fttx-bom.exe**, in the install folder, is the command line (`fttx-bom.exe run ...`, see section 4). `fttx-bom.exe --selftest` checks the installation.
+- Settings are kept in `%APPDATA%\FTTx BOM Tool`. Jobs are kept in `Documents\FTTx BOM Jobs`.
+- A portable zip, which runs without installing, is built alongside the installer.
+
+The installer and the zip are built by the *FTTx BOM Tool - Windows app* GitHub Actions workflow on every change (`packaging/` holds the build files). Download them from the run's *Artifacts*.
+
+### From the source code
+
 1. Install **Python 3.11+** from python.org (tick *Add python.exe to PATH*).
 2. Install **Node.js 20 LTS** from nodejs.org. It is needed to read DWG files directly; no AutoCAD licence is needed.
 3. Optional: install **LibreOffice**, so the tool can recalculate and check every formula in the produced BOM.
@@ -128,7 +141,7 @@ Some conventions can't be read from the drawing, so the tool computes **every op
 | Splitter Grant split | Grant first, or per column |
 | Tray packages | pooled, per location, or fully pooled |
 | MAX10 upgrade | template formula, one kit per Non-Grant MAX10 (default); need-based; or all MAX10 |
-| Drop columns | both, Grant = total − Non-Grant (default); Non-Grant only; or all drops in Non-Grant |
+| Drop columns | both, Grant = total − Non-Grant (standard, confirmed); Non-Grant only; or all drops in Non-Grant |
 | Route footage | route labels, as CalcFTG (default); cable totals; or fiber-bearing trench only |
 | Cable split | span by span, each in the area of the ped it feeds (standard); span majority; or length inside the polygons |
 | Ground wire kits | hand count, highlighted with the drawing's count: template-note criteria, G suffix only, or not ordered |
@@ -159,9 +172,9 @@ Line statuses:
 
 | File | Purpose |
 |---|---|
-| `config/conventions.json` | Layer and block names, and blocks to ignore. |
+| `config/conventions.json` | Layer and block names, blocks to ignore, scope distances, and `passings_area_rule` (`boundary`, the standard, or `grant_layer`). |
 | `config/bom_rules.json` | One rule per BOM line. |
-| `config/policies.json` | Selected / learned policy options. |
+| `config/policies.json` | Selected / learned policy options (the Windows application keeps them in `%APPDATA%\FTTx BOM Tool`). |
 | `config/investigations.json` | Documented reference differences. |
 
 ## 9. Tests

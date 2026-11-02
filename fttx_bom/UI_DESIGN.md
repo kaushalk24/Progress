@@ -6,12 +6,21 @@
 2. Make it obvious which numbers can be trusted and which must be checked before ordering.
 3. Show every problem with a concrete fix, located in the drawing.
 4. Run entirely on the user's computer. No file leaves it.
+5. Install like any Windows program: one installer, no administrator rights, nothing else to install.
 
 ## Users
 
 **Primary:** FTTx design engineers who produce BOMs for each OLM.
 
 **Secondary:** the reviewer who signs off a BOM, and the lead who runs many networks at once.
+
+## Delivery
+
+| Form | How it starts |
+|---|---|
+| **Windows application** (installer or portable zip) | *FTTx BOM Tool* in the Start menu opens the app in its own window (Edge WebView2). If that window can't be created, the default browser opens and a small "running" window offers *Open again* / *Quit*. Closing the app stops its local server. |
+| **Command line** | `fttx-bom.exe run / auto / batch`, `--selftest`, `--version` |
+| **From the source code** | `python -m fttx_bom app` |
 
 ## Navigation
 
@@ -33,7 +42,7 @@ A sidebar holds four pages, plus version and job-folder information.
   - *Folders on this computer*: one path per line, for large drawings.
 - **What to supply:** the drawing (DWG/DXF), address list(s), splice reports and the blank BOM template. Optionally, an approved BOM to compare against.
 - **Detection:** each file's role is detected from its content, so names don't matter.
-- **Project name and number** are pre-filled from the drawing file name. **System** is picked from a list.
+- **Project name and number** are pre-filled from the drawing file name (uploads and folders), e.g. "Melcher Dallas" / 386021. **System** is picked from a list; a note says when it is still blank.
 - **Advanced** (collapsed): formula recalculation with LibreOffice, and learning conventions from an approved BOM.
 
 ### Step 2: Generate
@@ -46,20 +55,29 @@ A sidebar holds four pages, plus version and job-folder information.
 
 ### Step 3: Results
 
-**Header KPIs:**
+**Header:** network names, number of workbooks, run time, output folder.
+
+**KPIs:**
 - passings;
 - low-confidence cells;
 - cells to review;
 - design errors and design warnings;
 - workbook check (passed / failed).
 
+**Network summary** (expanded): passings (residential / commercial / MDU), MAX10 and MAX5 peds, vaults, fiber cable, UG and aerial route, route miles, drops, closures, splitters and SFP, as Grant / Non-Grant / Total per network. This is the first thing a reviewer checks against the design.
+
 **Tabs, one set per BOM file** (one OLM per BOM):
 
-1. **BOM preview:** every written line with its Grant / Non-Grant values per network, and a status column (● low confidence, ● review, ✓).
-2. **Cells to check:** each flagged cell with its value, level and plain-language reason. It can be filtered to "low confidence only".
-3. **Design check:** problems by severity with a "how to fix", plus a note on the AutoCAD script that circles each located problem.
+1. **BOM preview:**
+   - one row per written line, in template order;
+   - columns: status, section (UG Structure, Fiber Cable ...), part number, description, unit, Grant / Non-Grant per network, total;
+   - flagged cells use the workbook's own red and amber;
+   - thousands separators;
+   - filter "Lines with a quantity" (default), "Cells to check" or "All lines", plus a search box.
+2. **Cells to check:** each flagged cell with its value, unit, level and plain-language reason, low confidence first. It can be filtered to "low confidence only".
+3. **Design check:** problems by severity, with counts on the filter and a "how to fix" for each, plus a note on the AutoCAD script that circles each located problem.
 4. **Excluded plant:** objects in the drawing that are not part of this design, with the reason.
-5. **Downloads:** BOM workbook, audit workbook, comparison with the approved BOM, design check (CSV), AutoCAD issue script, and everything as a zip.
+5. **Downloads:** BOM workbook, audit workbook, comparison with the approved BOM, design check (CSV), AutoCAD issue script, everything as a zip, and **Open output folder**.
 
 ## Confidence in the BOM workbook
 
@@ -88,5 +106,6 @@ The same rating appears in the app and in the generated Excel BOM.
 
 - Wide layout with a maximum content width.
 - Neutral typography, with small uppercase step labels.
+- One accent colour (blue #1F5FAD) for actions and step labels. Red is kept for problems only.
 - Colour is used only for meaning: confidence and severity. The confidence colours are the same in the app and in Excel.
 - No technical identifiers in user-facing text, except issue codes in the design-check table, which are useful for filtering.
