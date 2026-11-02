@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -57,7 +56,9 @@ def _file_hash(path: Path) -> str:
 
 def dwg_to_json(dwg: Path, cache_dir: Path) -> tuple[Path, list[str]]:
     """Run the LibreDWG converter (cached by file hash). Returns (json path, warnings)."""
-    node = shutil.which("node")
+    from ..paths import node_exe
+
+    node = node_exe()
     if not node:
         raise ExtractionError("Node.js is required to read DWG files (or supply a DXF export instead).")
     if not (TOOLS_DIR / "node_modules" / "@mlightcad" / "libredwg-web").exists():
@@ -75,11 +76,11 @@ def dwg_to_json(dwg: Path, cache_dir: Path) -> tuple[Path, list[str]]:
             text=True,
             timeout=900,
         )
-        log.write_text(proc.stdout + proc.stderr)
+        log.write_text(proc.stdout + proc.stderr, encoding="utf-8")
         if proc.returncode != 0 or not out.exists():
             raise ExtractionError(f"DWG conversion failed for {dwg}:\n{proc.stderr[-2000:]}")
     warnings = []
-    for line in log.read_text().splitlines() if log.exists() else []:
+    for line in log.read_text(encoding="utf-8").splitlines() if log.exists() else []:
         if "error code" in line:
             try:
                 code = int(line.rsplit(":", 1)[1])
@@ -91,7 +92,7 @@ def dwg_to_json(dwg: Path, cache_dir: Path) -> tuple[Path, list[str]]:
 
 
 def load_slim_json(path: Path, warnings: list[str] | None = None) -> Drawing:
-    data = json.loads(Path(path).read_text())
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
     d = Drawing(source=data.get("source", Path(path).name), backend=data.get("backend", "json"))
     d.census = Counter(data.get("census", {}))
     d.block_census = data.get("blockCensus", {})

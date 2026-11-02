@@ -108,9 +108,9 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     try:
         if args.cmd == "app":
-            app = Path(__file__).resolve().parents[1] / "app" / "bom_app.py"
-            return subprocess.call([sys.executable, "-m", "streamlit", "run", str(app), "--server.maxUploadSize=4096",
-                                    "--browser.gatherUsageStats=false"])
+            from .paths import app_script, streamlit_args
+
+            return subprocess.call([sys.executable, "-m", "streamlit", "run", str(app_script()), *streamlit_args()])
         if args.cmd == "run":
             p = JobParams(dwg=Path(args.dwg), address_lists=_expand(args.address_list, (".xlsx",)),
                           splice_reports=_expand(args.splice_reports, (".xlsx",)), template=Path(args.template),

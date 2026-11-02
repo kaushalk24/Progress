@@ -52,6 +52,7 @@ class WriteResult:
     total_col: str = "G"  # 'Total Quantity' column; area columns follow it
     flags: dict = field(default_factory=dict)  # (rule key, net, area) -> confidence Flag of a written cell
     added_sheets: list[str] = field(default_factory=list)
+    sections: dict[int, str] = field(default_factory=dict)  # row -> template section title ("UG Structure", ...)
 
 
 def area_label(net: str, area: str) -> str:
@@ -120,6 +121,20 @@ def template_capacity(template: Path, cfg: dict) -> int:
         finally:
             wb.close()
     return n
+
+
+def template_sections(ws, header_row: int, total_col: int) -> dict[int, str]:
+    """Section of every row below the header: a section title is a row with words in column B and nothing in
+    the manufacturer, description and total columns ("UG Structure", "Fiber Cable", "OLM Equipment" ...)."""
+    out, current = {}, "Footage and passings"
+    for r in range(header_row + 1, ws.max_row + 1):
+        b = ws.cell(r, 2).value
+        if (isinstance(b, str) and b.strip() and not b.strip().startswith("=") and " " in b.strip()
+                and sum(ch.isdigit() for ch in b) < 3 and ws.cell(r, 3).value in (None, "")
+                and ws.cell(r, 4).value in (None, "") and ws.cell(r, total_col).value in (None, "")):
+            current = b.strip()
+        out[r] = current
+    return out
 
 
 def find_rows(ws, rules: list[Rule], header_row: int) -> tuple[dict[str, int], list[str]]:
@@ -197,6 +212,7 @@ def write_bom(template: Path, out: Path, tk: Takeoff, rules: list[Rule], cfg: di
     from .reports import template_material_rows
 
     res.template_rows = template_material_rows(ws)
+    res.sections = template_sections(ws, header_row, tq)
     rows, issues = find_rows(ws, rules, header_row)
     res.rows, res.issues = rows, issues
     rule_rows = set(rows.values())
@@ -289,7 +305,8 @@ def _highlight(wb, ws, res: WriteResult, rules: list[Rule], flags: dict) -> None
                 continue
             cell = ws[f"{L}{r}"]
             cell.fill = PatternFill("solid", fgColor=FILL[f.level])
-            cell.font = Font(bold=True, color=FONT[f.level])
+            old = cell.font  # keep the template's typeface and size, change weight and colour only
+            cell.font = Font(name=old.name, size=old.sz, italic=old.i, underline=old.u, bold=True, color=FONT[f.level])
             text = ("LOW CONFIDENCE - check before ordering" if f.level == LOW else "REVIEW") + ":\n- " + "\n- ".join(f.reasons)
             cell.comment = Comment(text[:1500], "FTTx BOM tool", width=420, height=min(60 + 30 * len(f.reasons), 300))
             res.flags[(rule.key, *col)] = f

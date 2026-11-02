@@ -130,7 +130,7 @@ def test_drop_column_options():
     tk = Takeoff([NET])
     for a, v in ((GRANT, 10194), (NONGRANT, 25923)):
         tk.add("drop_ft", NET, a, v, "FT", "")
-        tk.add("drop_ft_bom", NET, a, v if a == NONGRANT else 0, "FT", "")  # engine = Non-Grant only
+        tk.add("drop_ft_bom", NET, a, v, "FT", "")  # engine: drops in their own column
     pol.compute_variants(tk)
     want = {"both": (10194, 25923), "nongrant_only": (0, 25923), "total_nongrant": (0, 36117)}
     for opt, cells in want.items():

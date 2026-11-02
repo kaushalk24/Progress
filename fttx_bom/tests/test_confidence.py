@@ -48,12 +48,18 @@ def test_unsettled_convention_flagged():
     tk = Takeoff([NET])
     for a, v in ((GRANT, 10194), (NONGRANT, 25923)):
         tk.add("drop_ft", NET, a, v, "FT", "")
-        tk.add("drop_ft_bom", NET, a, v if a == NONGRANT else 0, "FT", "")
+        tk.add("drop_ft_bom", NET, a, v, "FT", "")
+    tk.add("ped_max10", NET, NONGRANT, 9, "EA", "")
+    tk.add("max10_upgrades", NET, GRANT, 0, "EA", "need-based")
+    tk.add("max10_upgrades", NET, NONGRANT, 0, "EA", "need-based")
     pol.compute_variants(tk)
     pol.apply(tk, {})
-    flags = assess([_rule("Total Drop Footage", "drop_ft_bom")], tk, [], {}, [])
-    f = flags[("Total Drop Footage", NET, GRANT)]
-    assert f.level == REVIEW and "not settled" in f.reasons[0]
+    rules = [_rule("Total Drop Footage", "drop_ft_bom"), _rule("FE0-MAX10EXP4", "max10_upgrades")]
+    flags = assess(rules, tk, [], {}, [])
+    assert ("Total Drop Footage", NET, GRANT) not in flags  # confirmed: Grant drops in the Grant column
+    assert tk.get("drop_ft_bom", NET, GRANT) == 10194
+    f = flags[("FE0-MAX10EXP4", NET, NONGRANT)]
+    assert f.level == REVIEW and any("not settled" in r for r in f.reasons)
 
 
 def test_workbook_highlight_and_review_sheet(tmp_path):
@@ -116,7 +122,7 @@ def test_address_layer_conflict_flags_residential_and_only_changed_splitters():
         served = ["x"]
     tk = Takeoff([NET])
     tk.extra["ratio"][NET] = 32
-    for a, p in ((GRANT, 64), (NONGRANT, 100)):
+    for a, p in ((GRANT, 65), (NONGRANT, 100)):
         tk.add("passings", NET, a, p, "EA", "")
         tk.add("pass_res", NET, a, p, "EA", "")
         tk.add("splitter_1x32", NET, a, 2 if a == GRANT else 2, "EA", "")
@@ -126,7 +132,9 @@ def test_address_layer_conflict_flags_residential_and_only_changed_splitters():
                      "Served address 1 MAIN is on layer Address but outside every Non-Grant polygon", "", "")
     flags = assess(rules, tk, [conflict], {NET: AL()}, [])
     assert flags[("Residential Count", NET, GRANT)].level == REVIEW
-    # Grant 64 -> 65 passings: ROUNDUP(65/32) = 3 splitters instead of 2, SFP ROUNDUP(3/2) = 2 instead of 1
+    # counted by the boundary (Grant 65); by the layer the address is Non-Grant: Grant 64 -> 2 splitters instead
+    # of ROUNDUP(65/32) = 3, SFP ROUNDUP(2/2) = 1 instead of 2
+    assert "Grant would be -1" in flags[("Residential Count", NET, GRANT)].reasons[0]
     assert ("FE0-SPLIT32", NET, GRANT) in flags and ("SFP", NET, GRANT) in flags
     tk.q[("passings", NET, GRANT)].value = 40  # 41 still needs 2 splitters and 1 SFP
     flags = assess(rules, tk, [conflict], {NET: AL()}, [])

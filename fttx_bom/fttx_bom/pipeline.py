@@ -80,6 +80,7 @@ class JobResult:
     totals: dict = field(default_factory=dict)  # key -> {network: total}
     elapsed: float = 0.0
     excluded: list[tuple] = field(default_factory=list)  # (category, object, quantity, reason, point)
+    split: dict = field(default_factory=dict)  # key -> {(network, area): value} for the results summary
 
     @property
     def exit_code(self) -> int:
@@ -103,7 +104,7 @@ def project_from_filename(name: str) -> dict:
     for w in rest.split("_"):
         if w.upper() in ("FTTH", "FTTX", "BEAD", "DWG", "COMBINED") or re.match(r"^[A-Z]{2,5}-R\d{2}$", w):
             break
-        words.append(w)
+        words.append(re.sub(r"(?<=[a-z])(?=[A-Z])", " ", w))  # "MelcherDallas" -> "Melcher Dallas"
     if len(words) >= 2 and re.fullmatch(r"[A-Z]{2}", words[-1]):
         return {"number": number, "name": " ".join(words[:-1]) + ", " + words[-1]}
     return {"number": number, "name": " ".join(words)}
@@ -117,7 +118,7 @@ SUMMARY_KEYS = ["passings", "pass_res", "pass_com", "pass_mdu", "ped_max10", "pe
 def run_job(p: JobParams, log: Callable[[str], None] = print) -> JobResult:
     t0 = time.time()
     p.out.mkdir(parents=True, exist_ok=True)
-    conv = json.loads((p.conventions or CONFIG_DIR / "conventions.json").read_text())
+    conv = json.loads((p.conventions or CONFIG_DIR / "conventions.json").read_text(encoding="utf-8"))
     cfg, rules = load_rules(p.rules)
     if not p.template.exists():
         raise FileNotFoundError(f"template not found: {p.template}")
@@ -175,6 +176,10 @@ def run_job(p: JobParams, log: Callable[[str], None] = print) -> JobResult:
     res_job.excluded = list(tk.extra.get("scope", {}).get("excluded", [])) + [
         ("RF plant", h, k, w, pt) for k, h, pt, w in tk.extra.get("rf_structures", [])]
     res_job.totals = {k: {n: tk.total(k, n) for n in networks} for k in SUMMARY_KEYS if any(kk == k for kk, _n, _a in tk.q)}
+    res_job.split = {k: {(n, a): tk.get(k, n, a) for n in networks for a in ("G", "NG")}
+                     for k in sorted(set(SUMMARY_KEYS + ["route_aerial_ft", "route_miles"])
+                                     | {kk for kk, _n, _a in tk.q if re.fullmatch(r"cable_\d{3}", kk)})
+                     if any(kk == k for kk, _n, _a in tk.q)}
 
     for group in groups:
         res_job.groups.append(_write_group(p, group, tk.subset(group), drawing, cls, reports, rules, cfg, project, ref, conv,
@@ -242,7 +247,8 @@ def _write_group(p: JobParams, networks, tk, drawing, cls, reports, rules, cfg, 
             continue
         for col, (v, note) in res.rule_values.get(rule.key, {}).items():
             f = res.flags.get((rule.key, *col))
-            g.lines.append({"line": rule.key, "description": desc.get(r, ""), "network": col[0],
+            g.lines.append({"line": rule.key, "description": desc.get(r, ""), "section": res.sections.get(r, ""),
+                            "unit": rule.unit, "row": r, "network": col[0],
                             "area": "Grant" if col[1] == "G" else "Non-Grant", "value": v,
                             "confidence": f.level if f else "", "why": "; ".join(f.reasons) if f else (note or rule.basis[:160])})
     if comp is not None:

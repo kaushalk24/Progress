@@ -25,7 +25,7 @@ These are the rules the tool applies to every line of the OLM BOM template, one 
 | Section | BOM line | Standard |
 |---|---|---|
 | Footage | Total route mileage, UG and aerial footage | Fiber-drafting route length: CX1-FTG-N2 labels on the trench / strand layers inside the boundary (as the CalcFTG routine). Strand counts only where fiber is lashed to it. |
-| Footage | Total drop footage | FX_DROPS drop lines (ped edge to the address PED, rounded to the foot). Not counted in the route rows. |
+| Footage | Total drop footage | FX_DROPS drop lines (ped edge to the address PED, rounded to the foot). Non-Grant = drops of addresses inside the Non-Grant boundaries; Grant = total − Non-Grant, written in the Grant column. Not counted in the route rows. |
 | Passings | Residential, commercial, MDU | Served addresses from the address list. Grant = served addresses on the GRANTADDRESS layer (commercial / MDU: outside the Non-Grant boundaries). |
 | UG structures | Z-14 OLM ped | 1 per OLM, in Grant. |
 | UG structures | MAX10 / MAX5 peds | Count of pedestals inside the OLM boundary, split by location (on the boundary = Grant). |

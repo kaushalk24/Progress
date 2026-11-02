@@ -127,7 +127,7 @@ def test_constant_formula_detection():
 
 def test_project_from_filename():
     assert project_from_filename("b04da51e-386106_Credit_River_MN_FTTH_Combined_DWG.dwg") == {"number": "386106", "name": "Credit River, MN"}
-    assert project_from_filename("386021_MelcherDallas_BEAD_FTTH_DMI-R15_DWG.dwg") == {"number": "386021", "name": "MelcherDallas"}
+    assert project_from_filename("386021_MelcherDallas_BEAD_FTTH_DMI-R15_DWG.dwg") == {"number": "386021", "name": "Melcher Dallas"}
 
 
 def test_spans_majority_area():

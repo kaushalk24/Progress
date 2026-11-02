@@ -17,7 +17,9 @@ from pathlib import Path
 from .network import AREAS, GRANT, NONGRANT
 from .takeoff import Qty, Takeoff
 
-CONFIG = Path(__file__).resolve().parents[2] / "config" / "policies.json"
+from ..paths import policies_file
+
+CONFIG = policies_file()  # config/policies.json from a checkout; the user's profile in the packaged app
 
 
 @dataclass(frozen=True)
@@ -59,10 +61,10 @@ POLICIES = [
         "max10_nongrant": "blank-template default: every Non-Grant MAX10 (Grant 0)",
     }, engine="need_based"),
     Policy("drop_columns", "Drop footage columns", r"drop_ft_bom", "both", {
-        "both": "Design standard: Non-Grant = drops of Non-Grant addresses; Grant = total - Non-Grant",
+        "both": "Design standard (confirmed): Non-Grant = drops of addresses inside the Non-Grant boundaries; Grant = total - Non-Grant, in the Grant column",
         "nongrant_only": "Credit River BOM: Non-Grant drops only, Grant column 0",
         "total_nongrant": "Melcher-Dallas BOM: all drop footage in the Non-Grant column",
-    }, engine="nongrant_only"),
+    }),
     Policy("route_footage", "Route footage rows 6-10", r"route_(ug_ft|aerial_ft|miles)", "route_labels", {
         "route_labels": "CalcFTG: sum of CX1-FTG-N2 route labels inside the boundary",
         "cable_totals": "sum of cable design length (TOTAL) by placement",
@@ -191,7 +193,7 @@ def load_selection(path: str | Path | None = None) -> dict[str, str]:
     p = Path(path) if path else CONFIG
     if not p.exists():
         return {}
-    return json.loads(p.read_text()).get("selected", {})
+    return json.loads(p.read_text(encoding="utf-8")).get("selected", {})
 
 
 def apply(tk: Takeoff, selection: dict[str, str]) -> None:
@@ -253,7 +255,7 @@ def calibrate(tk: Takeoff, rules, ref) -> list[dict]:
 def learn(rows: list[dict], job: str, path: str | Path | None = None) -> dict:
     """Merge calibration scores into the knowledge file and re-select the best option per policy."""
     p = Path(path) if path else CONFIG
-    data = json.loads(p.read_text()) if p.exists() else {}
+    data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
     ev = data.setdefault("evidence", {})
     for r in rows:
         ev.setdefault(r["policy"], {}).setdefault(r["option"], {})[job] = {"matched": r["matched"], "cells": r["cells"], "abs_error": r["abs_error"]}
@@ -271,5 +273,5 @@ def learn(rows: list[dict], job: str, path: str | Path | None = None) -> dict:
             sel[pol.name] = max(scores)[1]
     data["_comment"] = ("Policy options learned from approved BOMs (python -m fttx_bom ... --reference BOM --learn). "
                         "'selected' is used for every new BOM; 'evidence' keeps per-job scores (cells matched / compared).")
-    p.write_text(json.dumps(data, indent=2))
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return sel

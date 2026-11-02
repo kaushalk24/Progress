@@ -11,3 +11,7 @@ dist-ssr
 *.log
 coverage
 .wrangler
+
+# FTTx BOM Tool packaging output
+fttx_bom/build/
+fttx_bom/packaging/version_info.txt

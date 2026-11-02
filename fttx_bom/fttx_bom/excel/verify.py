@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import shutil
 import subprocess
 import tempfile
 import warnings
@@ -80,7 +79,9 @@ class GridSheet:
 
 
 def recalc_with_libreoffice(src: Path, workdir: Path) -> Path | None:
-    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    from ..paths import soffice_exe
+
+    soffice = soffice_exe()
     if not soffice:
         return None
     workdir.mkdir(parents=True, exist_ok=True)

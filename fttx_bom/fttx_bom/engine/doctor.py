@@ -18,7 +18,8 @@ from pathlib import Path
 from ..extract.model import Drawing
 from .geometry import area, dist, point_polyline_distance, point_segment_distance, polyline_length
 from .network import Classifier
-from .takeoff import ON_PATH_FT, TRAY_CAPACITY, TRAYS_PER_CLOSURE, ServedIndex, Takeoff, addr_tokens, enclosure_letter, network_from_splice_name, num
+from .takeoff import (ON_PATH_FT, TRAY_CAPACITY, TRAYS_PER_CLOSURE, ServedIndex, Takeoff, addr_tokens, enclosure_letter,
+                      network_from_splice_name, num, structure_area)
 
 
 @dataclass
@@ -241,7 +242,7 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
                   and r.bb[1] - 30 <= p[1] <= r.bb[3] + 30), default=None)
         if dd is not None and dd <= 15:
             add(Issue("INFO", "Boundaries", "NEAR_GRANT_EDGE", n, f"{ins.name} {ins.handle} is {dd:.1f} ft from a Non-Grant edge "
-                      f"(counted {cls.area_of(p)})", f"{ins.name} Grant/Non-Grant split", "Confirm which side it belongs to; move the polygon edge if needed", p[0], p[1]))
+                      f"(counted {'Grant' if structure_area(cls, p, conv.get('boundary_structure_tolerance_ft', 5.0)) == 'G' else 'Non-Grant'})", f"{ins.name} Grant/Non-Grant split", "Confirm which side it belongs to; move the polygon edge if needed", p[0], p[1]))
 
     # ---------------------------------------------------------------- addresses
     addr_blocks = [i for i in d.inserts if i.name in set(conv["blocks"]["res_address"]["names"] + conv["blocks"]["com_address"]["names"])]
@@ -286,6 +287,14 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
             add(Issue("WARN", "Addresses", "SERVED_NOT_DRAWN", n, f"{len(missing)} served address(es) have no matching address block: "
                       + "; ".join(missing[:8]) + (" ..." if len(missing) > 8 else ""), "Grant counts",
                       "Add the address block or correct the street number/name (non-grant addresses are corrected in SpatialNet)"))
+        same = Counter(" ".join(addr_tokens(s.address)) for s in al.served
+                       if not re.search(r"\b(UNIT|APT|STE|SUITE|BLDG)\b|#", s.address.upper()))
+        twice = [a for a, v in same.items() if a and v > 1]
+        if twice:
+            add(Issue("WARN", "Addresses", "ADDRESS_SERVED_TWICE", n, f"{len(twice)} address(es) are served on more than one PON port: "
+                      + "; ".join(twice[:6]) + (" ..." if len(twice) > 6 else "") + " - each port counts as a passing",
+                      "Passings, splitters, SFP",
+                      "Remove the duplicate row from the address list, unless the address really has several units"))
         ports = Counter((s.pon, s.port) for s in al.served)
         dup = [k for k, v in ports.items() if v > 1]
         if dup:
@@ -364,6 +373,14 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
                   f"largest {big[1]} ({big[0]:g} ft, circled)", "UG / route footage rows 6-10",
                   "If a trench carries only RF (coax) or is not FTTH route, it should not be in the FTTH route (policy route_footage=fiber_bearing)",
                   big[2][0], big[2][1]))
+
+    # ---------------------------------------------------------------- cable spans crossing the boundary
+    for net, seg, L, other, ar in tk.extra.get("span_crossings", []):
+        where = "inside a Non-Grant polygon" if ar == "G" else "outside the Non-Grant polygons"
+        add(Issue("INFO", "Cable", "CABLE_SPAN_CROSSES_BOUNDARY", net or "", f"{seg}: a {L:,} ft span runs {other:,} ft {where} "
+                  f"but feeds a {'Grant' if ar == 'G' else 'Non-Grant'} ped - booked {'Grant' if ar == 'G' else 'Non-Grant'} "
+                  "(each span follows the ped it feeds)", "Cable Grant/Non-Grant split",
+                  "None if the route is right; otherwise check the Non-Grant polygon or the cable route"))
 
     # ---------------------------------------------------------------- closure capacity (FOSC 450 ordering guide)
     for net, _area, L, splices, name in tk.extra.get("enclosures", []):

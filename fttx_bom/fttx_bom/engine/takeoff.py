@@ -143,6 +143,41 @@ def _locate(cls: Classifier, ins: Insert, tk: Takeoff) -> tuple[str | None, str]
     return net, cls.area_of(ins.pt)
 
 
+def nongrant_depth(cls: Classifier, p: Point) -> float | None:
+    """Distance from p to the edge of the Non-Grant polygon containing it, None when p is in Grant."""
+    inside = [r for r in cls.nongrant if r.contains(p)]
+    if not inside:
+        return None if cls.area_of(p) == GRANT else float("inf")
+    return min(point_polyline_distance(p, r.poly, True) for r in inside)
+
+
+def structure_area(cls: Classifier, p: Point, tol: float = 5.0) -> str:
+    """Design standard: a structure (ped, vault, closure) on the Non-Grant boundary, i.e. less than `tol` ft
+    inside the Non-Grant edge, counts as Grant."""
+    depth = nongrant_depth(cls, p)
+    return GRANT if depth is None or depth < tol else NONGRANT
+
+
+class StructureAreas:
+    """Area of the structure at a point: the nearest ped / vault / L-box within `radius` (a splice symbol or
+    cable vertex sits beside its ped), by the boundary rule; else the point itself by the same rule."""
+
+    def __init__(self, d, conv, cls: Classifier, radius: float = 15.0):
+        self.cls, self.radius = cls, radius
+        self.tol = conv.get("boundary_structure_tolerance_ft", 5.0)
+        self.grid: dict = defaultdict(list)
+        for key in ("ped_max10", "ped_max5", "vault", "ug_lbox"):
+            for ins in _blocks(d, conv, key):
+                self.grid[(int(ins.pt[0] // 50), int(ins.pt[1] // 50))].append(ins.pt)
+
+    def area(self, p: Point) -> str:
+        gx, gy = int(p[0] // 50), int(p[1] // 50)
+        near = min((q for dx in (-1, 0, 1) for dy in (-1, 0, 1) for q in self.grid.get((gx + dx, gy + dy), [])),
+                   key=lambda q: dist(p, q), default=None)
+        at = near if near is not None and dist(p, near) <= self.radius else p
+        return structure_area(self.cls, at, self.tol)
+
+
 def resolve_report_networks(d, conv, cls: Classifier, tk: "Takeoff", reports) -> None:
     """Set each splice report's network: the splice-name pattern when it names a network in the
     drawing, else the splice point's drawing location (symbol, then report coordinates), else the
@@ -304,13 +339,11 @@ def count_blocks(d, conv, cls, tk, key, qkey=None, unit="EA"):
     tol = conv.get("boundary_structure_tolerance_ft", 5.0)
     for ins in found:
         net, area = _locate(cls, ins, tk)
-        if net and area == NONGRANT and tol > 0:
+        if net and area == NONGRANT and tol > 0 and structure_area(cls, ins.pt, tol) == GRANT:
             # a structure on the Non-Grant boundary counts as Grant (design standard)
-            edge = min((point_polyline_distance(ins.pt, r.poly, True) for r in cls.nongrant if r.contains(ins.pt)), default=1e18)
-            if edge < tol:
-                area = GRANT
-                tk.check(f"structure on Non-Grant boundary {qkey}", True, f"{ins.name} {ins.handle} is {edge:.1f} ft inside a "
-                         "Non-Grant edge - counted Grant (on the boundary)")
+            area = GRANT
+            tk.check(f"structure on Non-Grant boundary {qkey}", True, f"{ins.name} {ins.handle} is "
+                     f"{nongrant_depth(cls, ins.pt):.1f} ft inside a Non-Grant edge - counted Grant (on the boundary)")
         if net:
             tk.add(qkey, net, area, 1, unit, f"count of block {names}", [ins.handle])
 
@@ -346,10 +379,15 @@ def passings(d, conv, cls, tk: Takeoff, address_lists: dict[str, AddressList]):
     MDU units        = FMMULTIADD RESIDENTIAL_COUNT + COMMERCIAL_COUNT
     commercial       = CC (+ unused MDUC) minus MDU units carried by CC blocks
     residential      = total - commercial - MDU
-    grant residential= served FMRESADD2 blocks on the GRANTADDRESS layer
-    grant com / MDU  = served address blocks outside the Non-Grant polygons
-    non-grant        = total - grant (per category)
+    non-grant res/com= served address blocks inside the Non-Grant boundaries (one per address)
+    grant            = total - non-grant (design standard: "everything inside the Non-Grant boundary is
+                       Non-Grant, Grant = total - Non-Grant")
+    MDU              = units of the FMMULTIADD blocks by location
+    The GRANTADDRESS layer is a cross-check (deep check ADDRESS_LAYER_VS_BOUNDARY); conventions
+    `passings_area_rule: "grant_layer"` counts grant residential by that layer instead.
     """
+    rule = conv.get("passings_area_rule", "boundary")
+    tk.extra["passings_rule"] = rule
     sums = defaultdict(float)
     ev = defaultdict(list)
     # count blocks of other plant (HFC taps / pedestals, other networks' terminals) are not this design's
@@ -386,7 +424,7 @@ def passings(d, conv, cls, tk: Takeoff, address_lists: dict[str, AddressList]):
             return True  # no address list: cannot filter
         if addr_tokens(f"{number} {street}") in idx:
             return True
-        tk.check("address block not in address list", False, f"{net} {what} '{number} {street}' not served - excluded from grant count", warn=True)
+        tk.check("address block not in address list", False, f"{net} {what} '{number} {street}' is not a served address of the address list - not counted", warn=True)
         return False
 
     def ours(net, ins) -> bool:
@@ -406,17 +444,48 @@ def passings(d, conv, cls, tk: Takeoff, address_lists: dict[str, AddressList]):
         net, area = cls.network_of(ins.pt, ins.handle, strict=True), cls.area_of(ins.pt)
         if net and ours(net, ins):
             mdu[net].append((num(ins.attr("RESIDENTIAL_COUNT")) or 0, num(ins.attr("COMMERCIAL_COUNT")) or 0, area, ins.handle))
-    res_grant = defaultdict(list)
+    def counted(kind, number, street, net, ins):
+        """Served address of this design, counted once per address (duplicate blocks are drafting errors)."""
+        if not ours(net, ins):
+            return None
+        tokens = addr_tokens(f"{number} {street}")
+        idx = served.get(net)
+        if idx is not None and tokens not in idx:
+            skipped[(net, kind)] += 1
+            return None
+        return tokens
+
+    skipped: dict = defaultdict(int)
+    res_ng: dict = defaultdict(dict)  # net -> {address tokens: handle} inside the Non-Grant boundaries
+    res_grant_layer: dict = defaultdict(dict)  # served blocks on the GRANTADDRESS layer (cross-check / option)
     for ins in _blocks(d, conv, "res_address"):
-        if ins.layer == conv["grant_address_layer"]:
-            net = cls.network_of(ins.pt, f"{ins.name}:{ins.handle}", strict=True)
-            if net and ours(net, ins) and is_served(net, ins.attr("STREET_NUMBER"), ins.attr("STREET_NAME"), "grant address"):
-                res_grant[net].append(ins.handle)
-    com_grant = defaultdict(list)
+        net = cls.network_of(ins.pt, f"{ins.name}:{ins.handle}", strict=True)
+        if not net:
+            continue
+        on_layer = ins.layer == conv["grant_address_layer"]
+        if cls.area_of(ins.pt) != NONGRANT and not on_layer:
+            continue
+        # a GRANTADDRESS block that is not a served address is a design inconsistency: reported either way
+        if on_layer and not is_served(net, ins.attr("STREET_NUMBER"), ins.attr("STREET_NAME"), "grant address"):
+            continue
+        tok = counted("res", ins.attr("STREET_NUMBER"), ins.attr("STREET_NAME"), net, ins)
+        if tok is None:
+            continue
+        if cls.area_of(ins.pt) == NONGRANT:
+            res_ng[net].setdefault(tok, ins.handle)
+        if on_layer:
+            res_grant_layer[net].setdefault(tok, ins.handle)
+    com_ng: dict = defaultdict(dict)
     for ins in _blocks(d, conv, "com_address"):
-        net, area = cls.network_of(ins.pt, ins.handle, strict=True), cls.area_of(ins.pt)
-        if net and area == GRANT and ours(net, ins) and is_served(net, ins.attr("BUILDING_ADDRESS"), ins.attr("BUILDING_NAME"), "grant commercial address"):
-            com_grant[net].append(ins.handle)
+        net = cls.network_of(ins.pt, ins.handle, strict=True)
+        if not net or cls.area_of(ins.pt) != NONGRANT:
+            continue
+        tok = counted("com", ins.attr("BUILDING_ADDRESS"), ins.attr("BUILDING_NAME"), net, ins)
+        if tok is not None:
+            com_ng[net].setdefault(tok, ins.handle)
+    for (net, kind), cnt in sorted(skipped.items()):
+        tk.check(f"address blocks not served {net}", True, f"{cnt} {'residential' if kind == 'res' else 'commercial'} address "
+                 "block(s) in the drawing are not served addresses of the address list - not counted")
 
     for key in ("pass_res", "pass_com", "pass_mdu"):
         tk.ensure(key, "EA", "")
@@ -449,13 +518,23 @@ def passings(d, conv, cls, tk: Takeoff, address_lists: dict[str, AddressList]):
             why = "address list has no served rows" if al else "no address list supplied"
             tk.check(f"passings vs address list {net}", False, f"{why} - drawing count blocks used", warn=True)
         res_total = total - com_total - mdu_total
-        rg = len(res_grant[net])
-        cg = len(com_grant[net])
-        m = "address list total; HC/CC/MDUC count blocks; grant via served GRANTADDRESS blocks / outside Non-Grant polygons"
-        tk.q[("pass_res", net, GRANT)] = Qty("pass_res", net, GRANT, rg, "EA", m, res_grant[net])
-        tk.q[("pass_res", net, NONGRANT)] = Qty("pass_res", net, NONGRANT, res_total - rg, "EA", m, ev[(net, "HC")])
-        tk.q[("pass_com", net, GRANT)] = Qty("pass_com", net, GRANT, cg, "EA", m, com_grant[net])
-        tk.q[("pass_com", net, NONGRANT)] = Qty("pass_com", net, NONGRANT, com_total - cg, "EA", m, ev[(net, "CC")])
+        if rule == "grant_layer":
+            rg = len(res_grant_layer[net])
+            rn = res_total - rg
+            m_res = "address list total; Grant = served FMRESADD2 blocks on the GRANTADDRESS layer, Non-Grant = total - Grant"
+            ev_g, ev_n = list(res_grant_layer[net].values()), ev[(net, "HC")]
+        else:
+            rn = len(res_ng[net])
+            rg = res_total - rn
+            m_res = "address list total; Non-Grant = served address blocks inside the Non-Grant boundaries, Grant = total - Non-Grant"
+            ev_g, ev_n = ev[(net, "HC")], list(res_ng[net].values())
+        cn = len(com_ng[net])
+        m_com = "Non-Grant = served commercial address blocks inside the Non-Grant boundaries, Grant = total - Non-Grant"
+        tk.q[("pass_res", net, GRANT)] = Qty("pass_res", net, GRANT, rg, "EA", m_res, ev_g)
+        tk.q[("pass_res", net, NONGRANT)] = Qty("pass_res", net, NONGRANT, rn, "EA", m_res, ev_n)
+        tk.q[("pass_com", net, GRANT)] = Qty("pass_com", net, GRANT, com_total - cn, "EA", m_com, ev[(net, "CC")])
+        tk.q[("pass_com", net, NONGRANT)] = Qty("pass_com", net, NONGRANT, cn, "EA", m_com, list(com_ng[net].values()))
+        m = "FMMULTIADD RESIDENTIAL_COUNT + COMMERCIAL_COUNT by the block's location"
         tk.q[("pass_mdu", net, GRANT)] = Qty("pass_mdu", net, GRANT, mdu_grant, "EA", m, [h for *_x, a, h in mdu[net] if a == GRANT])
         tk.q[("pass_mdu", net, NONGRANT)] = Qty("pass_mdu", net, NONGRANT, mdu_total - mdu_grant, "EA", m, [h for *_x, a, h in mdu[net] if a != GRANT])
         for a in AREAS:
@@ -629,20 +708,25 @@ def _resolve_endpoint(name: str, pos: dict[str, Point]) -> Point | None:
     return None
 
 
-def _spans(path, breaks, cls, tol=3.0, mode: str = "downstream"):
+def _spans(path, breaks, cls, tol=3.0, mode: str = "downstream", feeds=None, end=None, inside_out=None):
     """Split a routed path (A end -> B end) at splice / structure points and classify each span.
 
     downstream  the area of the span's downstream end, i.e. the ped / splice it feeds: a span
-                entering a Non-Grant area is Non-Grant from its start (design standard)
+                entering a Non-Grant area is Non-Grant from its start (design standard). `feeds(p)` gives
+                the area of the structure at p (boundary rule, as the structure itself is counted);
+                `end` is the B splice position (the path's last vertex is only the nearest cable vertex)
     majority    the area holding the majority of the span's length"""
-    cuts = [0]
+    feeds = feeds or cls.area_of
+    cuts, at = [0], {}
     for i in range(1, len(path) - 1):
         p = path[i]
         for k in breaks.get((int(p[0] // 50), int(p[1] // 50)), []):
             if dist(p, k) <= tol:
                 cuts.append(i)
+                at[i] = k
                 break
     cuts.append(len(path) - 1)
+    at[len(path) - 1] = end if end is not None else path[-1]
     out = []
     for i0, i1 in zip(cuts, cuts[1:]):
         piece = path[i0 : i1 + 1]
@@ -650,7 +734,9 @@ def _spans(path, breaks, cls, tol=3.0, mode: str = "downstream"):
         if L <= 0:
             continue
         if mode == "downstream":
-            out.append((L, cls.area_of(path[i1])))
+            out.append((L, feeds(at.get(i1, path[i1]))))
+            if inside_out is not None:
+                inside_out.append(length_inside(piece, cls.nongrant))
         else:
             inside = length_inside(piece, cls.nongrant)
             out.append((L, NONGRANT if inside > L / 2 else GRANT))
@@ -667,6 +753,9 @@ def _break_points(d, conv):
     return grid
 
 
+SPAN_CROSSING_FT = 300.0  # span length lying in the other area than the ped it feeds, worth showing
+
+
 def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None, split_mode: str = "span"):
     """Cable footage per fiber count from the cable labels (fiberinfo blocks).
 
@@ -681,6 +770,7 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
     graph = CableGraph([p for p in d.polylines if p.layer in ug_layers])
     pos = _endpoint_positions(d, conv, cls, reports)
     breaks = _break_points(d, conv)
+    feeds = StructureAreas(d, conv, cls).area
     leaders = d.leaders
     netset = {n.upper(): n for n in net_names}
     known = {**{n.upper(): n for n in cls.foreign}, **netset}
@@ -746,7 +836,13 @@ def cable_footage(d, conv, cls, tk: Takeoff, net_names: list[str], reports=None,
             plen = polyline_length(path)
             seg.path_ft = plen
             seg.path = path
-            seg.spans = _spans(path, breaks, cls, mode="downstream")
+            inside: list[float] = []
+            seg.spans = _spans(path, breaks, cls, mode="downstream", feeds=feeds, end=pb, inside_out=inside)
+            for (L, ar), ins_len in zip(seg.spans, inside):
+                # a long run through the other area than the ped it feeds: booked by the standard, shown to the reviewer
+                other = ins_len if ar == GRANT else L - ins_len
+                if other >= SPAN_CROSSING_FT:
+                    tk.extra.setdefault("span_crossings", []).append((net, segname, round(L), round(other), ar))
             seg.ng_fraction_length = length_inside(path, cls.nongrant) / plen if plen else 0.0
             seg.ng_fraction_majority = sum(L for L, ar in _spans(path, breaks, cls, mode="majority") if ar == NONGRANT) / plen if plen else 0.0
             if split_mode == "span":
@@ -881,6 +977,7 @@ def enclosures(d, conv, cls, tk: Takeoff, reports: list[SpliceReport]):
     for letter in "ABCD":
         tk.ensure(f"fosc450{letter.lower()}", "EA", "splice report Enclosure Type")
         tk.ensure(f"fosc450{letter.lower()}_splices", "EA", "fusion splices in enclosure (splice report)")
+    housing = StructureAreas(d, conv, cls)
     names = defaultdict(list)
     for r in reports:
         names[r.name].append(r.path)
@@ -902,7 +999,7 @@ def enclosures(d, conv, cls, tk: Takeoff, reports: list[SpliceReport]):
             net = cls.network_of(p, f"splice {r.name}")
         if net is None and r.network in tk.networks:
             net = r.network
-        area = cls.area_of(p) if p else GRANT
+        area = housing.area(p) if p else GRANT  # the closure sits in a ped / vault: same column as its housing
         if not r.enclosure:
             tk.check("splice report enclosure", False, f"{r.name}: Enclosure Type blank", warn=True)
         if m and net:
@@ -1017,10 +1114,11 @@ def max10_upgrades(d, conv, cls, tk: Takeoff):
     cc = [(i.pt, num(i.attr("CC")) or 0) for i in _blocks(d, conv, "com_count")]
     tk.ensure("max10_upgrades", "EA", "MAX peds feeding > 4 passings: ROUNDUP((ports - 4) / 4) kits")
     tk.ensure("ped_ports_max", "EA", "largest number of passings fed by one MAX ped")
+    tol = conv.get("boundary_structure_tolerance_ft", 5.0)
     for key in ("ped_max10", "ped_max5"):
         for ins in _blocks(d, conv, key):
             ports = sum(v for p, v in hc if dist(p, ins.pt) <= 30) + sum(v for p, v in cc if dist(p, ins.pt) <= 50)
-            net, area = cls.network_of(ins.pt, ins.handle), cls.area_of(ins.pt)
+            net, area = cls.network_of(ins.pt, ins.handle), structure_area(cls, ins.pt, tol)
             if not net:
                 continue
             q = tk.q[("ped_ports_max", net, area)]
@@ -1080,7 +1178,8 @@ def drop_footage(d, conv, cls, tk: Takeoff, address_lists):
         net = cls.network_of(addr.pt, f"drop:{pl.handle}", strict=True) or cls.network_of(addr.pt, f"drop:{pl.handle}")
         if not net:
             continue
-        if addr.name in conv["blocks"]["res_address"]["names"]:
+        # the drop follows the address it serves, by the same rule as the passings
+        if addr.name in conv["blocks"]["res_address"]["names"] and conv.get("passings_area_rule", "boundary") == "grant_layer":
             area = GRANT if addr.layer == conv["grant_address_layer"] else NONGRANT
         else:
             area = cls.area_of(addr.pt)
@@ -1095,10 +1194,10 @@ def drop_footage(d, conv, cls, tk: Takeoff, address_lists):
                  warn=cnt != need)
         if cnt == 0:
             continue  # no drops drawn for this network: leave the BOM row "not computed", never 0
-        # reference convention: BOM row carries the Non-Grant drop footage only ("total - grant")
-        tk.q[("drop_ft_bom", n, GRANT)] = Qty("drop_ft_bom", n, GRANT, 0, "FT", "reference convention: grant drops not ordered on this BOM", [])
-        tk.q[("drop_ft_bom", n, NONGRANT)] = Qty("drop_ft_bom", n, NONGRANT, tk.get("drop_ft", n, NONGRANT, 0), "FT",
-                                                 "Non-Grant drop footage (reference: total - grant)", [])
+        # design standard (confirmed): Non-Grant drops in the Non-Grant column, Grant = total - Non-Grant in the Grant column
+        for a in AREAS:
+            tk.q[("drop_ft_bom", n, a)] = Qty("drop_ft_bom", n, a, tk.get("drop_ft", n, a, 0), "FT",
+                                              "FX_DROPS drop footage by the area of the served address", [])
 
 
 GROUND_HUB_MAX_FT = 250.0  # OLM block -> its hub splice point (NMK 63-132 ft, DMI 66 ft)
@@ -1178,10 +1277,12 @@ def grounding_points(d, conv, cls, tk: Takeoff):
         tk.check("ground kits: OLM hub", False, f"no splice point within {GROUND_HUB_MAX_FT:g} ft of the OLM block - "
                  "'first in line' grounds not counted", warn=True)
     rows = []
+    housing = StructureAreas(d, conv, cls)
     for nm in sorted(reasons):
-        net, area = _locate(cls, points[nm], tk)
+        net, _a = _locate(cls, points[nm], tk)
         if not net:
             continue
+        area = housing.area(points[nm].pt)
         why = sorted(reasons[nm])
         rows.append((net, area, nm, why))
         tk.add("grounding_points", net, area, 1, "EA", method, [f"{nm} ({', '.join(why)})"])

@@ -21,7 +21,7 @@ import pytest
 
 from fttx_bom.engine.network import GRANT, NONGRANT, build_classifier
 from fttx_bom.engine.rules import CONFIG_DIR
-from fttx_bom.engine.takeoff import build_takeoff
+from fttx_bom.engine.takeoff import Takeoff, build_takeoff, passings
 from fttx_bom.extract.backends import load_drawing
 from fttx_bom.inputs.address_list import read_address_lists
 from fttx_bom.inputs.splice_reports import read_splice_reports
@@ -70,10 +70,18 @@ def test_extraction_counts(nmk):
 
 # ---- passings (reference rows 13-15, all 24 cells) ----------------------------
 def test_passings_match_reference(nmk):
-    tk = nmk[2]
-    assert cols(tk, "pass_res") == [17, 210, 29, 201, 33, 176, 95, 83]
+    # design standard: Non-Grant = served addresses inside the Non-Grant boundaries, Grant = total - Non-Grant.
+    # 25 served addresses on the non-grant "Address" layer lie 150-4,600 ft outside every Non-Grant polygon,
+    # among Grant peds and cable: Grant by the boundary (listed by ADDRESS_LAYER_VS_BOUNDARY)
+    d, cls, tk = nmk
+    assert cols(tk, "pass_res") == [22, 205, 42, 188, 34, 175, 106, 72]
     assert cols(tk, "pass_com") == [0, 2, 2, 10, 0, 3, 4, 3]
     assert cols(tk, "pass_mdu") == [0, 0, 0, 4, 0, 4, 4, 0]
+    # the GRANTADDRESS-layer option reproduces the manual Credit River BOM
+    als = read_address_lists(sorted((DATA / "addr/Address List").glob("*.xlsx")))
+    tk2 = Takeoff(NETS)
+    passings(d, dict(CONV, passings_area_rule="grant_layer"), cls, tk2, als)
+    assert cols(tk2, "pass_res") == [17, 210, 29, 201, 33, 176, 95, 83]
 
 
 def test_passings_equal_address_lists(nmk):
@@ -124,9 +132,11 @@ def test_splice_trays_sme_rule(nmk):
 
 
 def test_drops_fx_drops_lines(nmk):
-    # FX_DROPS drop lines exist for R03 and R05 only; R03 Non-Grant reproduces the reference (52,678) within 0.2%
+    # FX_DROPS drop lines exist for R03 and R05 only. A drop follows the area of its address, by the Non-Grant
+    # boundary (the address-layer rule gives 52,752, the manual BOM's 52,678 within 0.2%)
     tk = nmk[2]
-    assert tk.get("drop_ft", "NMK-R03", NONGRANT) == pytest.approx(52678, rel=0.002)
+    assert tk.get("drop_ft", "NMK-R03", NONGRANT) == pytest.approx(49456, abs=1)
+    assert tk.total("drop_ft", "NMK-R03") == pytest.approx(9797 + 49456, abs=1)
     assert ("drop_ft_bom", "NMK-R02", NONGRANT) not in tk.q  # no drops drawn -> not computed, never 0
     assert any(c.name == "drops vs passings NMK-R03" and c.status == "PASS" for c in tk.checks)
 
@@ -175,7 +185,8 @@ def test_dmi_internal_consistency(dmi):
     _d, _cls, tk = dmi
     n = "DMI-R15"
     assert tk.total("passings", n) == 222
-    assert tk.get("pass_res", n, GRANT) == 67  # all GRANTADDRESS blocks served (incl. unnumbered)
+    # 2140 60TH: non-grant layer but 55 ft outside every Non-Grant polygon -> Grant by the boundary (layer rule: 67)
+    assert tk.get("pass_res", n, GRANT) == 68
     assert tk.total("pass_com", n) == 13
     assert tk.total("splitter_1x32", n) == 7 and tk.total("splitter_1x64", n) == 0  # design uses 1x32
     # design standard: per column ROUNDUP(splitters required / 2): Grant ROUNDUP(3/2) = 2, Non-Grant ROUNDUP(5/2) = 3
@@ -337,10 +348,13 @@ def test_dmi_approved_bom_reconciliation(dmi):
     ref = read_reference(path, cfg["sheet"], rules)  # sheet is named "OLM DMI-R15 BOM"
     tk = dmi[2]
     want = {"FE0-F1PLC32": "splitter_1x32", "CBV-HGIB2436": "vault",
-            "FE0-MAX10EXP4": "max10_upgrades", "CBP-MAX10DSM24": "ped_max10", "Residential Count": "pass_res"}
+            "FE0-MAX10EXP4": "max10_upgrades", "CBP-MAX10DSM24": "ped_max10"}
     for part, key in want.items():
         for a in (GRANT, NONGRANT):
             assert (ref.values[part][("DMI-R15", a)] or 0) == tk.get(key, "DMI-R15", a), (part, a)
+    # residential: the manual BOM follows the address layer (67 / 142); the boundary gives 68 / 141 (one address)
+    assert [ref.values["Residential Count"][("DMI-R15", a)] for a in (GRANT, NONGRANT)] == [67, 142]
+    assert [tk.get("pass_res", "DMI-R15", a) for a in (GRANT, NONGRANT)] == [68, 141]
 
 
 def test_dmf_design_scope_with_hfc_and_other_fiber(tmp_path_factory):

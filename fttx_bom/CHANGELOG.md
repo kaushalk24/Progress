@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.8.0 - one Grant / Non-Grant rule, Windows application, interface polish
+
+### One Grant / Non-Grant rule for every line
+Non-Grant = inside the Non-Grant boundaries; Grant = total − Non-Grant.
+
+- **Residential passings and drops** now follow the boundary, like the commercial, MDU, ped, vault and cable lines already did. They used to follow the GRANTADDRESS layer.
+  - Both manual BOMs follow the layer. Where the layer and the boundary disagree, the layer booked a home Non-Grant while the peds, cable and drop serving it were Grant.
+  - NMK has 25 such served addresses, 150–4,600 ft outside every Non-Grant polygon; DMI has 1 (2140 60TH).
+  - The disagreements stay in the design check (ADDRESS_LAYER_VS_BOUNDARY) and the residential cell is marked for review with the layer-based number.
+  - `passings_area_rule: "grant_layer"` in conventions.json restores the old count.
+- **Each address is counted once.** Duplicate address blocks no longer inflate a count.
+- **Structures on the boundary.** A structure less than 5 ft inside the Non-Grant edge counts as Grant. This now also holds for:
+  - the cable span that feeds it;
+  - the closure in it;
+  - its ground and upgrade kits;
+  - the near-edge design check, whose "counted ..." text used to ignore the rule.
+- **Drop footage:** Grant drops go in the Grant column (confirmed). Those cells are no longer marked for review.
+
+### Design check
+- **ADDRESS_SERVED_TWICE:** the same address on two PON ports. NMK-R03 has two.
+- **CABLE_SPAN_CROSSES_BOUNDARY:** a span that runs 300 ft or more through the other area than the ped it feeds, for example 1,600 ft at DMF-R04.
+
+### Windows application
+- `FTTx BOM Tool.exe` opens the application in its own window (Edge WebView2). If the window can't be created, it opens the default browser.
+- `fttx-bom.exe` is the command line, plus `--selftest` and `--version`.
+- Node.js and the DWG reader are bundled, so nothing else needs to be installed. LibreOffice is optional and found in its standard folder.
+- Settings live in `%APPDATA%\FTTx BOM Tool` and jobs in `Documents\FTTx BOM Jobs`.
+- **Build:** GitHub Actions on Windows runs the tests, builds with PyInstaller, runs the packaged self-test, and produces a per-user installer (Inno Setup, no administrator rights) and a portable zip. See `packaging/`.
+
+### Interface
+- **BOM preview:**
+  - section, unit and total columns;
+  - flagged cells coloured exactly as in the workbook;
+  - thousands separators;
+  - "Lines with a quantity / Cells to check / All lines";
+  - a search box.
+- **Network summary:** passings, peds, vaults, cable, route and drops as Grant / Non-Grant / Total.
+- **Project name and number** come from the drawing's file name in folder mode too, and "MelcherDallas" becomes "Melcher Dallas".
+- **Theme:** neutral blue.
+- **Other:** an "Open output folder" button, and severity counts on the design-check filter.
+
+### Fixes
+- **Windows text encoding.** Every text file is read and written as UTF-8. Before, a drawing with a non-ASCII character (°, ½ ...) in its text could fail or come out garbled on Windows.
+- **Flagged cells** keep the template's typeface and size.
+- **`jinja2`** is listed in requirements.txt. The app falls back to an uncoloured table without it.
+
 ## 0.7.1 - targeted confidence
 
 - **Highlighted cells are now only those whose number a finding can change.**

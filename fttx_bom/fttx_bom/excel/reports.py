@@ -97,7 +97,7 @@ def _fmt(v):
 
 def load_investigations() -> dict:
     p = CONFIG_DIR / "investigations.json"
-    return json.loads(p.read_text()) if p.exists() else {}
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
 
 def compare(rules: list[Rule], res: WriteResult, ref: Reference, tk: Takeoff) -> list[dict]:

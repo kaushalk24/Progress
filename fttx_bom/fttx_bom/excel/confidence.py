@@ -54,7 +54,7 @@ ISSUE_EFFECT = {
     "DROP_COUNT_MISMATCH": ("drops", REVIEW), "ADDRESS_NO_DROP": ("drops", REVIEW), "DROP_NOT_FROM_PED": ("drops", REVIEW),
     "CLOSURE_OVER_CAPACITY": ("trays enclosures", REVIEW), "ENCLOSURE_UNMAPPED": ("enclosures trays", REVIEW),
     "ENCLOSURE_TYPE_BLANK": ("enclosures trays", REVIEW), "MAX5_ON_LARGE_CABLE": ("peds", REVIEW),
-    "SERVED_NOT_DRAWN": ("passings", REVIEW), "TRENCH_NO_FIBER": ("route_ug", REVIEW),
+    "SERVED_NOT_DRAWN": ("passings", REVIEW), "ADDRESS_SERVED_TWICE": ("passings", REVIEW), "TRENCH_NO_FIBER": ("route_ug", REVIEW),
     "PASSINGS_NEGATIVE": ("passings", LOW), "BLOCK_NOT_DEFINED": ("peds structures", LOW),
 }
 CABLE_EFFECT = {"CABLE_TOTAL_MISMATCH": LOW, "CABLE_UNDERSIZED": REVIEW, "CABLE_ROUTE_LENGTH": REVIEW,
@@ -69,7 +69,7 @@ NOT_COMPUTED = [
     (r"cable_\d{3}", "no cable labels found"),
 ]
 # conventions whose evidence is not settled: flag the cell when the alternatives give another number
-UNSETTLED = {"drop_columns", "max10_upgrade"}
+UNSETTLED = {"max10_upgrade"}  # drop columns: confirmed (Grant drops in the Grant column)
 # unmapped symbols on these layers could be pedestal types the template writes as 0 (GOAT, ped with tap)
 PED_LAYERS = ("RTE_UGPOLES",)
 FC_RE = re.compile(r"FC(\d{3})")
@@ -126,11 +126,15 @@ def _cable_targets(issue, tk: Takeoff) -> set[tuple[str, int]]:
 
 
 def _address_side_shift(tk: Takeoff, n: str, issues) -> tuple[int, str]:
-    """Grant passings if the conflicting addresses followed the Non-Grant boundary instead of their layer."""
+    """Change of Grant passings if the conflicting addresses followed the other rule (address layer when the
+    count uses the Non-Grant boundary, and the reverse)."""
     conflict = [i for i in issues if i.code == "ADDRESS_LAYER_VS_BOUNDARY" and i.network == n]
-    shift = sum(1 if "outside every Non-Grant" in i.message else -1 for i in conflict)
-    return shift, (f"{len(conflict)} served address(es) are on a layer that disagrees with the Non-Grant boundary"
-                   if conflict else "")
+    by_layer = tk.extra.get("passings_rule", "boundary") == "grant_layer"
+    # "outside every Non-Grant polygon" on the Address layer: Grant by the boundary, Non-Grant by the layer
+    shift = sum((1 if "outside every Non-Grant" in i.message else -1) * (1 if by_layer else -1) for i in conflict)
+    other = "the Non-Grant boundary" if by_layer else "the GRANTADDRESS layer"
+    return shift, (f"{len(conflict)} served address(es) are on a layer that disagrees with the Non-Grant boundary; "
+                   f"by {other}, Grant would be {shift:+d}" if conflict else "")
 
 
 def assess(rules: list[Rule], tk: Takeoff, issues=(), address_lists=None, reports=None) -> dict[tuple[str, str, str], Flag]:
@@ -194,7 +198,7 @@ def assess(rules: list[Rule], tk: Takeoff, issues=(), address_lists=None, report
                 if groups & {"splitters", "sfp"} and not has_list and not reports:
                     flag(rule, n, a, LOW, "no address list or splice reports - split ratio and PON design not confirmed", v)
                 if shift_why and "residential" in groups:
-                    flag(rule, n, a, REVIEW, shift_why + f"; by the boundary, Grant would be {shift:+d}", v)
+                    flag(rule, n, a, REVIEW, shift_why, v)
                 if shift and groups & {"splitters", "sfp"}:
                     gp, ngp = tk.get("passings", n, GRANT, 0) or 0, tk.get("passings", n, NONGRANT, 0) or 0
                     alt = {GRANT: gp + shift, NONGRANT: ngp - shift}[a]

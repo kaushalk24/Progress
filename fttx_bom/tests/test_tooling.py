@@ -170,14 +170,28 @@ def test_batch_summary_counts_per_bom(tmp_path, monkeypatch):
 
 def test_bom_preview_keeps_each_line_with_its_description():
     # regression: a pivot over (line, description) paired every line with every description
-    from fttx_bom.views import bom_preview
+    from fttx_bom.views import SHOW, bom_preview, network_summary
 
-    lines = [{"line": k, "description": d, "network": "N1", "area": a, "value": v, "confidence": c}
-             for k, d, vals, c in (("Total Route Mileage", "", (1.5, 2.0), "REVIEW"), ("CBP-MAX10DSM24", "PEDESTAL", (7, 9), ""),
-                                   ("FE0-07264810", "GROUND WIRE KIT", (None, None), "LOW"))
-             for a, v in zip(("Grant", "Non-Grant"), vals)]
-    view = bom_preview(lines)
-    assert list(view["line"]) == ["Total Route Mileage", "CBP-MAX10DSM24", "FE0-07264810"]
-    assert list(view["description"]) == ["", "PEDESTAL", "GROUND WIRE KIT"]
-    assert list(view["Status"]) == ["● Review", "✓", "● Low confidence"]
-    assert view.loc[1, "N1 Grant"] == 7 and view.loc[1, "N1 Non-Grant"] == 9
+    lines = [{"line": k, "description": d, "section": sec, "unit": u, "network": "N1", "area": a, "value": v, "confidence": c}
+             for k, d, sec, u, vals, conf in (
+                 ("Total Route Mileage", "", "Footage and passings", "MI", (1.5, 2.0), ("REVIEW", "")),
+                 ("CBP-MAX10DSM24", "PEDESTAL", "UG Structure", "EA", (7, 9), ("", "")),
+                 ("CBP-GFP103160002874", "GOAT PED", "UG Structure", "EA", (0, 0), ("", "")),
+                 ("FE0-07264810", "GROUND WIRE KIT", "UG Structure", "EA", (None, None), ("LOW", "LOW")))
+             for (a, v), c in zip(zip(("Grant", "Non-Grant"), vals), conf)]
+    view, styler = bom_preview(lines)
+    assert list(view["Line"]) == ["Total Route Mileage", "CBP-MAX10DSM24", "CBP-GFP103160002874", "FE0-07264810"]
+    assert list(view["Description"]) == ["", "PEDESTAL", "GOAT PED", "GROUND WIRE KIT"]
+    assert list(view["Status"]) == ["● Review", "✓", "✓", "● Low confidence"]
+    assert view.loc[1, "N1 Grant"] == 7 and view.loc[1, "Total"] == 16 and view.loc[0, "Unit"] == "MI"
+    html = styler.to_html()
+    assert "#FFEB9C" in html and "#FFC7CE" in html  # the flagged cells carry the workbook colours
+    view, _ = bom_preview(lines, SHOW[0])  # lines with a quantity (and flagged lines): the all-zero GOAT row is hidden
+    assert "CBP-GFP103160002874" not in list(view["Line"]) and "FE0-07264810" in list(view["Line"])
+    view, _ = bom_preview(lines, SHOW[2], search="pedestal")
+    assert list(view["Line"]) == ["CBP-MAX10DSM24"]
+    summ = network_summary({"passings": {("N1", "G"): 5, ("N1", "NG"): 13}, "cable_024": {("N1", "G"): 100, ("N1", "NG"): 50},
+                            "cable_048": {("N1", "G"): 1000, ("N1", "NG"): 0}, "drop_ft_bom": {("N1", "G"): None, ("N1", "NG"): None}}, ["N1"])
+    rows = {r["Quantity"]: r for r in summ.to_dict("records")}
+    assert rows["Passings"]["N1 Total"] == "18" and rows["Fiber cable"]["N1 Grant"] == "1,100"
+    assert rows["Drop footage"]["N1 Total"] == ""  # not computed stays blank, never 0
