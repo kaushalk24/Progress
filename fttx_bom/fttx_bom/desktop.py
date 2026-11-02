@@ -168,6 +168,19 @@ def selftest() -> int:
         report("DXF reader", True)
     except Exception as exc:  # noqa: BLE001
         report("DXF reader", False, repr(exc))
+    try:  # the interface script itself, run in-process as a browser session would run it (imports, first page)
+        from streamlit import logger as st_logger
+        from streamlit.testing.v1 import AppTest
+
+        st_logger.set_log_level("error")
+
+        at = AppTest.from_file(str(app_script()), default_timeout=120)
+        at.run()
+        title = at.title[0].value if at.title else ""
+        report("interface page", not at.exception and title == "New BOM",
+               (str(at.exception[0].value)[:200] if at.exception else title))
+    except Exception as exc:  # noqa: BLE001
+        report("interface page", False, repr(exc)[:200])
     port = free_port()
     server = start_server(port)
     try:
@@ -196,6 +209,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if argv[:1] == ["--selftest"]:
         return selftest()
+    if argv[:1] == ["--diagnose"]:  # support: import each library in turn and print the first error in full
+        import importlib
+        import traceback
+
+        for mod in argv[1:] or ["numpy", "pandas", "pyarrow", "ezdxf", "openpyxl", "streamlit", "webview"]:
+            try:
+                importlib.import_module(mod)
+                print(f"ok    {mod}", flush=True)
+            except Exception:  # noqa: BLE001
+                print(f"FAIL  {mod}\n{traceback.format_exc()}", flush=True)
+        return 0
     if argv[:1] in (["run"], ["auto"], ["batch"]):  # the command line, from the same executable
         from .cli import main as cli_main
 

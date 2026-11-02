@@ -27,7 +27,9 @@ node = os.environ.get("NODE_EXE")
 if node:
     binaries.append((node, "node"))
 hiddenimports = collect_submodules("fttx_bom")
-for pkg in ("streamlit", "webview", "clr_loader", "pythonnet", "ezdxf", "openpyxl", "pandas", "pyarrow", "altair"):
+# numpy imports parts of itself from compiled code (numpy._core._exceptions ...), invisible to the analysis: collect all
+for pkg in ("numpy", "streamlit", "webview", "clr_loader", "pythonnet", "ezdxf", "openpyxl", "pandas", "pyarrow", "altair",
+            "jinja2"):
     try:
         d, b, h = collect_all(pkg)
     except Exception:  # optional package not installed
