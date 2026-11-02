@@ -154,7 +154,8 @@ def show_results(res, notes):
                     _legend()
                 view, styler = bom_preview(g.lines, show, search)
                 st.dataframe(styler if styler is not None else view, width="stretch", hide_index=True, height=560,
-                             column_config={"Description": st.column_config.TextColumn(width="large")})
+                             column_config={"Status": st.column_config.TextColumn(width="medium"),
+                                            "Description": st.column_config.TextColumn(width="large")})
                 st.caption(f"{len(view)} line(s). Values as written to the BOM workbook; coloured cells are explained on the "
                            "'Cells to check' tab, in the cell comments and on the workbook's 'BOM Review' sheet.")
         with tabs[1]:

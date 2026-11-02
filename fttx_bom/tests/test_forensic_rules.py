@@ -192,3 +192,16 @@ def test_closure_over_capacity_flagged():
                               (NET, GRANT, "B", 145, "N-01003")]
     hits = [i for i in run_doctor(d, CONV, FakeClassifier(), tk, {}, []) if i.code == "CLOSURE_OVER_CAPACITY"]
     assert sorted(i.message.split(":")[0] for i in hits) == ["N-01001G", "N-01003"]
+
+
+def test_address_served_twice_only_for_identical_text():
+    from fttx_bom.inputs.address_list import AddressList, ServedAddress
+
+    al = AddressList("N-R01", "x.xlsx", served=[
+        ServedAddress(1, 1, "C-2130 60TH AVE", "", "", ""), ServedAddress(1, 2, "2130 60TH AVE", "", "", ""),  # business + home
+        ServedAddress(1, 3, "211 COLUMBIA ST", "", "", ""), ServedAddress(1, 4, "211 S COLUMBIA ST", "", "", ""),
+        ServedAddress(1, 5, "9701 235TH ST W", "", "", ""), ServedAddress(1, 6, "9701 235th St W ", "", "", "")])
+    d = Drawing("t", "test")
+    tk = Takeoff(["N-R01"])
+    hits = [i for i in run_doctor(d, CONV, FakeClassifier(), tk, {"N-R01": al}, []) if i.code == "ADDRESS_SERVED_TWICE"]
+    assert len(hits) == 1 and "9701 235TH ST W" in hits[0].message and "2130" not in hits[0].message

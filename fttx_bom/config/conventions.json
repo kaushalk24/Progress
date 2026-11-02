@@ -18,6 +18,8 @@
   "nongrant_layer": "Boundary - Designed Not Built",
   "nongrant_exclude_label_regex": "15f|Transport|Fiber Service",
   "grant_address_layer": "GRANTADDRESS",
+  "_passings_comment": "passings_area_rule: 'boundary' (design standard: Non-Grant = served addresses inside the Non-Grant boundaries, Grant = total - Non-Grant) or 'grant_layer' (Grant = served addresses on the GRANTADDRESS layer). Drops follow the same rule.",
+  "passings_area_rule": "boundary",
   "blocks": {
     "ped_max10": {
       "names": [

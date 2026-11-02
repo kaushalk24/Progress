@@ -1,9 +1,30 @@
 # Progress and issues
 
-_Last updated: 2026-10-31, build 0.7.1_
+_Last updated: 2026-11-02, build 0.8.0_
 
 ## Working
 
+- **0.8.0:**
+  - **One Grant / Non-Grant rule for every line:** Non-Grant = inside the Non-Grant boundaries, Grant = total − Non-Grant. Residential passings and drops now follow it too; they used to follow the address layer.
+  - **Structures on the boundary:** the rule now covers the cable span feeding the structure, the closure in it, and its kits.
+  - **Drop footage:** Grant drops go in the Grant column (confirmed).
+  - **Windows application:** installer and portable zip, built and self-tested on Windows by GitHub Actions.
+  - **Interface polish.**
+  - **Windows text-encoding fix.**
+
+  Effect on the numbers:
+  - **DMI-R15:** Grant / Non-Grant residential goes from 67 / 142 to 68 / 141.
+  - **Credit River:** residential Grant changes as follows; network totals, peds, cable, splitters and SFP are unchanged.
+
+    | OLM | Grant residential, 0.7.1 → 0.8.0 |
+    |---|---|
+    | R02 | 17 → 22 |
+    | R03 | 29 → 42 |
+    | R04 | 33 → 34 |
+    | R05 | 95 → 106 |
+  - **NMK-R03 drops:** 3,222 ft move to Grant.
+
+  The manual BOMs follow the address layer. The differences are 25 NMK addresses and 1 DMI address on the non-grant layer, 55–4,600 ft outside every Non-Grant polygon. The plant serving them is Grant. They are listed in the design check, and the residential cells are marked for review.
 - **0.7.1:** confidence is targeted. A finding marks only the cells whose number it can change (CHANGELOG 0.7.1). No quantity changed.
 
   | BOM | Review cells, 0.7.0 → 0.7.1 |
@@ -119,10 +140,13 @@ See FORENSIC_FINDINGS.md for the line-by-line table.
 
 ## Critical unresolved issues (deliverable G), ranked by effect on BOM correctness
 
-0. **Drop-footage columns: decision needed.** The two approved BOMs disagree:
-   - Credit River puts Non-Grant drops only in the Non-Grant column.
-   - Melcher-Dallas puts the whole drop footage there.
-   - The design standard (Non-Grant inside, Grant = total − Non-Grant) gives the split. It is the new default; the other two are options.
+0. **Addresses whose layer disagrees with the boundary.**
+   - **NMK:** 25 served addresses are on the non-grant "Address" layer but outside every Non-Grant polygon; 11 of them are on Dodd in R05, 3,500–4,600 ft away.
+   - **DMI:** 2140 60TH.
+   - **How they are counted:** Grant, by the boundary rule.
+   - **Confirm:** that no Non-Grant polygon is missing around them. If one is, add the polygon in the drawing, not on the layer.
+
+   (Drop-footage columns: settled, Grant drops in the Grant column.)
 1. **Route / UG footage split (rows 6–10).**
    - Network totals follow CalcFTG.
    - The reference Grant/Non-Grant split can't be reproduced by any geometric method (FORENSIC_FINDINGS F4).

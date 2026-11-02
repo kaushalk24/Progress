@@ -287,7 +287,9 @@ def run_doctor(d: Drawing, conv: dict, cls: Classifier, tk: Takeoff, address_lis
             add(Issue("WARN", "Addresses", "SERVED_NOT_DRAWN", n, f"{len(missing)} served address(es) have no matching address block: "
                       + "; ".join(missing[:8]) + (" ..." if len(missing) > 8 else ""), "Grant counts",
                       "Add the address block or correct the street number/name (non-grant addresses are corrected in SpatialNet)"))
-        same = Counter(" ".join(addr_tokens(s.address)) for s in al.served
+        # the full address text: "C-2130 60TH AVE" (business) and "2130 60TH AVE" (home) are two passings, and so are
+        # "211 COLUMBIA ST" and "211 S COLUMBIA ST"; only the same text on two ports is suspicious
+        same = Counter(re.sub(r"\s+", " ", s.address.upper()).strip(" .") for s in al.served
                        if not re.search(r"\b(UNIT|APT|STE|SUITE|BLDG)\b|#", s.address.upper()))
         twice = [a for a, v in same.items() if a and v > 1]
         if twice:
