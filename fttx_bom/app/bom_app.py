@@ -34,7 +34,7 @@ from fttx_bom.inputs.detect import detect  # noqa: E402
 from fttx_bom.jobs import params_from_detected, run_batch  # noqa: E402
 from fttx_bom.paths import bundle_root, jobs_dir, soffice_exe  # noqa: E402
 from fttx_bom.pipeline import project_from_filename, run_job  # noqa: E402
-from fttx_bom.views import LEVEL, SHOW, bom_preview, network_summary  # noqa: E402
+from fttx_bom.views import LEVEL, SHOW, bom_preview, fmt_qty, network_summary  # noqa: E402
 
 WORK = jobs_dir()
 SYSTEMS = ["", "Coastal West", "Coastal East", "Capital West", "Capital East"]
@@ -169,7 +169,7 @@ def show_results(res, notes):
                     chk = chk[chk["confidence"] == "LOW"]
                 chk = chk.assign(_r=chk["confidence"].map({"LOW": 0, "REVIEW": 1})).sort_values(["_r", "row"] if "row" in chk else ["_r"])
                 cols = ["confidence", "line", "description", "unit", "network", "area", "value", "why"]
-                view = (chk[[c for c in cols if c in chk]].assign(confidence=chk["confidence"].map(LEVEL))
+                view = (chk[[c for c in cols if c in chk]].assign(confidence=chk["confidence"].map(LEVEL), value=chk["value"].map(fmt_qty))
                         .rename(columns={"line": "Line", "description": "Description", "unit": "Unit", "network": "Network",
                                          "area": "Area", "value": "Value", "confidence": "Confidence", "why": "Why"}))
                 try:
