@@ -369,3 +369,30 @@ Plan:
   - D trays at DMI;
   - UG footage at DMI;
   - the template's bonding formulas.
+
+## Task 4 checkpoint (0.8.0)
+
+**User decisions this round**
+- Grant drops go in the Grant column (confirmed).
+- The user will confirm MAX10 +4 and the D trays / closure capacity.
+
+**Engine**
+- One Grant / Non-Grant rule:
+  - residential passings and drops follow the Non-Grant boundary, counted once per address; Grant = total − Non-Grant;
+  - the GRANTADDRESS layer stays a cross-check, and `passings_area_rule` restores it;
+  - the structure-area rule now also covers cable spans, closures and kits.
+- New checks: ADDRESS_SERVED_TWICE (identical text only) and CABLE_SPAN_CROSSES_BOUNDARY.
+- Text I/O is explicit UTF-8.
+
+**out12 vs out11:** only the residential split changes, plus the drops at NMK-R03 and R05.
+- DMI 67/142 → 68/141.
+- NMK Grant residential: R02 17→22, R03 29→42, R04 33→34, R05 95→106.
+- DMF 2/4 → 5/1, consistent with its count blocks.
+- Flag counts are unchanged.
+
+**Windows app**
+- `fttx_bom/desktop.py`, `fttx_bom/paths.py`, `packaging/*` and `.github/workflows/fttx-bom-windows.yml`.
+- A local Linux build of the same spec found that numpy was not fully bundled; collect_all("numpy") fixed it. The self-test now renders the interface page.
+- CI run 41369536312 is green; artifact 13108248002 holds the installer and the portable zip.
+
+**Interface:** preview with section, unit, total and per-cell colours; network summary; the project taken from the drawing name; blue theme.
