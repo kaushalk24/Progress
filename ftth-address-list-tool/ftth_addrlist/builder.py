@@ -497,7 +497,8 @@ class Builder:
             fs.note = (fs.note + "; " if fs.note else "") + "segment numbering differs between reports: " + \
                 "; ".join(tr.seg_aliases[:2])
             row.issues.append(Issue("WARNING", "SEGMENT_NUMBER_MISMATCH", f"{seg.cable} fibre {f}: " +
-                                    "; ".join(tr.seg_aliases[:2]) + " - report revisions out of sync",
+                                    "; ".join(tr.seg_aliases[:2]) + " - the span is matched by both end closures; check the "
+                                    "cable's segment numbering in the spatial system",
                                     row.olm, seg.cable, f, ev))
         if tr.uses_guide:
             if fs.status == CONFIRMED:

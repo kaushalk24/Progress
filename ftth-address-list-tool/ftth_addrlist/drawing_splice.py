@@ -211,7 +211,7 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
         dm.starts = {dm.prior} if dm.prior else {dm.x0}
         dm.passed -= dm.starts
 
-    if not demands:
+    if not demands and not checks:   # nothing to locate and nothing to cross-check
         return []
     direction = d.get("fiber_order", "learn")
     learned = None

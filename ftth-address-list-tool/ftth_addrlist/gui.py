@@ -32,6 +32,10 @@ def _settings_path() -> Path:
     return Path(base) / "FTTH Address List Tool" / "settings.json"
 
 
+def default_output_folder() -> str:
+    return str(Path.home() / "Documents" / "FTTH Address Lists")
+
+
 def clean_path(text: str) -> str:
     """A path as typed or pasted: trims spaces and the quotes Windows 'Copy as path' adds."""
     return text.strip().strip('"').strip("'").strip()
@@ -166,6 +170,8 @@ class App(tk.Tk):
         # long paths: keep the end (file / folder name) in view
         self.vars[key].trace_add("write", lambda *_: ent.after_idle(lambda: ent.xview_moveto(1.0)))
         ent.bind("<Configure>", lambda _: ent.xview_moveto(1.0))
+        ent.bind("<FocusOut>", lambda _: self.vars[key].set(clean_path(self.vars[key].get()))
+                 if self.vars[key].get() != clean_path(self.vars[key].get()) else None)
         col = 2
         for text, cmd in buttons:
             ttk.Button(card, text=text, command=cmd).grid(row=r, column=col, sticky="w", padx=(0, 4))
@@ -182,7 +188,7 @@ class App(tk.Tk):
         c.columnconfigure(1, weight=1)
         ttk.Label(c, text="Inputs", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 4))
         self._ui_row(c, 1, "Splice reports folder", "reports", [("Browse…", lambda: self._ui_dir("reports"))],
-                     "Folder with the Splice Connections Reports (.xlsx). Sub-folders per OLM are fine. Include the "
+                     "Folder with the Splice Connections Reports (.xlsx or .csv, or both). Sub-folders per OLM are fine. Include the "
                      "hub report of every OLM and as many downstream closure reports as possible.", required=True)
         self._ui_row(c, 2, "Design drawing (.dwg)", "drawing",
                      [("Browse…", lambda: self._ui_file("drawing", [("Drawings", "*.dwg *.dxf"), ("All", "*.*")]))],
@@ -206,6 +212,10 @@ class App(tk.Tk):
                                   command=self.start)
         self.run_btn.pack(side="left")
         ttk.Button(bar, text="Open output folder", command=self._open_out).pack(side="left", padx=8)
+        self.clear_btn = ttk.Button(bar, text="Clear all", command=self.clear_all)
+        self.clear_btn.pack(side="left")
+        Tooltip(self.clear_btn, "Empty every input, the results and the log, ready for a new region. Files already "
+                                "written are not touched; the output folder goes back to the default.")
         self.progress = ttk.Progressbar(bar, mode="indeterminate", length=220)
         self.progress.pack(side="right")
         self.run_state = ttk.Label(bar, text="", foreground=MUTED, background=BG)
@@ -261,6 +271,26 @@ class App(tk.Tk):
         else:
             messagebox.showinfo("Output folder", "The output folder does not exist yet; it is created by the "
                                                  "first run.")
+
+    def clear_all(self):
+        """Back to a fresh start: inputs, OLM list, results, log, progress and the remembered settings."""
+        if "disabled" in self.run_btn.state():
+            messagebox.showinfo("Clear all", "Wait until the current run has finished.")
+            return
+        for k in FIELDS:
+            self.vars[k].set("")
+        self.vars["out"].set(default_output_folder())
+        self.vars["olm"].set(ALL_OLMS)
+        self.olm_box["values"] = [ALL_OLMS]
+        self.tree.delete(*self.tree.get_children())
+        self.outcomes.clear()
+        self.log.delete("1.0", "end")
+        self.progress.stop()
+        self.progress.configure(mode="determinate", value=0)
+        self.run_state.configure(text="")
+        self._save_settings()
+        self.status.configure(text="Cleared - choose the splice-report folder to start.")
+        self.tabs.select(0)
 
     def say(self, text):
         self.q.put(("log", text))
@@ -395,7 +425,7 @@ class App(tk.Tk):
             if isinstance(data.get(k), str):
                 self.vars[k].set(data[k])
         if not self.vars["out"].get():
-            self.vars["out"].set(str(Path.home() / "Documents" / "FTTH Address Lists"))
+            self.vars["out"].set(default_output_folder())
         if not self.vars["olm"].get():
             self.vars["olm"].set(ALL_OLMS)
 

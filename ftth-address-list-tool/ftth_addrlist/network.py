@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from datetime import datetime
 from dataclasses import dataclass, field
 
 from .model import (CableFiber, Connection, DevicePort, Issue, Location, SegmentInfo, SpliceReport)
@@ -100,8 +101,62 @@ class Network:
         self.olm_kinds = set(net["olm_kinds"])
         self.usage_re = re.compile(cfg["address"]["usage_regex"])
         self._by_fiber = None
+        chosen = self._choose_duplicates(reports)
         for rep in reports:
-            self._add(rep)
+            if chosen[rep.closure] is rep:
+                self._add(rep)
+
+    # ----------------------------------------------------------------- duplicates
+    @staticmethod
+    def _content(rep: SpliceReport):
+        segs = sorted((s.cable, s.seg, str(s.start), str(s.end), s.count) for s in rep.segments)
+        conns = sorted((str(c.a.endpoint), str(c.b.endpoint), c.usage or "", c.state or "", str(c.circuit_start),
+                        str(c.circuit_end)) for c in rep.connections)
+        return segs, conns
+
+    @staticmethod
+    def _exported(rep: SpliceReport):
+        v = rep.header.get("prepared_on")
+        if isinstance(v, datetime):
+            return v
+        for fmt in ("%d %b %Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%m/%d/%Y %H:%M:%S",
+                    "%d %B %Y %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M",
+                    "%Y-%m-%d %H:%M"):     # the last three: dates rewritten by Excel when a CSV is re-saved
+            try:
+                return datetime.strptime(str(v).strip(), fmt)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _choose_duplicates(self, reports: list[SpliceReport]) -> dict[str, SpliceReport]:
+        """One report per closure. The same report saved twice (e.g. as .xlsx and .csv) is used once; of two
+        different exports the newer one ('On:' date) is used; otherwise the first is kept and it is an error."""
+        chosen: dict[str, SpliceReport] = {}
+        for rep in reports:
+            prev = chosen.get(rep.closure)
+            if prev is None:
+                chosen[rep.closure] = rep
+                continue
+            names = f"{prev.path.name} and {rep.path.name}"
+            if self._content(prev) == self._content(rep):
+                self.issues.append(Issue("INFO", "DUPLICATE_REPORT", f"Closure {rep.closure} is in {names} with the "
+                                         f"same content; {prev.path.name} is used", source=rep.path.name))
+                continue
+            t_prev, t_rep = self._exported(prev), self._exported(rep)
+            if t_prev and t_rep and t_prev != t_rep:
+                newer, older = (rep, prev) if t_rep > t_prev else (prev, rep)
+                chosen[rep.closure] = newer
+                self.issues.append(Issue("WARNING", "DUPLICATE_REPORT",
+                                         f"Two different reports for closure {rep.closure}: {names}; the newer export "
+                                         f"{newer.path.name} ({self._exported(newer):%d %b %Y %H:%M}) is used, "
+                                         f"{older.path.name} ({self._exported(older):%d %b %Y %H:%M}) is ignored. "
+                                         f"Remove the outdated one.", source=newer.path.name))
+                continue
+            self.issues.append(Issue("ERROR", "DUPLICATE_REPORT",
+                                     f"Two different reports for closure {rep.closure}: {names}, export time not "
+                                     f"decisive; {prev.path.name} is used. Remove the outdated one.",
+                                     source=rep.path.name))
+        return chosen
 
     # ----------------------------------------------------------------- build
     def _add(self, rep: SpliceReport):

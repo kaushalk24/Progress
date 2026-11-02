@@ -24,7 +24,7 @@
 
 | Input | Need | Format | Required content | Purpose | Quality checks done by the tool | If absent |
 |---|---|---|---|---|---|---|
-| Hub closure Splice Connections Report (one per OLM) | **Mandatory** | `.xlsx` export (layout "Splice Connections Report") | Segment table incl. the `OLM Housing` feeder and splitter rows; connection table with Usage, State, Start/End | PON, ports, fibres, colours, cables, addresses, taps, section order | layout/columns present, splice name, splitters present, duplicate fibres, PON ports reused/unused | OLM cannot be generated (`NO_HUB`) |
+| Hub closure Splice Connections Report (one per OLM) | **Mandatory** | `.xlsx` or `.csv` export (layout "Splice Connections Report"; CSV in UTF-8 or Windows ANSI, separated by `,`, `;` or tab) | Segment table incl. the `OLM Housing` feeder and splitter rows; connection table with Usage, State, Start/End | PON, ports, fibres, colours, cables, addresses, taps, section order | layout/columns present, splice name, splitters present, duplicate fibres, PON ports reused/unused | OLM cannot be generated (`NO_HUB`) |
 | Downstream closure reports, every closure on the hub cables' paths **including the closures where taps are spliced** | **Mandatory for a final list** | same | segment tables + connections for pass-through and drop splices | Fiber Splice confirmation, circuit consistency | trace continuity, segment numbering agreement, circuit text agreement | Fiber Splice provisional/unresolved; *Reports to Request* lists what is missing |
 | Reports of closures in neighbouring OLMs that the paths cross | Conditional (when cables run through other OLM areas) | same | same | continuity across OLM boundaries | as above | more unresolved rows |
 | Template workbook | Optional | `.xlsx`, header in row 1, a styled row 2 | header text, column order, styles, widths | output layout | header matched to `template.columns` | built-in layout (identical to the reference lists) |
@@ -71,7 +71,9 @@ Before running the tool for a region, obtain:
       after design changes are complete (mixed revisions cause renamed streets, re-numbered
       segments and moved taps between hub and downstream reports).
 - [ ] System-exported reports only – no hand-made "Fiber Optic Splice Guide" sheets.
-- [ ] Report file names = splice names; one report per closure (no copies).
+- [ ] One report per closure. File names may wrap the splice name (`Splice_<closure>_V<n>.csv`).
+      The same report saved twice (e.g. as `.xlsx` and `.csv`) is used once; of two different exports
+      of one closure the newer one ("On:" date) is used and a warning names both.
 - [ ] **Design drawing** of the same revision (DWG as exported, or DXF), covering every
       OLM area: closures, tap enclosures with pigtails, cables, address points, drop symbols.
 - [ ] Recommended: run the drop routine on the drawing before exporting it (FX_DROPS:

@@ -49,17 +49,17 @@ def sha256(path: Path) -> str:
 
 
 def find_report_files(folder: Path, exclude: Path | None = None) -> list[Path]:
-    """All .xlsx under `folder`, except Excel lock files and anything inside `exclude` (the output folder,
+    """All .xlsx / .csv under `folder`, except Excel lock files and anything inside `exclude` (the output folder,
     when it lies inside the report folder)."""
     if not folder.exists():
         raise InputError(f"Splice report folder not found: {folder}")
     if folder.is_file():
         return [folder]
     skip = exclude.resolve() if exclude is not None else None
-    files = sorted(p for p in folder.rglob("*.xlsx") if not p.name.startswith("~$") and
-                   not (skip is not None and skip in p.resolve().parents))
+    files = sorted(p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in (".xlsx", ".csv") and
+                   not p.name.startswith("~$") and not (skip is not None and skip in p.resolve().parents))
     if not files:
-        raise InputError(f"No .xlsx splice reports found in {folder}")
+        raise InputError(f"No splice reports (.xlsx or .csv) found in {folder}")
     return files
 
 

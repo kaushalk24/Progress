@@ -348,3 +348,15 @@ def test_address_points_prefer_same_building_and_commercial_prefix(tmp_path):
     assert [a["xy"] for a in des.address_points("1027 BLDG 3 ELM ST")] == [(40, 900)]
     assert [a["xy"] for a in des.address_points("2130 OAK AVE")] == [(80, 900)]
     assert [a["xy"] for a in des.address_points("C-2130 OAK AVE")] == [(120, 900)]
+
+
+def test_drawn_drops_checked_even_when_nothing_to_locate(tmp_path):
+    # every row confirmed by the reports (no row left to locate): the drawn drops must still be cross-checked
+    cfg = load_config()
+    path = write_design(tmp_path / "d.dxf", drawn=[((330, -40), (300, -150))])      # drop of 100 MAIN ST -> TST-00002
+    net, res = built(build_network(tmp_path / "r"), cfg)
+    res.rows = [r for r in res.rows if r.trace_end is None or r.trace_end["stop"] == "terminal"]
+    des, _ = load_design(path, cfg)
+    summary = resolve_from_drawing([res], net, des, cfg)
+    assert summary and "1 other value(s) corroborated" in summary[0].message
+    assert "drawn drop" in row(res, CAB, 3).fields["fiber_splice"].note

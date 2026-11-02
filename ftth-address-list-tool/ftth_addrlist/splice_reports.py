@@ -12,6 +12,8 @@ Two layouts are recognised:
 
 from __future__ import annotations
 
+import csv
+import io
 import re
 from pathlib import Path
 
@@ -74,18 +76,55 @@ class NotAReport(ReportError):
 OUTPUT_SHEETS = {"Row Status", "Field Evidence", "Run Info", "Difference classes", "Field differences"}
 
 
+REPORT_SUFFIXES = (".xlsx", ".csv")
+REPORT_TITLES = ("Splice Connections Report", "Fiber Optic Splice Guide")
+
+
+def _csv_rows(path: Path) -> list[list]:
+    """Rows of a CSV export as the Excel reader returns them (empty cell -> None). The text may be UTF-8
+    (with or without BOM) or Windows ANSI (cp1252); the separator may be ',', ';' or tab (regional
+    Excel settings) - it is taken from the segment / connection table header line."""
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ReportError(f"{path.name}: cannot be read ({exc})") from exc
+    for enc in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if "\x00" in text:
+        raise ReportError(f"{path.name}: not a text CSV file (save the report as CSV or .xlsx)")
+    if not text.strip():
+        raise ReportError(f"{path.name}: the file is empty - export the report again")
+    lines = text.splitlines()
+    sample = next((ln for ln in lines if ln.lstrip('"').startswith("Segment")), lines[0] if lines else "")
+    delim = max((",", ";", "\t"), key=sample.count)
+    return [[(c if c.strip() else None) for c in r] for r in csv.reader(io.StringIO(text), delimiter=delim)]
+
+
 def read_report(path: str | Path, cfg: dict) -> SpliceReport:
     path = Path(path)
-    try:
-        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    except Exception as exc:  # corrupt / not xlsx
-        raise ReportError(f"{path.name}: cannot be opened as an Excel workbook ({exc})") from exc
-    try:
-        sheets = set(wb.sheetnames)
-        ws = wb.worksheets[0]
-        rows = [list(r) for r in ws.iter_rows(values_only=True)]
-    finally:
-        wb.close()
+    sheets: set = set()
+    if path.suffix.lower() == ".csv":
+        rows = _csv_rows(path)
+        first = [str(_clean(v) or "") for v in (rows[0] if rows else [])]
+        if not any(c in REPORT_TITLES for c in first) and not any(
+                r and _clean(r[0]) == "Segment" and any(_clean(v) == "Usage" for v in r) for r in rows[:60]):
+            # another CSV kept in the folder (worklists, exceptions, notes): not a splice report
+            raise NotAReport(f"{path.name}: a CSV file that is not a splice report - skipped")
+    else:
+        try:
+            wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+        except Exception as exc:  # corrupt / not xlsx
+            raise ReportError(f"{path.name}: cannot be opened as an Excel workbook ({exc})") from exc
+        try:
+            sheets = set(wb.sheetnames)
+            ws = wb.worksheets[0]
+            rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        finally:
+            wb.close()
     first = [str(_clean(v) or "") for v in (rows[0] if rows else [])]
     head = {str(_clean(v) or "").upper() for r in rows[:3] for v in r}
     if sheets & OUTPUT_SHEETS or {"PON NAME", "FIBER #"} <= head:
@@ -143,7 +182,7 @@ def _read_connections_report(path: Path, rows: list[list], cfg: dict) -> SpliceR
         issues.append(Issue("WARNING", "NO_SPLICE_NAME",
                             f"'Splice name' missing; closure name taken from file name {closure!r}",
                             source=path.name))
-    elif closure != path.stem:
+    elif closure != path.stem and closure not in path.stem:
         issues.append(Issue("INFO", "FILE_NAME_DIFFERS",
                             f"File name {path.stem!r} differs from splice name {closure!r}", source=path.name))
     if conn_hdr is None:

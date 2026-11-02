@@ -319,3 +319,81 @@ def test_output_file_names_are_valid_on_windows(net_dir, tmp_path):
     assert safe_filename('12/34: A<B>?_TST-R01_FTTH_Address List.xlsx') == "12-34- A-B--_TST-R01_FTTH_Address List.xlsx"
     oc = run(net_dir, tmp_path / "out", prefix="12/34: X", log=lambda *_: None)[0]
     assert oc.workbook.parent == tmp_path / "out" and ":" not in oc.workbook.name and "/" not in oc.workbook.name
+
+
+# ------------------------------------------------------------------ CSV reports
+def _as_csv(xlsx, dst, delimiter=",", encoding="utf-8", drop_blank=True):
+    import csv as _csv
+    ws = openpyxl.load_workbook(xlsx).worksheets[0]
+    with open(dst, "w", newline="", encoding=encoding) as fh:
+        w = _csv.writer(fh, delimiter=delimiter)
+        for r in ws.iter_rows(values_only=True):
+            if drop_blank and all(v is None for v in r):
+                continue
+            w.writerow(["" if v is None else v for v in r])
+    return dst
+
+
+def _snapshot(folder):
+    res, issues = build(folder)
+    return ({(r.cable, r.fiber): tuple((k, str(v.value), v.status, v.code) for k, v in sorted(r.fields.items()))
+             for r in res.rows}, sorted(i.code for i in issues if i.code != "FILE_NAME_DIFFERS"))
+
+
+@pytest.mark.parametrize("delimiter,encoding", [(",", "utf-8"), (";", "cp1252"), ("\t", "utf-8-sig")])
+def test_csv_reports_give_the_same_result_as_xlsx(net_dir, tmp_path, delimiter, encoding):
+    csv_dir = tmp_path / "csv"
+    csv_dir.mkdir()
+    for f in sorted(net_dir.glob("*.xlsx")):
+        _as_csv(f, csv_dir / f"Splice_{f.stem}_V123.csv", delimiter, encoding)
+    rows_x, issues_x = _snapshot(net_dir)
+    reps, _ = load_reports(sorted(csv_dir.glob("*.csv")), load_config())
+    assert {r.closure for r in reps} == {HUB, "TST-00002", "TST-00004"}
+    oc = run(csv_dir, tmp_path / "out", log=lambda *_: None)[0]
+    assert oc.workbook is not None and oc.errors == 0
+    res = Builder(Network(reps, load_config()), load_config()).build(OLM)
+    rows_c = {(r.cable, r.fiber): tuple((k, str(v.value), v.status, v.code) for k, v in sorted(r.fields.items()))
+              for r in res.rows}
+    assert rows_c == rows_x
+
+
+def test_other_csv_files_are_ignored_and_empty_ones_reported(net_dir):
+    (net_dir / "notes.csv").write_text("closure,comment\nTST-00002,checked\n", encoding="utf-8")
+    (net_dir / "Splice_TST-00009_V1.csv").write_bytes(b"")
+    res, issues = build_any(net_dir)
+    codes = {(i.code, i.severity) for i in issues}
+    assert ("NOT_A_SPLICE_REPORT", "INFO") in codes and ("REPORT_UNREADABLE", "ERROR") in codes
+    assert row(res, CAB, 3).value("fiber_splice") == "TST-00002"
+
+
+def test_same_report_as_xlsx_and_csv_is_used_once(net_dir):
+    _as_csv(net_dir / "TST-00002.xlsx", net_dir / "TST-00002.csv")
+    res, issues = build_any(net_dir)
+    dup = [i for i in issues if i.code == "DUPLICATE_REPORT"]
+    assert dup and dup[0].severity == "INFO" and not res.errors
+
+
+def test_newer_of_two_different_exports_is_used(net_dir, tmp_path):
+    older = tmp_path / "old"
+    build_network(older, tst4_extra=[{"a": cable_side(f"{CAB}: Seg3", 6), "b": cable_side(f"{CAB}: Seg4", 6),
+                                      "usage": usage(400)}])
+    shutil.copy(older / "TST-00004.xlsx", net_dir / "TST-00004 old.xlsx")
+    wb = openpyxl.load_workbook(net_dir / "TST-00004 old.xlsx")
+    wb.active["B4"] = "2026-01-01 08:00:00"            # exported earlier than the current one
+    wb.save(net_dir / "TST-00004 old.xlsx")
+    res, issues = build_any(net_dir)
+    dup = [i for i in issues if i.code == "DUPLICATE_REPORT"]
+    assert dup and dup[0].severity == "WARNING" and "TST-00004.xlsx" in dup[0].message.split("is used")[0]
+    assert row(res, CAB, 6).status == UNRESOLVED                    # data of the newer export
+    wb.active["B4"] = "2026-05-07 10:00:00"            # same export time: not decidable -> error, as before
+    wb.save(net_dir / "TST-00004 old.xlsx")
+    _, issues = build_any(net_dir)
+    assert any(i.code == "DUPLICATE_REPORT" and i.severity == "ERROR" for i in issues)
+
+
+def build_any(folder):
+    from ftth_addrlist.pipeline import find_report_files
+    cfg = load_config()
+    reps, issues = load_reports(find_report_files(folder), cfg)
+    net = Network(reps, cfg)
+    return Builder(net, cfg).build(OLM), issues + net.issues

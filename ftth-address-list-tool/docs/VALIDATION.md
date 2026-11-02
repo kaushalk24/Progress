@@ -74,6 +74,15 @@ user); nothing else in the drawing changed. Results:
   correctly). The most specific address point is now used; every one of the 222 premises of
   the list then has exactly its own drawn drop, and all 222 agree with the tool and the list.
 
+### CSV reports
+
+The spatial system also exports the Splice Connections Report as CSV (same layout, no blank rows).
+Every report of regions A and B was converted to CSV (comma / UTF-8 and semicolon / Windows ANSI)
+and run again: all 1,700 rows, statuses, rule codes and issues are identical to the `.xlsx` run.
+A third region delivered as 264 CSV reports with a DWG with drawn drops (1 OLM, 364 rows) ran with
+0 errors; every one of its 244 drawn drops agrees with the Fiber Splice the tool took from the
+reports (no completed list was supplied for that region).
+
 ## Region A: coverage and accuracy (4 OLMs, 1,384 rows)
 
 Row matching on OLM + cable + fibre: **1,384 / 1,384 rows matched both ways**, no
