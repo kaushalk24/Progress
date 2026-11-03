@@ -1,4 +1,4 @@
-## FiberCallout Studio 2.7.0 (Windows x64)
+## FiberCallout Studio 2.7.1 (Windows x64)
 
 Single-file desktop app that generates the magenta **DES_FIBER_SPL** fiber-number and BFO callouts of an FTTx design
 from its splice reports and address lists.
@@ -7,6 +7,10 @@ from its splice reports and address lists.
 else. The exe isn't code-signed, so if Windows SmartScreen appears, click *More info -> Run anyway*.
 
 **Check the installation:** *Help -> Run self-test* (or `FiberCalloutStudio.exe --selftest`).
+
+What's new in 2.7.1
+- MDU cables: a cable larger than 12F (e.g. a 24F to an MDU) is always treated as a cable, even when the splice
+  report calls it a pigtail. It gets its BFO callout, and the MDU's fiber number is drawn at the end of the cable.
 
 What's new in 2.7 (regions with a splice report for every splice)
 - **Drop-closure check.** When the address list puts a terminal at a different splice case than the one whose

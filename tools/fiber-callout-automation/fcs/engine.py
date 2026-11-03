@@ -2172,6 +2172,8 @@ class CalloutPlanner:
 
     def is_tail(self, closure: str, sg: ReportSegment, closure_names: Set[str]) -> bool:
         """Pigtails / terminal tails are not cable segments of the network."""
+        if sg.count is not None and sg.count > TAIL_MAX_FIBERS:
+            return False                    # e.g. a 24F cable to an MDU is a cable, whatever kind the report gives it
         if TAIL_KIND_RE.search(sg.kind or ""):
             return True
         if sg.count is not None and sg.count <= DROP_MAX_FIBERS:

@@ -190,6 +190,8 @@ def test_junction_rule() -> None:
     check("same cable drawn backwards (seg 7 in, seg 6 out)", role([same96_in, backwards, pig]) == (False, [False]))
     drop4 = S("A-2 TO A-4 FC004", 1, 4, "Underground", "A-2", "A-4", "out")
     check("4F to another closure is a drop, not a cable", role([trunk_in, trunk_out, drop4]) == (False, [False]))
+    mdu24 = S("A-2 TO MDU 10 MAIN ST FC024", 1, 24, "Pigtail", "A-2", "MDU 10 MAIN ST", "out")
+    check("24F MDU cable called 'Pigtail' is still a cable (junction)", role([trunk_in, trunk_out, mdu24])[0])
     check("same cable, FC0144 vs FC144 spelling", pl.cable_id("A TO B FC0144") == pl.cable_id("A TO B FC144"))
     check("junction: feed not listed, 2 cables out", role([trunk_out, branch])[0])
     dup = role([trunk_in, trunk_out, trunk_out, pig])
