@@ -122,18 +122,27 @@ def test_junction_rule() -> None:
     new72 = S("A-2 TO A-3 FC072", 1, 72, "Underground", "A-2", "A-3", "out")       # a new 72F cable starts here
     new96 = S("A-2 TO A-3 FC096", 1, 96, "Underground", "A-2", "A-3", "out")       # new cable, same fiber count
 
+    pl.labels = {}
+
     def role(segs):
         reps = rep("A-2", segs)
         dirs = {(x.cable, x.seg): x.direction for x in segs}
-        junction, in_ids, _d = pl.closure_role("A-2", reps, closures, dirs)
+        junction, ins, in_ids, _d = pl.closure_role("A-2", reps, closures, dirs)
         outs = [x for x in segs if x.direction == "out" and not pl.is_tail("A-2", x, closures)]
-        return junction, [pl.cable_id(x.cable) not in in_ids for x in outs] if in_ids else []
+        return junction, [pl.is_new_cable(x, ins, in_ids) for x in outs] if in_ids else []
     check("junction: cable branches (3 segments)", role([trunk_in, trunk_out, branch, pig])[0])
     check("junction: 24F cable to a terminal counts", role([trunk_in, trunk_out, tap24])[0])
     check("pass-through: pigtail does not count", role([trunk_in, trunk_out, pig]) == (False, [False]))
     check("pass-through: 12F terminal tail does not count", role([trunk_in, trunk_out, tail12]) == (False, [False]))
     check("cable change: 96F ends, 72F starts -> BFO on the 72F", role([end96, new72, pig]) == (False, [True]))
-    check("cable change: different cable, same fiber count", role([end96, new96, pig]) == (False, [True]))
+    check("cable change: different cable, same fiber count (96F -> 96F)", role([end96, new96, pig]) == (False, [True]))
+    same96_in = S("A-1 TO A-9 FC096", 7, 96, "Underground", "A-1", "A-2", "in")
+    reused = S("A-1 TO A-9 FC096", 1, 96, "Underground", "A-2", "A-3", "out")
+    backwards = S("A-1 TO A-9 FC096", 6, 96, "Underground", "A-2", "A-3", "out")
+    check("cable change: name reused by a new cable (seg 7 in, seg 1 out)", role([same96_in, reused, pig]) == (False, [True]))
+    check("same cable drawn backwards (seg 7 in, seg 6 out)", role([same96_in, backwards, pig]) == (False, [False]))
+    drop4 = S("A-2 TO A-4 FC004", 1, 4, "Underground", "A-2", "A-4", "out")
+    check("4F to another closure is a drop, not a cable", role([trunk_in, trunk_out, drop4]) == (False, [False]))
     check("same cable, FC0144 vs FC144 spelling", pl.cable_id("A TO B FC0144") == pl.cable_id("A TO B FC144"))
     check("junction: feed not listed, 2 cables out", role([trunk_out, branch])[0])
     dup = role([trunk_in, trunk_out, trunk_out, pig])
@@ -155,19 +164,43 @@ def test_junction_rule() -> None:
     def conn(a, b, tap):
         return E.ReportConn(a_seg=a, b_seg=b, usage=f"{tap}:1 X", state="Return", tap=tap, address="X", port_idx=1)
     rows = [conn(k96, k48, "T1"), conn(k96, k48, "T2"), conn(k72, k96, "T3")]
-    dirs, by_flow = pl.flow_directions("A-2", rep("A-2", [f72, f96, f48], rows))
-    check("fiber flow corrects backwards segments", by_flow and dirs == {k72: "out", k96: "in", k48: "out"}, str(dirs))
-    dirs, by_flow = pl.flow_directions("A-2", rep("A-2", [f72, f96], [conn(k72, k96, "T1")]))
-    check("fiber flow: 2-segment tie keeps the report", not by_flow and dirs[k72] == "in", str(dirs))
-    dirs, by_flow = pl.flow_directions("A-2", rep("A-2", [f72, f96, f48], rows, splitters=[32]))
-    check("fiber flow: splitter hub keeps the report", not by_flow)
+    pl.m = NS(closures={c: None for c in closures})
+    pl.reports = []
+    dirs, src = pl.flow_directions("A-2", rep("A-2", [f72, f96, f48], rows))
+    check("fiber flow corrects backwards segments", src == "fiber flow" and dirs == {k72: "out", k96: "in", k48: "out"},
+          str(dirs))
+    dirs, src = pl.flow_directions("A-2", rep("A-2", [f72, f96], [conn(k72, k96, "T1")]))
+    check("fiber flow: 2-segment tie keeps the report", src == "splice report" and dirs[k72] == "in", str(dirs))
+    dirs, src = pl.flow_directions("A-2", rep("A-2", [f72, f96, f48], rows, splitters=[32]))
+    check("fiber flow: splitter hub keeps the report", src == "splice report")
     hub_rows = [E.ReportConn(a_seg=None, b_seg=k72, usage="T1:1 X", state="Return", tap="T1", address="X", port_idx=1)]
-    dirs, by_flow = pl.flow_directions("A-2", rep("A-2", [f72, f96], hub_rows, splitters=[32]))
-    check("fiber flow: hub cable fed by a splitter port is outgoing", by_flow and dirs[k72] == "out", str(dirs))
+    dirs, src = pl.flow_directions("A-2", rep("A-2", [f72, f96], hub_rows, splitters=[32]))
+    check("fiber flow: hub cable fed by a splitter port is outgoing", src == "splitter hub" and dirs[k72] == "out", str(dirs))
     pl._upstream = {"A-2": {("R1", 1): k96, ("R2", 5): k72}}
-    dirs, by_flow = pl.flow_directions("A-2", rep("A-2", [f72, f96, f48], rows))
-    check("fiber flow: merge closure with two feeds", by_flow and dirs == {k72: "in", k96: "in", k48: "out"}, str(dirs))
+    dirs, src = pl.flow_directions("A-2", rep("A-2", [f72, f96, f48], rows))
+    check("fiber flow: merge closure with two feeds", src == "fiber flow" and dirs == {k72: "in", k96: "in", k48: "out"},
+          str(dirs))
     pl._upstream = {}
+    # 96F ends here and a new 96F starts, both listed 'out' (incoming drawn backwards), 1:1 splices only
+    in_bw = S("A-1 TO A-2 FC096", 5, 96, "Underground", "A-2", "A-1", "out")
+    out_new = S("A-2 TO A-3 FC096", 1, 96, "Underground", "A-2", "A-3", "out")
+    tie = [conn((in_bw.cable, 5), (out_new.cable, 1), "T1")]
+    dirs, src = pl.flow_directions("A-2", rep("A-2", [in_bw, out_new], tie))
+    check("cable names decide when fiber flow cannot", src == "cable names"
+          and dirs == {(in_bw.cable, 5): "in", (out_new.cable, 1): "out"}, f"{src} {dirs}")
+
+
+def test_drawing_cable_labels() -> None:
+    from ezdxf.math import Vec2
+    lab = E.GeoInsert("1A", "Fiber Cable - Underground", "fiberinfo", Vec2(0, 0),
+                      {"TTL": "96", "SEGNUM": "DMI-15001G TO DMI-15050 FC096", "TOTAL": "5732"}, [], (0, 0, 0, 0))
+    txt = E.GeoText("2B", "ANNO", "MTEXT", "DMI-15050 TO DMI-15080 FC096\\P96F UG", Vec2(5, 5), Vec2(5, 5), (0, 0, 0, 0), 4.0)
+    src = E.NetworkSource("dxf", "x", "AC1032", None, [], [lab], [], [txt])
+    labels = E.drawing_cable_labels(src)
+    check("drawing cable labels (block attribute + MText)",
+          set(labels) == {"DMI-15001G TO DMI-15050 FC96", "DMI-15050 TO DMI-15080 FC96"}
+          and labels["DMI-15001G TO DMI-15050 FC96"][0].count == 96, str(labels))
+    check("cable name ends", E.cable_ends("DMI-15001G TO DMI-15050 FC096") == ("DMI-15001G", "DMI-15050"))
 
 
 def test_text_tables() -> None:
@@ -263,7 +296,7 @@ def test_output_folder_error() -> None:
 
 def main() -> int:
     for fn in (test_numbering_helpers, test_callout_text_rules, test_address_rules, test_header_mapping,
-               test_splitter_detection, test_report_parsers, test_decorated_segment_ends, test_junction_rule, test_text_tables, test_units, test_input_signature, test_output_folder_error):
+               test_splitter_detection, test_report_parsers, test_decorated_segment_ends, test_junction_rule, test_drawing_cable_labels, test_text_tables, test_units, test_input_signature, test_output_folder_error):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001

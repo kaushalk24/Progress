@@ -53,14 +53,17 @@ class Region:
         for i, n in enumerate(F2[1:], start=1):
             self.pos[n] = (x0 - 450.0 * i, y0 + 30.0 * i)
         self.cables = [
-            (f"{self.hub} TO {F1[-1]} FC144", 144, F1, "MAPLE AVE"),
+            # the 144F trunk is two cables of the same size: one ends at WBK-07005, another 144F starts there
+            (f"{self.hub} TO {F1[4]} FC144", 144, F1[:5], "MAPLE AVE"),
             (f"{B1[0]} TO {B1[-1]} FC048", 48, B1, "OAK ST"),
             (f"{B2[0]} TO {B2[-1]} FC024", 24, B2, "PINE RD"),
             # cable change at WBK-07023: the 96F ends there and a new 72F cable starts (2 cable segments only)
             (f"{self.hub} TO {F2[3]} FC096", 96, F2[:4], "CEDAR LN"),
             (f"{F2[3]} TO {F2[-1]} FC072", 72, F2[3:], "CEDAR LN"),
+            (f"{F1[4]} TO {F1[-1]} FC144", 144, F1[4:], "MAPLE AVE"),
         ]
-        self.cable_change_closure = F2[3]
+        self.cable_change_closures = {F1[4], F2[3]}
+        self.unlabelled_cable = f"{B2[0]} TO {B2[-1]} FC024"
         # the 48F branch leaving junction WBK-07003 is digitized backwards (Start/End Splice swapped)
         self.reversed_segments = {(f"{B1[0]} TO {B1[-1]} FC048", 1)}
         # tree: child closure -> (parent, cable, seg)
@@ -178,6 +181,10 @@ def _write_drawing(reg: Region, path: Path) -> Dict[str, Any]:
     hh.add_lwpolyline([(-5, -7), (5, -7), (5, 7), (-5, 7)], close=True)
     hh.add_line((-5, -7), (5, 7))
     hh.add_attdef("HH_ID", (0, 0), dxfattribs={"height": 1.0})
+    tag = doc.blocks.new("CBL_INFO")                        # cable label table (name + fiber count)
+    tag.add_lwpolyline([(0, 0), (60, 0), (60, -18), (0, -18)], close=True)
+    for i, t in enumerate(("CABLE_ID", "FIBERS", "PLACEMENT")):
+        tag.add_attdef(t, (2, -5 - 5 * i), dxfattribs={"height": 3.0})
     term = doc.blocks.new("TERM_MST")
     term.add_circle((0, 0), 2.5)
     addr = doc.blocks.new("ADDR_PT")
@@ -225,6 +232,14 @@ def _write_drawing(reg: Region, path: Path) -> Dict[str, Any]:
                          dxfattribs={"layer": "ANNO_TEXT", "insert": (mid[0] + 8, mid[1] + 8)})
         if ci != 1:
             msp.add_lwpolyline(pts, dxfattribs={"layer": "FO_CABLE_AER" if ci == 3 else "FO_CABLE_UG"})
+        lx, ly = (reg.pos[route[0]][0] + reg.pos[route[1]][0]) / 2, (reg.pos[route[0]][1] + reg.pos[route[1]][1]) / 2 + 90
+        if name == reg.unlabelled_cable:
+            pass
+        elif ci == 4:                       # one cable labelled with plain MText
+            msp.add_mtext(f"{name}\\P{_fc}F UG", dxfattribs={"layer": "ANNO_TEXT", "insert": (lx, ly), "char_height": 3.0})
+        else:
+            msp.add_blockref("CBL_INFO", (lx, ly), dxfattribs={"layer": "FO_CABLE_UG"}).add_auto_attribs(
+                {"CABLE_ID": name, "FIBERS": str(_fc), "PLACEMENT": "UG"})
         a, b = reg.pos[route[0]], reg.pos[route[-1]]
         msp.add_lwpolyline([(a[0], a[1] - 40), (b[0], b[1] - 40)], dxfattribs={"layer": "ROADS"})
         msp.add_text(street, height=8.0, dxfattribs={"layer": "ROADS", "insert": ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 - 55)})
@@ -482,6 +497,18 @@ def run_selftest(verbose: bool = True, workdir: Optional[str] = None,
         layer = doc.layers.get("DES_FIBER_SPL")
         checks.append(("layer DES_FIBER_SPL = ACI 6 / Continuous", layer.dxf.color == 6 and layer.dxf.linetype.upper() == "CONTINUOUS", ""))
         checks.append(("output DXF passes audit", len(doc.audit().errors) == 0, ""))
+        roles = {r["Closure"]: r["Role"] for r in res.closures}
+        want = {reg.hub: "Splitter hub", _c(7002): "Same cable continues", _c(7003): "Junction",
+                _c(7005): "Cable change", _c(7006): "Junction", _c(7011): "Same cable continues",
+                _c(7023): "Cable change", _c(7021): "Same cable continues"}
+        wrong = {k: (roles.get(k), v) for k, v in want.items() if roles.get(k) != v}
+        checks.append(("closure roles: junctions, cable changes (incl. 144F -> another 144F), same cable continuing",
+                       not wrong, f"(got, expected) {wrong}"))
+        row6 = next((r for r in res.closures if r["Closure"] == _c(7006)), {})
+        labelled_ok = (res.summary.get("Cable labels in drawing") == len(reg.cables) - 1
+                       and reg.unlabelled_cable.replace("FC024", "FC24") in row6.get("Cables not labelled in drawing", ""))
+        checks.append(("cable name labels read from the drawing (block attributes + MText)", labelled_ok,
+                       f"{res.summary.get('Cable labels in drawing')} labels; 07006: {row6.get('Cables not labelled in drawing')}"))
         checks.append(("callouts DXF has the design's units (pastes without scaling)",
                        doc.header.get("$INSUNITS") == 2, f"$INSUNITS={doc.header.get('$INSUNITS')}"))
         errs = [i for i in res.issues.items if i.severity == "ERROR"]

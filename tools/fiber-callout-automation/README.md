@@ -32,7 +32,7 @@ drawing units from the files on every run, so there is nothing to configure.
 | Callout | Rule (reverse-engineered, see [docs/PHASE1_REVERSE_ENGINEERING.md](docs/PHASE1_REVERSE_ENGINEERING.md)) | Example |
 |---|---|---|
 | Fiber number | `N = (PON - 1) x splitter size + PON PORT` per OLM. One callout per terminal + drop closure (per contiguous run), with the arrow on the handhole that hosts the drop closure. | `69`, `218-219` |
-| BFO (cable) | `BFO <segment fiber count>` / `<lowest>-<highest> N` of the live (not broken or spare) fibers on a cable segment leaving a closure that has a splice report. It's drafted in two cases: at a **junction** (3 or more cable segments meet; pigtails and terminal tails don't count), on every outgoing cable with live fibers; and at a **cable change** (for example 96F in, a different 48F or 72F cable out), on the new cable, even with only 2 cable segments. A pass-through closure where the same cable continues gets none. In and out follow the **fiber flow**, traced through the splice reports from the splitter port to the drop, so cables digitized backwards are labelled on the right side. The arrow sits on the cable near the closure. | `BFO 72` / `70-115` |
+| BFO (cable) | `BFO <segment fiber count>` / `<lowest>-<highest> N` of the live (not broken or spare) fibers on a cable segment leaving a closure that has a splice report. It's drafted in two cases: at a **junction** (3 or more cable segments meet; pigtails and terminal tails don't count), on every outgoing cable with live fibers; and at a **cable change** (a different cable leaves than the one that arrives, whatever the sizes: 96F in, 72F out, or 96F in and another 96F cable out), on the new cable, even with only 2 cable segments. 4F and smaller segments (pigtails, drops) never count as cables. A pass-through closure where the same cable continues gets none. Cables are identified by their names in the splice reports (`A TO B FCnnn`, `Segment k of ...`): the same name with consecutive segment numbers continues, a different name (or the same name restarting at segment 1) is a new cable. The drawing's cable labels (e.g. block `fiberinfo` with SEGNUM / TTL) are read too. They supply a missing fiber count, flag a count that disagrees with the report, and identify the incoming cable when no report lists it. The **Closures** tab and QA sheet show, for every closure, its role, incoming and outgoing cables and the BFO callouts drafted there. In and out follow the **fiber flow**, traced through the splice reports from the splitter port to the drop, so cables digitized backwards are labelled on the right side. The arrow sits on the cable near the closure. | `BFO 72` / `70-115` |
 
 Entity properties match the reference:
 
@@ -93,8 +93,9 @@ options:
   * both splice-report layouts
   * a closure named only by a text label, and one located only from splice-report coordinates
   * commercial `C-` usages, a non-contiguous terminal and a closure typo
-  * pass-through closures (no BFO), a junction formed by a 24F cable to a terminal (BFO), a cable change (96F in,
-    72F out: BFO on the 72F) and a backwards-digitized branch (BFO on the right side)
+  * pass-through closures (no BFO), a junction formed by a 24F cable to a terminal (BFO), cable changes (96F in,
+    72F out; and a 144F cable ending where another 144F cable starts: BFO on the new cable), a backwards-digitized
+    branch (BFO on the right side) and cable-name labels in the drawing (block attributes and MText)
   * a CSV address list next to the workbook version
 * **Input formats**: the Credit River splice reports and address lists converted to `.csv`, `.xls`, semicolon /
   Windows-1252 CSV with comma decimals, UTF-16 tab-delimited `.txt` and Excel's `sep=` CSV all give callouts and

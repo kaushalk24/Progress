@@ -1,4 +1,4 @@
-## FiberCallout Studio 2.3.0 (Windows x64)
+## FiberCallout Studio 2.4.0 (Windows x64)
 
 Single-file desktop app that generates the magenta **DES_FIBER_SPL** fiber-number and BFO callouts of an FTTx design
 from its splice reports and address lists.
@@ -7,6 +7,23 @@ from its splice reports and address lists.
 else. The exe isn't code-signed, so if Windows SmartScreen appears, click *More info -> Run anyway*.
 
 **Check the installation:** *Help -> Run self-test* (or `FiberCalloutStudio.exe --selftest`).
+
+What's new in 2.4
+- **Cable changes of the same size.** When two different cables of the same size meet at a closure (96F in, another
+  96F cable out) with nothing else but 4F pigtails, the new cable gets a BFO callout. Cables are identified by
+  name: the same name with consecutive segment numbers is one cable continuing. A different name, or the same name
+  restarting at segment 1, is a new cable.
+- **4F and smaller never count as cables**, even when such a segment runs to another closure instead of a terminal.
+- **Cable labels from the drawing.** Labels that name a cable (`A TO B FCnnn`, e.g. block `fiberinfo` with SEGNUM and
+  TTL, or plain text / MText) are now read. When the splice report lacks a fiber count, the label's count is used.
+  When the two counts disagree, you get a warning. When no report lists the incoming cable, the labels name it.
+  Credit River: 271 labels, every count agrees with the splice reports.
+- When fiber tracing can't decide a closure's direction and the report lists nothing arriving (or nothing leaving),
+  the cable names decide: `X TO <closure>` ends there, `<closure> TO Y` starts there. Before this fix, a BFO could
+  be put on the incoming cable.
+- **Closures** tab (and QA sheet): for every closure with a splice report, shows its role (junction, cable change,
+  same cable continues, splitter hub), the incoming and outgoing cables with segment numbers, the BFO callouts
+  drafted, where the direction came from, and the report cables that have no label in the drawing.
 
 What's new in 2.3
 - **BFO at cable changes.** When a different cable starts at a closure, for example 96F in and a new 48F or 72F cable

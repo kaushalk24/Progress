@@ -134,8 +134,10 @@ coordinates) and the QA/QC workbook <tt>*_FIBER_CALLOUTS_QA_*.xlsx</tt>.</li>
 <li><b>BFO callout</b>: <tt>BFO 72 / 70-115</tt> = cable fiber count / lowest-highest fiber number carried by a
 cable leaving a closure that has a splice report; arrow on the cable. Drafted at <b>junctions</b> (3 or more cable
 segments meet; pigtails and terminal tails do not count) on every outgoing cable with live fibers, and at a
-<b>cable change</b> (e.g. 96F in, a different 72F cable out) on the new cable. A pass-through closure where the same
-cable continues gets none. In / out follow the fiber flow traced through the splice reports.</li>
+<b>cable change</b> (a different cable leaves than the one arriving, e.g. 96F in and a 72F or another 96F cable
+out) on the new cable. 4F and smaller never count as cables. A pass-through closure where the same cable continues
+gets none. Cables are identified by their names in the splice reports and the drawing's cable labels; in / out follow
+the fiber flow traced through the splice reports. The <b>Closures</b> tab shows the decision for every closure.</li>
 </ul>
 """
 
@@ -867,11 +869,17 @@ class MainWindow(QMainWindow):
             "Placement to review": lambda r: "PLACEMENT REVIEW" in (r["Notes"] or ""),
             "Failed": lambda r: r["Status"] == "FAILED"})
         self.tbl_network = Table("Search...")
+        self.tbl_closures = Table("Search closures, cables...", {
+            "All closures": lambda r: True,
+            "With BFO callouts": lambda r: r.get("BFO callouts", "-") != "-",
+            "Cable changes": lambda r: r.get("Role") == "Cable change",
+            "Same cable continues": lambda r: r.get("Role") == "Same cable continues"})
         self.tbl_existing = Table("Search...", {
             "All": lambda r: True,
             "Differences only": lambda r: not str(r.get("Result", "")).startswith("MATCH")})
         self.tabs.addTab(self.tbl_issues, "Issues")
         self.tabs.addTab(self.tbl_callouts, "Callouts")
+        self.tabs.addTab(self.tbl_closures, "Closures")
         self.tabs.addTab(self.tbl_network, "Network")
         self.tabs.addTab(self.tbl_existing, "Existing callouts")
         lay.addWidget(self.tabs, 1)
@@ -1085,7 +1093,7 @@ class MainWindow(QMainWindow):
     def _reset_results(self) -> None:
         for k in (self.kpi_t, self.kpi_c, self.kpi_clean, self.kpi_e, self.kpi_w):
             k.set("-")
-        for t in (self.tbl_issues, self.tbl_callouts, self.tbl_network, self.tbl_existing):
+        for t in (self.tbl_issues, self.tbl_callouts, self.tbl_closures, self.tbl_network, self.tbl_existing):
             t.search.clear()
             t.fill([])
         for b in (self.btn_open_dxf, self.btn_open_qa, self.btn_open_folder):
@@ -1216,12 +1224,14 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(0, f"Issues ({n_e + n_w})" if n_e + n_w else "Issues")
         self.tabs.setTabText(1, f"Callouts ({len(rows)})")
         self.tbl_network.fill(res.network)
+        self.tbl_closures.fill(res.closures, lambda r: {"Cable change": "#E8F3F5", "Junction": None}.get(r.get("Role")))
         self.tbl_existing.fill(res.existing_rows, lambda r: "#E8F5E9" if str(r.get("Result", "")).startswith("MATCH")
                                else None)
-        self.tabs.setTabVisible(3, bool(res.existing_rows))
+        ex = self.tabs.indexOf(self.tbl_existing)
+        self.tabs.setTabVisible(ex, bool(res.existing_rows))
         if res.existing_rows:
             ok = s.get("Existing callouts matched", 0)
-            self.tabs.setTabText(3, f"Existing callouts ({ok}/{s.get('Existing callouts found', 0)} identical)")
+            self.tabs.setTabText(ex, f"Existing callouts ({ok}/{s.get('Existing callouts found', 0)} identical)")
         self.tabs.setCurrentIndex(0 if n_e + n_w else 1)
         self.have_results = True
         self.btn_step_results.setEnabled(True)

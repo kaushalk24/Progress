@@ -87,7 +87,19 @@ For every splice report (closure S) and every cable segment LEAVING S by fiber f
   starts, even with only 2 cable segments. NMK-05021 (a 144F ends, a new 144F starts) and NMK-05138 (96F ends, 72F
   starts) get a BFO on the new cable, which the Credit River reference doesn't have. A pass-through closure where
   the same cable continues (segment k in, segment k+1 out, plus pigtails to terminals) gets none. A real 24F cable
-  to a terminal (NMK-03132, NMK-04003) counts as a third segment.
+  to a terminal (NMK-03132, NMK-04003) counts as a third segment. 4F and smaller segments never count.
+* **Cable identity.** In Credit River, every cable in the splice reports is named `<from> TO <to> FC<count>` (352
+  cables) and every segment `Segment k of <cable>`. At 213 closures the same cable continues with consecutive
+  segment numbers. At 240, a different cable leaves starting at segment 1. The count always equals the FC suffix.
+  The `<from>` part is not always where the cable starts (`NMK-02066 TO NMK-02116G` starts at NMK-02065), so
+  identity is the whole name, never its parts. A cable change is a different name, whatever the sizes, so
+  NMK-05021 (144F in, a different 144F out) counts. The same name restarting at segment 1 is a new cable that
+  reuses the name. The drawing labels every cable too: 271 `fiberinfo` blocks on the cable layer (SEGNUM = cable
+  name, TTL = fiber count, REQ, SPARE, CON, footage). 269 of them name a splice-report cable and all 271 counts agree
+  with the reports. The labels sit 30-250 ft from their line and each segment is a separate polyline, so they
+  identify cables by name, not by geometry. They supply missing counts, flag disagreements and name the incoming
+  cable when no report lists it. They also show that the reference's `BFO 24 / 21-22` at NMK-03153 is a drafting
+  error: the cable is 48F in both the report and the drawing.
 * **Terminal labels in the reports can be stale.** `NMK-R-23210 LOGAN WAY:1 23220 LOGAN WAY` names terminal 23210
   but serves 23220, which the address list puts on fiber 208. When `<terminal>:<k>` points to a fiber with a
   different address and the written address matches exactly one row, the address wins.

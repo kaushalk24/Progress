@@ -1001,6 +1001,10 @@ SPLITTER_RE = re.compile(r"PLC\s+COUPLER\s+(\d+)\s+\d+|\bF\d?PLC(\d+)\b|SPLITTER
 DEAD_STATES = ("BROKEN", "SPARE", "DARK", "CUT", "DEAD")
 TAIL_KIND_RE = re.compile(r"PIG\s*TAIL|\bTAIL\b|\bSTUB\b|JUMPER|PATCH|\bDROP\b", re.I)
 TAIL_MAX_FIBERS = 12          # a short cable that ends at a terminal (not at a closure) is a terminal tail
+DROP_MAX_FIBERS = 4           # 4F and smaller are always drop / terminal tails, never network cable
+CABLE_NAME_RE = re.compile(r"^(.+?)\s+TO\s+(.+?)\s+FC\s*0*(\d+)\s*$", re.I)
+LABEL_COUNT_TAGS = {"TTL", "FIBERS", "FIBER COUNT", "FIBER_COUNT", "COUNT", "SIZE", "CABLE SIZE", "CABLE_SIZE",
+                    "STRANDS", "FC"}
 NON_ADDRESS_RE = re.compile(r"TRANSPORT|SPARES?\b|POWER PORT|^NO DESC|COUPLER|\bOLM\b", re.I)
 
 
@@ -1937,6 +1941,47 @@ class DrawingModel:
         return h
 
 
+@dataclass
+class CableLabel:
+    """A cable name label of the drawing (e.g. block 'fiberinfo' with SEGNUM = 'A TO B FC096', TTL = 96)."""
+    name: str
+    count: Optional[int]
+    pos: Vec2
+    handle: str
+
+
+def cable_id(cable: str) -> str:
+    """Identity of a cable for comparing names ('A TO B FC096' and 'a to b  FC96' are the same cable)."""
+    return re.sub(r"\bFC\s*0*(\d+)\b", r"FC\1", re.sub(r"\s+", " ", norm_text(cable))).strip()
+
+
+def cable_ends(cable: str) -> Optional[Tuple[str, str]]:
+    """('A', 'B') of a cable named 'A TO B FCnnn'."""
+    m = CABLE_NAME_RE.match(norm_text(cable))
+    return (strip_kind(m.group(1)), strip_kind(m.group(2))) if m else None
+
+
+def drawing_cable_labels(src: NetworkSource) -> Dict[str, List[CableLabel]]:
+    """Cable names written in the drawing: block attributes or text whose value is 'A TO B FCnnn'."""
+    out: Dict[str, List[CableLabel]] = defaultdict(list)
+    for ins in src.inserts:
+        for tag, val in ins.attribs.items():
+            m = CABLE_NAME_RE.match(norm_text(val))
+            if not m:
+                continue
+            count = next((to_int(v) for t, v in ins.attribs.items()
+                          if norm_text(t).replace("-", " ") in LABEL_COUNT_TAGS and to_int(v)), None)
+            out[cable_id(val)].append(CableLabel(cable_id(val), count or int(m.group(3)), ins.pos, ins.handle))
+    for t in src.texts:
+        if t.dxftype not in ("TEXT", "MTEXT"):
+            continue
+        for line in re.split(r"\\P|\n", t.text or ""):
+            m = CABLE_NAME_RE.match(norm_text(line))
+            if m:
+                out[cable_id(line)].append(CableLabel(cable_id(line), int(m.group(3)), t.pos, t.handle))
+    return out
+
+
 # =============================================================================
 # Planning
 # =============================================================================
@@ -1992,6 +2037,8 @@ class CalloutPlanner:
         self.plans: List[CalloutPlan] = []
         self.segments: List[SegmentPlanInfo] = []
         self.terminal_rows: List[Dict[str, Any]] = []
+        self.closure_rows: List[Dict[str, Any]] = []
+        self.labels: Dict[str, List[CableLabel]] = {}
 
     # ------------------------------------------------------------ junctions
     def _far_ends(self, closure: str, sg: ReportSegment) -> Set[str]:
@@ -2005,6 +2052,8 @@ class CalloutPlanner:
         """Pigtails / terminal tails are not cable segments of the network."""
         if TAIL_KIND_RE.search(sg.kind or ""):
             return True
+        if sg.count is not None and sg.count <= DROP_MAX_FIBERS:
+            return True
         far = self._far_ends(closure, sg)
         if far & closure_names:
             return False
@@ -2012,8 +2061,7 @@ class CalloutPlanner:
 
     @staticmethod
     def cable_id(cable: str) -> str:
-        """Identity of a cable for comparing segments ('A TO B FC096' and 'A TO B FC96' are the same cable)."""
-        return re.sub(r"\bFC\s*0*(\d+)\b", r"FC\1", re.sub(r"\s+", " ", cable)).strip()
+        return cable_id(cable)
 
     @staticmethod
     def far_node(closure: str, start: Optional[str], end: Optional[str]) -> Optional[str]:
@@ -2120,7 +2168,30 @@ class CalloutPlanner:
                 upstream[name][fib] = up
         return upstream
 
-    def flow_directions(self, closure: str, reps: List[SpliceReport]) -> Tuple[Dict[Tuple[str, int], str], bool]:
+    def flow_directions(self, closure: str, reps: List[SpliceReport]) -> Tuple[Dict[Tuple[str, int], str], str]:
+        """In / out per segment and where it came from: 'fiber flow', 'splitter hub', 'cable names' or 'splice report'."""
+        dirs, by_flow = self._flow_core(closure, reps)
+        if by_flow:
+            return dirs, "splitter hub" if any(r.splitters for r in reps) else "fiber flow"
+        if any(r.splitters for r in reps):
+            return dirs, "splice report"
+        names = set(self.m.closures) | {r.name for r in self.reports}
+        segs = {(sg.cable, sg.seg): sg for r in reps for sg in r.segments if not self.is_tail(closure, sg, names)}
+        if any(dirs.get(k) == "in" for k in segs) and any(dirs.get(k) == "out" for k in segs):
+            return dirs, "splice report"
+        # nothing arrives (or nothing leaves) by the report: the cable names say which cable ends / starts here
+        new = dict(dirs)
+        for k, sg in segs.items():
+            ab = cable_ends(sg.cable)
+            if ab and ab[1] == closure:
+                new[k] = "in"
+            elif ab and ab[0] == closure:
+                new[k] = "out"
+        if any(new.get(k) == "in" for k in segs) and any(new.get(k) == "out" for k in segs) and new != dirs:
+            return new, "cable names"
+        return dirs, "splice report"
+
+    def _flow_core(self, closure: str, reps: List[SpliceReport]) -> Tuple[Dict[Tuple[str, int], str], bool]:
         """In / out of every segment at the closure by FIBER FLOW.
 
         A segment's Start / End Splice follows the direction the cable was digitized, which is not always the
@@ -2182,8 +2253,8 @@ class CalloutPlanner:
         return {k: ("in" if k == feed else "out") for k in segs}, True
 
     def closure_role(self, closure: str, reps: List[SpliceReport], closure_names: Set[str],
-                     dirs: Dict[Tuple[str, int], str]) -> Tuple[bool, Set[str], str]:
-        """(junction, identities of the incoming cables, description).
+                     dirs: Dict[Tuple[str, int], str]) -> Tuple[bool, List[ReportSegment], Set[str], str]:
+        """(junction, incoming segments, identities of the incoming cables, description).
 
         A junction is where the network branches: 3 or more cable segments meet (pigtails and terminal tails do
         not count), or 2+ cables leave a closure whose feed is not listed. At any other closure a BFO callout is
@@ -2199,8 +2270,26 @@ class CalloutPlanner:
         in_ids = {self.cable_id(sg.cable) for sg in ins}
         if not in_ids:                                  # feed missing from this report: ask the neighbours
             in_ids = {self.cable_id(c) for c, _seg in self._touching.get(closure, set()) - set(segs)}
+        if not in_ids:                                  # ... or the cable labels of the drawing ('X TO <closure>')
+            out_ids = {self.cable_id(sg.cable) for sg in outs}
+            in_ids = {n for n in self.labels if (cable_ends(n) or ("", ""))[1] == closure and n not in out_ids}
         junction = len(segs) >= 3 or (not ins and len(outs) >= 2)
-        return junction, in_ids, f"{len(segs)} cable segment(s): {len(ins)} in, {len(outs)} out"
+        return junction, ins, in_ids, f"{len(segs)} cable segment(s): {len(ins)} in, {len(outs)} out"
+
+    def is_new_cable(self, sg: ReportSegment, ins: List[ReportSegment], in_ids: Set[str]) -> bool:
+        """Is the outgoing segment a different cable from the one(s) arriving?
+
+        Different cable names mean different cables, whatever the fiber counts (96F in, 96F out of another cable
+        is a cable change). The same name continuing carries consecutive segment numbers (k in, k+1 out, or k-1
+        when drawn backwards); the same name restarting at segment 1 after segment 3+ is a new cable that reuses
+        the name."""
+        cid = self.cable_id(sg.cable)
+        if not in_ids:
+            return False
+        if cid not in in_ids:
+            return True
+        same = [i for i in ins if self.cable_id(i.cable) == cid]
+        return bool(same) and sg.seg == 1 and all(i.seg >= 3 for i in same)
 
     # ------------------------------------------------------------ geometry of a callout
     def text_location(self, last: Vec2, dog: int) -> Vec2:
@@ -2391,8 +2480,8 @@ class CalloutPlanner:
             closure = self.m.closures.get(name)
             if closure is None:
                 self.issues.add("ERROR", "Missing Closure", name, "Splice report closure not found in drawing")
-            dirs, by_flow = self.flow_directions(name, reps)
-            if by_flow:
+            dirs, dsource = self.flow_directions(name, reps)
+            if dsource != "splice report":
                 flipped = sorted({f"{sg.cable}:Seg{sg.seg}" for r in reps for sg in r.segments
                                   if dirs.get((sg.cable, sg.seg)) != sg.direction
                                   and not self.is_tail(name, sg, closure_names)})
@@ -2400,8 +2489,10 @@ class CalloutPlanner:
                     self.flow_corrected += len(flipped)
                     self.issues.add("INFO", "Fiber Flow", name,
                                     f"Start/End Splice of {', '.join(flipped)} is the reverse of the fiber flow (cable "
-                                    f"digitized backwards) - direction taken from the splices")
-            junction, in_ids, jdesc = self.closure_role(name, reps, closure_names, dirs)
+                                    f"digitized backwards) - direction taken from the {dsource}")
+            junction, in_segs, in_ids, jdesc = self.closure_role(name, reps, closure_names, dirs)
+            bfo_here: List[str] = []
+            outgoing: List[str] = []
             all_conns = [c for r in reps for c in r.conns]
             changes_here = 0
             for r in reps:
@@ -2420,7 +2511,8 @@ class CalloutPlanner:
                     end = self.far_node(name, sg.start or st, sg.end or en)
                     dest = re.sub(r"\s+FC\s*\d+\s*$", "", sg.cable.split(" TO ", 1)[1]).strip() if " TO " in sg.cable else ""
                     piece = self._segment_piece(name, end, dest)
-                    new_cable = bool(in_ids) and self.cable_id(sg.cable) not in in_ids
+                    new_cable = self.is_new_cable(sg, in_segs, in_ids)
+                    outgoing.append(f"{sg.cable} seg {sg.seg}")
                     live: List[int] = []
                     unresolved: List[str] = []
                     ambiguous: Dict[Tuple[int, ...], List[str]] = defaultdict(list)
@@ -2462,10 +2554,21 @@ class CalloutPlanner:
                     info.reason = "junction" if junction else "new cable starts here (cable change)"
                     if not junction:
                         changes_here += 1
-                    if sg.count is None:
+                    labels = self.labels.get(self.cable_id(sg.cable), [])
+                    count = sg.count
+                    if count is None and labels and labels[0].count:
+                        count = labels[0].count
+                        info.count = count
+                        self.issues.add("INFO", "Cable Size", f"{name} {sg.cable}",
+                                        f"Fiber count {count} taken from the cable label in the drawing")
+                    elif count is None:
                         self.issues.add("WARNING", "Splice Report", f"{name} {sg.cable}",
-                                        "Segment fiber count unknown (no Count column and no FCnnn suffix)")
-                    count_txt = str(sg.count) if sg.count is not None else "?"
+                                        "Segment fiber count unknown (no Count column, no FCnnn suffix, no drawing label)")
+                    elif labels and labels[0].count and labels[0].count != count:
+                        self.issues.add("WARNING", "Cable Size", f"{name} {sg.cable}",
+                                        f"Splice report says {count}F, the drawing's cable label says "
+                                        f"{labels[0].count}F - the callout uses the splice report")
+                    count_txt = str(count) if count is not None else "?"
                     text = f"{spec.cable_prefix} {count_txt}\\P{fmt_numbers(info.live, spec.cable_range_mode, spec.zero_pad)}"
                     info.text = text
                     uid += 1
@@ -2475,12 +2578,33 @@ class CalloutPlanner:
                         self.plans.append(plan)
                     else:
                         self._register(plan)
+                        bfo_here.append(text.replace("\\P", " / "))
+            if any(r.splitters for r in reps):
+                role = "Splitter hub"
+            elif junction:
+                role = "Junction"
+            elif changes_here:
+                role = "Cable change"
+            else:
+                role = "Same cable continues"
             if junction:
                 self.junctions += 1
             elif changes_here:
                 self.cable_changes += 1
             else:
                 self.pass_through += 1
+            report_cables = {self.cable_id(sg.cable) for r in reps for sg in r.segments
+                             if not self.is_tail(name, sg, closure_names)}
+            unlabelled = sorted(c for c in report_cables if c not in self.labels) if self.labels else []
+            self.closure_rows.append({
+                "Closure": name, "Role": role, "Cable segments": jdesc,
+                "Incoming": "; ".join(f"{sg.cable} seg {sg.seg}" for sg in in_segs) or
+                            ("; ".join(sorted(in_ids)) + " (from neighbours / drawing)" if in_ids else "-"),
+                "Outgoing": "; ".join(outgoing) or "-",
+                "BFO callouts": "; ".join(bfo_here) or "-",
+                "Direction from": dsource,
+                "Cables not labelled in drawing": ", ".join(unlabelled) if self.labels else "(no cable labels in drawing)",
+                "Report": ", ".join(r.file for r in reps)})
 
     def _place_cable(self, uid: str, info: SegmentPlanInfo, closure: Optional[Closure], pi: Optional[int],
                      text: str) -> CalloutPlan:
@@ -2782,7 +2906,7 @@ def write_qa_workbook(path: Path, cfg: RunConfig, result: "RunResult") -> None:
             settings.append(dict(Section="run", Key=k, Value=json.dumps(v) if isinstance(v, (list, dict)) else v))
     for name, rows in (("Summary", [dict(Item=k, Value=v) for k, v in result.summary.items()]),
                        ("Network", result.network), ("Callouts", callouts), ("Terminals", result.terminals),
-                       ("Cable Segments", segs), ("Validation Issues", issues),
+                       ("Cable Segments", segs), ("Closures", result.closures), ("Validation Issues", issues),
                        ("Existing vs Computed", result.existing_rows), ("Settings", settings)):
         _write_sheet(wb.create_sheet(name), rows)
     ws = wb["Validation Issues"]
@@ -2823,6 +2947,7 @@ class RunResult:
     spec: CalloutSpec = field(default_factory=CalloutSpec)
     signature: str = ""
     insunits: Optional[int] = 0         # written to the callouts DXF so AutoCAD pastes without unit scaling
+    closures: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def input_signature(cfg: RunConfig) -> str:
@@ -2922,6 +3047,12 @@ class CalloutEngine:
         model = DrawingModel(src, cad, spec, issues, self.rep, names, report_xy, scale)
         self._cross_validate(book, reports, model, issues)
         planner = CalloutPlanner(model, book, reports, spec, issues, self.rep)
+        planner.labels = drawing_cable_labels(src)
+        if planner.labels:
+            report_cables = {cable_id(sg.cable) for r in reports for sg in r.segments}
+            self.rep.log(f"Cable labels in the drawing: {sum(len(v) for v in planner.labels.values())} "
+                         f"({len(set(planner.labels) & report_cables)} of {len(report_cables)} splice-report cables "
+                         f"labelled)")
         self.rep.progress(52, "Planning fiber-number callouts")
         planner.plan_terminals()
         planner.plan_cables()
@@ -3022,6 +3153,7 @@ class CalloutEngine:
                 "Cable-change closures (BFO on the new cable)": planner.cable_changes,
                 "Pass-through closures, same cable continues (no BFO)": planner.pass_through,
                 "Segments digitized against the fiber flow": planner.flow_corrected,
+                "Cable labels in drawing": sum(len(v) for v in planner.labels.values()),
                 "Fiber-number callouts": n_t,
                 "BFO callouts": n_c,
                 "Callouts failed": sum(1 for p in plans if p.status == "FAILED"),
@@ -3043,7 +3175,7 @@ class CalloutEngine:
             self.rep.progress(100, "Analysis complete")
             return RunResult(plans, planner.segments, planner.terminal_rows, issues, summary,
                              self._network_rows(book, reports, planner), existing_rows, {}, placement, spec,
-                             input_signature(self.cfg), src.insunits)
+                             input_signature(self.cfg), src.insunits, planner.closure_rows)
         finally:
             self.collector.cleanup()
 
