@@ -46,7 +46,7 @@ Every number below was measured on the actual files (the DWG was decoded object-
 N = (PON NAME − 1) × 64 + PON PORT            (numbered independently per OLM)
 ```
 
-* 64 = output count of the `PLC COUPLER 64` splitters listed in every hub splice report (`FE0-F1PLC64`, 65 = 64 + COM).
+* 64 = splitter size of the OLM. The 0001G hub splice case next to each OLM writes it as `PLC COUPLER 64 1 FE0-F1PLC64`, or as coupler IDs such as `PLCCOUPLER641` (size 64, output coupler 1). The tool reads the size per OLM from the splice case that the OLM's feed cable enters, so OLMs with different splitters are numbered correctly.
 * Proof: NMK-R02 has PON 1–3 fully used (64 ports) and PON 4 ports 1–38 → 3×64+38 = **230**, which is exactly the
   largest number on NMK-R02's callouts (`BFO 96\P164-230`). The same holds for R03/R04/R05.
 * `FIBER #` (position in the first feeder cable) is **not** the callout number — e.g. PON 1 port 3 is fiber 13 of
@@ -150,11 +150,11 @@ Splice Report: 3 cables meet in the drawing:
 | Splice case | What | Effect |
 |---|---|---|
 | NMK-02133 | The address list writes the drop closure of NMK-R-9205 245TH ST E (fiber 52) as `NKM-02133`. | Fiber-number `52` can't be placed; reported as an error with "did you mean NMK-02133". |
-| NMK-04217, NMK-04099, NMK-04100, NMK-04104 | The splice reports write terminals NMK-R-23636 / 23644 / 23650 **LOGAN AVE**, the address list **LOGAN WAY** (fibers 200-203). | The tool now matches them and warns (Name Mismatch). The BFOs read 200-215 / 200-213 / 200-211 / 200-206 as in the reference. |
+| NMK-04217, NMK-04099, NMK-04100, NMK-04104 | The splice reports write terminals NMK-R-23636 / 23644 / 23650 **LOGAN AVE**, the address list **LOGAN WAY** (fibers 200-203). The Credit River address list was typed by hand. For new regions the address list is derived from the splice reports, so this cannot arise. | The tool now matches them and warns (Name Mismatch). The BFOs read 200-215 / 200-213 / 200-211 / 200-206 as in the reference. |
 | NMK-05003 vs NMK-05002 | The address list puts 9405 267TH ST W (fiber 109) at NMK-05003. The reference draws `109` at NMK-05002, which is nearer the house (224 vs 359 ft). Neither splice case has a splice report. | The tool follows the address list. Check the address list's drop splice for 9405 267TH ST W. |
 
 **BFOs the reference omits.** The reference itself labels the continuing cable at 200 of 211 junctions and
-single-fiber branches at 121 of 125, so these are drafting omissions:
+single-fiber branches at 121 of 125. These are human drafting errors in the reference:
 
 | Splice case | Tool callout(s) | Reference |
 |---|---|---|

@@ -768,8 +768,8 @@ class AddressBook:
         self.loose_taps: Dict[str, Set[str]] = defaultdict(set)
         # (name in the splice report, name in the address list) -> fibers matched that way
         self.loose_matches: Dict[Tuple[str, str], Set[int]] = defaultdict(set)
-        self.ports_per_pon = 64
-        self.ports_source = "default"
+        self.ports_per_pon: Dict[str, int] = {}      # OLM -> splitter size: fiber number = (PON - 1) x size + PORT
+        self.ports_source: Dict[str, str] = {}
         self.olms: List[str] = []
         self.max_port = 0
 
@@ -789,7 +789,7 @@ class AddressBook:
                 issues.add("ERROR", "Address List", f.name, f"Unreadable: {exc}")
         return headers
 
-    def load(self, files: List[Path], cmap: ColumnMap, ports_per_pon: int, report_splitter: int,
+    def load(self, files: List[Path], cmap: ColumnMap, ports_per_pon: int, reports: List[SpliceReport],
              pigtail_splices: Dict[str, str], issues: IssueLog, rep: Reporter, quiet_cross: bool = False) -> None:
         raw: List[Tuple[str, int, int, Dict[str, Any], str, int]] = []
         for f in files:
@@ -853,21 +853,34 @@ class AddressBook:
         if not raw:
             issues.add("ERROR", "Address List", "-", "No PON-assigned rows found in the address list(s)")
             return
-        self.max_port = max(p for _, _, p, _, _, _ in raw)
-        if ports_per_pon and ports_per_pon > 0:
-            self.ports_per_pon, self.ports_source = ports_per_pon, "user setting"
-        elif report_splitter and report_splitter >= self.max_port:
-            self.ports_per_pon, self.ports_source = report_splitter, "splitter size in splice reports"
-        else:
-            self.ports_per_pon = next((s for s in (8, 16, 32, 64, 128, 256) if s >= self.max_port), self.max_port)
-            self.ports_source = "address list (next power of two >= highest port)"
-        if self.max_port > self.ports_per_pon:
-            issues.add("ERROR", "Address List", "-",
-                       f"PON PORT {self.max_port} exceeds ports-per-PON {self.ports_per_pon}")
+        max_port: Dict[str, int] = {}
+        for olm, _pon, port, _vals, _src, _ri in raw:
+            max_port[olm] = max(max_port.get(olm, 0), port)
+        self.max_port = max(max_port.values())
+        feeds = olm_splitters(reports, set(max_port))
+        sizes_in_reports = {hub_splitter(r) for r in reports} - {None}
+        for olm in sorted(max_port):
+            if ports_per_pon and ports_per_pon > 0:
+                n, how = ports_per_pon, "user setting (--ports-per-pon)"
+            elif olm in feeds:
+                n, how = feeds[olm], "splitter size of its 0001G splice case"
+            elif len(sizes_in_reports) == 1:
+                n, how = next(iter(sizes_in_reports)), "the one splitter size in the splice reports"
+            else:
+                n = next((x for x in (8, 16, 32, 64, 128, 256, 512) if x >= max_port[olm]), max_port[olm])
+                how = "ESTIMATED from the highest PON PORT"
+                issues.add("WARNING", "Numbering", olm,
+                           f"No splitter size found for {olm} in the splice reports (its 0001G splice case). {n} is "
+                           f"ESTIMATED from its highest PON PORT ({max_port[olm]}). If the splitter is larger, every "
+                           f"fiber number of {olm} is wrong - check the QA workbook.")
+            self.ports_per_pon[olm], self.ports_source[olm] = n, how
+            if max_port[olm] > n:
+                issues.add("ERROR", "Address List", olm,
+                           f"PON PORT {max_port[olm]} exceeds the splitter size {n} of {olm}")
         no_splice: Counter = Counter()
         repeated: Counter = Counter()
         for olm, pon, port, vals, src, ri in raw:
-            number = (pon - 1) * self.ports_per_pon + port
+            number = (pon - 1) * self.ports_per_pon[olm] + port
             tap = norm_text(vals["tap"])
             rec = AddressRecord(olm=olm, pon=pon, port=port, number=number, address=norm_text(vals["address"]),
                                 tap=tap, splice=strip_kind(vals["splice"]), fiber=to_int(vals["fiber"]),
@@ -917,8 +930,9 @@ class AddressBook:
         self.olms = sorted({r.olm for r in self.records})
         for lst in self.by_tap.values():
             lst.sort(key=lambda r: (r.olm, r.number))
-        rep.log(f"Address lists: {len(self.records)} PON-assigned rows, {len(self.terminals)} terminal groups, "
-                f"OLMs {', '.join(self.olms)}; ports per PON = {self.ports_per_pon} ({self.ports_source})")
+        rep.log(f"Address lists: {len(self.records)} PON-assigned rows, {len(self.terminals)} terminal groups; "
+                "splitter size per OLM: " + ", ".join(f"{o} {self.ports_per_pon[o]} ({self.ports_source[o]})"
+                                                       for o in sorted(self.ports_per_pon)))
 
     @staticmethod
     def address_variants(address: str) -> List[str]:
@@ -1022,8 +1036,13 @@ GUIDE_SEG_RE = re.compile(r"^(.+?)\s*:\s*Seg\s*(\d+)(?:\s*-\s*(\d+)\s*ct)?\s*$",
 GUIDE_CABLE_RE = re.compile(r"^(.+?)\s+SEG\s*-?\s*(\d+)\s*$", re.I)
 FC_RE = re.compile(r"\bFC\s*0*(\d+)\s*$", re.I)
 USAGE_RE = re.compile(r"^(.*?):(\d+)\s+(.*)$")
-SPLITTER_RE = re.compile(r"PLC\s+COUPLER\s+(\d+)\s+\d+|\bF\d?PLC(\d+)\b|SPLITTER\s*1\s*[xX:]\s*(\d+)|"
-                         r"\b1\s*[xX]\s*(\d+)\s*(?:PLC|SPLITTER)", re.I)
+SPLITTER_SIZES = (2, 4, 8, 16, 32, 64, 128, 256, 512)
+# Splitter codes seen in splice reports: 'PLC COUPLER 64 1 FE0-F1PLC64', 'PLCCOUPLER641' (size 64, output coupler 1),
+# 'PLCCOUPLEF64', 'FE0-F1PLC32'. The size is the leading number that is a valid splitter size.
+SPLITTER_CODE_RE = re.compile(r"PLC\s*COUPL[EFR]{1,2}\s*(\d+)|\bF\d?\s*-?\s*PLC\s*(\d+)", re.I)
+# Ratio wordings: 'SPLITTER 1x32', 'SPLITTER 1:32', 'PLC 1:32', '1x32 PLC', '1:64 SPLITTER'
+SPLITTER_RATIO_RE = re.compile(r"\b(?:SPLITTER|PLC|SPL(?:IT)?)\s*1\s*[xX:]\s*(\d+)\b|"
+                               r"\b1\s*[xX:]\s*(\d+)\s*(?:PLC|SPLITTER|SPL)\b", re.I)
 DEAD_STATES = ("BROKEN", "SPARE", "DARK", "CUT", "DEAD")
 TAIL_KIND_RE = re.compile(r"PIG\s*TAIL|\bTAIL\b|\bSTUB\b|JUMPER|PATCH|\bDROP\b", re.I)
 TAIL_MAX_FIBERS = 12          # a short cable that ends at a terminal (not at a closure) is a terminal tail
@@ -1082,9 +1101,7 @@ def parse_connections_report(rows: List[List[Any]], fname: str) -> Optional[Spli
             if len(nums) >= 2:
                 xy = (float(nums[0]), float(nums[1]))
         for c in cells:
-            m = SPLITTER_RE.search(c)
-            if m:
-                splitters.append(int(next(g for g in m.groups() if g)))
+            splitters.extend(splitter_values(c))
         if seg_hdr is None and "count" in low and _find_col(low, "start splice", "start enclosure", "from") is not None \
                 and _find_col(low, "end splice", "end enclosure", "to") is not None and "segment" in low:
             seg_hdr = (i, dict(segment=low.index("segment"), count=low.index("count"),
@@ -1160,6 +1177,10 @@ def parse_guide_report(rows: List[List[Any]], fname: str) -> Optional[SpliceRepo
     if not name:
         return None
     rep = SpliceReport(name=name, file=fname, fmt="Fiber Optic Splice Guide", olm=title_olm)
+    for r in rows:
+        for c in r:
+            if isinstance(c, str) and c:
+                rep.splitters.extend(splitter_values(c))
     if io_row is not None:
         stop = hdr_row if hdr_row is not None else len(rows)
         for col, direction in ((in_col, "in"), (out_col, "out")):
@@ -1247,9 +1268,54 @@ def load_splice_reports(files: List[Path], issues: IssueLog, rep: Reporter, quie
     return reports
 
 
-def splitter_size(reports: List[SpliceReport]) -> int:
-    c = Counter(s for r in reports for s in r.splitters if 2 <= s <= 512)
-    return c.most_common(1)[0][0] if c else 0
+def _size_from_code(digits: str) -> Optional[int]:
+    """Splitter size of a coupler code: '64' -> 64, '641' -> 64 (size, then output coupler 1), '321' -> 32,
+    '3' -> None. The longest leading part that is a splitter size wins; at most 2 digits may follow it."""
+    best = None
+    for k in range(1, len(digits) + 1):
+        head, tail = digits[:k], digits[k:]
+        if int(head) in SPLITTER_SIZES and len(tail) <= 2:
+            best = int(head)
+    return best
+
+
+def splitter_values(text: str) -> List[int]:
+    """Splitter sizes written in one cell of a splice report."""
+    out: List[int] = []
+    for m in SPLITTER_CODE_RE.finditer(text or ""):
+        v = _size_from_code(m.group(1) or m.group(2))
+        if v:
+            out.append(v)
+    for m in SPLITTER_RATIO_RE.finditer(text or ""):
+        v = int(m.group(1) or m.group(2))
+        if 2 <= v <= 512:
+            out.append(v)
+    return out
+
+
+def hub_splitter(report: SpliceReport) -> Optional[int]:
+    """Splitter size of a splice case: the size written most often in its report (None when there is none)."""
+    c = Counter(s for s in report.splitters if 2 <= s <= 512)
+    return c.most_common(1)[0][0] if c else None
+
+
+def olm_splitters(reports: List[SpliceReport], olm_names: Set[str]) -> Dict[str, int]:
+    """Splitter size of each OLM, from the splice case its feed cable enters. The feed is the cable
+    'NMK-R02 TO NMK-02001G FC024' in the report of NMK-02001G - the 0001G splice case next to the OLM."""
+    out: Dict[str, int] = {}
+    for r in reports:
+        size = hub_splitter(r)
+        if not size:
+            continue
+        for sg in r.segments:
+            ends = cable_ends(sg.cable)
+            if not ends:
+                continue
+            a, b = ends
+            for olm, node in ((a, b), (b, a)):
+                if node == r.name and olm in olm_names:
+                    out.setdefault(olm, size)
+    return out
 
 
 def pigtail_splices(reports: List[SpliceReport], tap_names: Optional[Set[str]] = None) -> Dict[str, str]:
@@ -2465,7 +2531,7 @@ class CalloutPlanner:
                 runs = number_runs(t.numbers) if spec.split_terminal_runs else [(min(t.numbers), max(t.numbers))]
                 texts = [fmt_run(r, spec.zero_pad) for r in runs] if spec.split_terminal_runs else \
                     [fmt_numbers(t.numbers, "exact", spec.zero_pad)]
-                calc = "; ".join(f"{r.address}: PON {r.pon} port {r.port} -> ({r.pon}-1)x{self.book.ports_per_pon}+{r.port} = {r.number}"
+                calc = "; ".join(f"{r.address}: PON {r.pon} port {r.port} -> ({r.pon}-1)x{self.book.ports_per_pon[r.olm]}+{r.port} = {r.number}"
                                  for r in sorted(t.records, key=lambda x: x.number))
                 srcs = ", ".join(sorted({r.source for r in t.records}))
                 row = dict(OLM=t.olm, Terminal=t.tap, Closure=t.splice or "(none)",
@@ -3174,8 +3240,9 @@ class CalloutEngine:
             headers = AddressBook.scan_headers(addr_files, issues)
             cols = auto_map_columns(headers)
             reports = load_splice_reports(spl_files, issues, self.rep) if spl_files else []
-            splitter = splitter_size(reports)
-            ports_hint = f"{splitter} (splitter size found in splice reports)" if splitter else "auto (from address list)"
+            sizes = sorted({hub_splitter(r) for r in reports} - {None})
+            ports_hint = (f"{', '.join(map(str, sizes))} (splitter sizes in the splice reports, per OLM)" if sizes
+                          else "not in the splice reports (estimated from the address list)")
             cad = None
             layers: List[str] = []
             info = ""
@@ -3184,7 +3251,7 @@ class CalloutEngine:
                 scale = units_factor(src, self.cfg.units, self.rep)
                 book = AddressBook()
                 if addr_files:
-                    book.load(addr_files, cols, self.cfg.ports_per_pon, splitter, pigtail_splices(reports), IssueLog(),
+                    book.load(addr_files, cols, self.cfg.ports_per_pon, reports, pigtail_splices(reports), IssueLog(),
                               Reporter(lambda m, l: None))
                 names = {r.splice for r in book.records if r.splice} | {r.name for r in reports}
                 cad = auto_detect_cad(src, names, [r.xy for r in reports if r.xy], self.rep, scale)
@@ -3209,7 +3276,7 @@ class CalloutEngine:
             issues.add("WARNING", "Input", "Splice Report", "No splice reports found - BFO (cable) callouts cannot be produced")
         self.rep.progress(18, "Reading address lists")
         book = AddressBook()
-        book.load(addr_files, cfg.columns, cfg.ports_per_pon, splitter_size(reports), pigtail_splices(reports), issues,
+        book.load(addr_files, cfg.columns, cfg.ports_per_pon, reports, pigtail_splices(reports), issues,
                   self.rep, quiet_cross=combined)
         self.rep.log(f"Inputs: {len(reports)} splice report(s), {len({r.source.split(':')[0] for r in book.records})} "
                      f"address list file(s)")
@@ -3217,10 +3284,6 @@ class CalloutEngine:
             self._log_issues(issues)
             raise RuntimeError("No usable address-list rows were found. Check that the address lists contain PON, "
                                "PORT, address, terminal and splice columns (details in the log).")
-        if book.ports_source.startswith("address list") and reports:
-            issues.add("WARNING", "Numbering", "Ports per PON",
-                       f"Splitter size not found in the splice reports - {book.ports_per_pon} assumed from the highest "
-                       f"PON PORT ({book.max_port}). Check the fiber numbers in the QA workbook.")
         self.rep.progress(22, "Reading drawing")
         src = open_source(cfg, self.rep)
         scale = units_factor(src, cfg.units, self.rep)
@@ -3339,8 +3402,9 @@ class CalloutEngine:
                 "Drawing units ($INSUNITS)": (f"{src.insunits} ({INSUNITS_NAMES.get(src.insunits, '?')})"
                                               if src.insunits is not None else "not readable"),
                 "OLMs": ", ".join(book.olms),
-                "Ports per PON": f"{book.ports_per_pon} ({book.ports_source})",
-                "Formula": f"N = (PON - 1) x {book.ports_per_pon} + PON PORT (per OLM)",
+                "Splitter size per OLM": "; ".join(f"{o}: {book.ports_per_pon[o]} ({book.ports_source[o]})"
+                                                   for o in book.olms),
+                "Formula": "N = (PON - 1) x splitter size of the OLM + PON PORT",
                 "Address rows (PON assigned)": len(book.records),
                 "Terminal groups": len(book.terminals),
                 "Splice reports": len(reports),

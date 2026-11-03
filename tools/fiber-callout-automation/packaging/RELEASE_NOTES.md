@@ -1,4 +1,4 @@
-## FiberCallout Studio 2.5.0 (Windows x64)
+## FiberCallout Studio 2.6.0 (Windows x64)
 
 Single-file desktop app that generates the magenta **DES_FIBER_SPL** fiber-number and BFO callouts of an FTTx design
 from its splice reports and address lists.
@@ -7,6 +7,19 @@ from its splice reports and address lists.
 else. The exe isn't code-signed, so if Windows SmartScreen appears, click *More info -> Run anyway*.
 
 **Check the installation:** *Help -> Run self-test* (or `FiberCalloutStudio.exe --selftest`).
+
+What's new in 2.6
+- **Splitter size per OLM.** Each OLM's splitter size is read from the 0001G splice case next to it (the splice case
+  its feed cable enters, e.g. `NMK-R02 TO NMK-02001G FC024` in the report of NMK-02001G). One size for the whole
+  region is no longer assumed. Mixed splitter sizes (1x32 and 1x64 OLMs in one region) are numbered correctly.
+- **More splitter wordings.** `PLC COUPLER 64 1`, `PLCCOUPLER641` (size 64, output coupler 1), `PLCCOUPLEF64`,
+  `FE0-F1PLC64`, `SPLITTER 1x32`, `1:32`, `PLC 1:8`, `1x8 PLC`. Coupler IDs such as `PLCCOUPLER321` are read as
+  size 32, output coupler 1. Splice reports of the Fiber Optic Splice Guide layout are searched for splitter text too.
+- **Estimates are marked.** If an OLM has no splitter size in the splice reports, its size is estimated from the
+  highest PON PORT and a warning says so. Before, the estimate was used for the whole region with a generic message.
+- The Summary sheet shows the splitter size of each OLM.
+- Credit River is unchanged: all four OLMs are 64. 707 fiber-number and 482 BFO callouts; 706/708 fiber-number and
+  467/476 BFO texts identical to the reference.
 
 What's new in 2.5
 - **Cables to MDU terminals.** A real cable (more than 12F, e.g. a 24F) from a splice case to a terminal now gets

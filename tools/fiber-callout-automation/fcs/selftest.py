@@ -531,8 +531,8 @@ def run_selftest(verbose: bool = True, workdir: Optional[str] = None,
         typo_flagged = any("WKB-07022" in i.obj and "did you mean" in i.message for i in errs)
         checks.append(("closure typo detected with suggestion", typo_flagged, str([i.message for i in errs])))
         checks.append(("no other errors", all("WKB-07022" in i.obj for i in errs), str([(i.obj, i.message) for i in errs])))
-        checks.append(("splitter size 1x32 detected from splice reports", "32 (splitter size" in res.summary["Ports per PON"],
-                       res.summary["Ports per PON"]))
+        checks.append(("splitter size 1x32 detected from splice reports", "32 (splitter size" in res.summary["Splitter size per OLM"],
+                       res.summary["Splitter size per OLM"]))
         checks.append(("QA workbook written", Path(res.outputs.get("QA workbook", "")).exists(), ""))
         clean = res.placement.get("clean", 0)
         checks.append(("placement QA clean for all callouts", clean == len(gen), f"{clean}/{len(gen)}"))

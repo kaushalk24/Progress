@@ -66,12 +66,59 @@ def test_header_mapping() -> None:
 
 
 def test_splitter_detection() -> None:
-    def size(t: str):
-        m = E.SPLITTER_RE.search(t)
-        return [g for g in m.groups() if g][0] if m else None
-    check("splitter PLC COUPLER", size("PLC COUPLER 64 1 FE0-F1PLC64") == "64")
-    check("splitter not coupler id", size("PLCCOUPLER321") is None)
-    check("splitter 1x32", size("Splitter 1x32") == "32")
+    sv = E.splitter_values
+    check("splitter 'PLC COUPLER 64 1 FE0-F1PLC64'", sv("PLC COUPLER 64 1 FE0-F1PLC64") == [64, 64])
+    check("coupler id PLCCOUPLER641 = size 64, output coupler 1", sv("PLCCOUPLER641") == [64])
+    check("coupler id PLCCOUPLER6410 = size 64, output coupler 10", sv("PLCCOUPLER6410") == [64])
+    check("PLCCOUPLEF64 (spelling with EF)", sv("PLCCOUPLEF64") == [64])
+    check("coupler id PLCCOUPLER321 = size 32, output coupler 1", sv("PLCCOUPLER321") == [32])
+    check("coupler id PLCCOUPLER32 = size 32", sv("PLCCOUPLER32") == [32])
+    check("ratio wordings 1x32 / 1:16 / PLC 1:8 / 1x8 PLC", sv("Splitter 1x32") == [32] and sv("SPLITTER 1:16") == [16]
+          and sv("PLC 1:8") == [8] and sv("1x8 PLC") == [8])
+    check("no splitter in other text", sv("Generic Rack 19x40x6: New Market MN NMK(01:1:2)") == []
+          and sv("NMK-02001G") == [] and sv("PLCCOUPLER3") == [] and sv("COUPLER 1") == [])
+
+
+def test_olm_splitters() -> None:
+    def hub(name, sizes, feed_olm):
+        segs = [E.ReportSegment(cable=f"{feed_olm} TO {name} FC024", seg=1, count=24, kind="Underground",
+                                start=name, end=feed_olm, direction="out")]
+        return E.SpliceReport(name=name, file="x", fmt="t", segments=segs, splitters=list(sizes))
+    reps = [hub("NMK-02001G", [64, 64, 64], "NMK-R02"), hub("NMK-03001G", [32], "NMK-R03"),
+            E.SpliceReport(name="NMK-02006", file="y", fmt="t")]
+    got = E.olm_splitters(reps, {"NMK-R02", "NMK-R03", "NMK-R04"})
+    check("OLM splitter from the 0001G splice case of its feed", got == {"NMK-R02": 64, "NMK-R03": 32}, str(got))
+
+
+def test_per_olm_numbering() -> None:
+    import openpyxl
+    hubs = [E.SpliceReport(name="NMK-02001G", file="a", fmt="t", splitters=[64],
+                           segments=[E.ReportSegment(cable="NMK-R02 TO NMK-02001G FC024", seg=1, count=24,
+                                                     kind="Underground", start="NMK-02001G", end="NMK-R02",
+                                                     direction="out")]),
+            E.SpliceReport(name="NMK-03001G", file="b", fmt="t", splitters=[32],
+                           segments=[E.ReportSegment(cable="NMK-R03 TO NMK-03001G FC024", seg=1, count=24,
+                                                     kind="Underground", start="NMK-03001G", end="NMK-R03",
+                                                     direction="out")])]
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = []
+        for sheet in ("NMK-R02", "NMK-R03", "NMK-R04"):
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = sheet
+            ws.append(["PON NAME", "PON PORT", "ADDRESS", "Fiber Tap Name", "Fiber Splice"])
+            ws.append([2, 5, "100 MAIN ST", "NMK-R-T1", "NMK-02006"])
+            path = Path(tmp) / f"{sheet}.xlsx"
+            wb.save(path)
+            paths.append(path)
+        issues = E.IssueLog()
+        book = E.AddressBook()
+        book.load(paths, E.ColumnMap(), 0, hubs, {}, issues, E.Reporter(lambda m, l: None))
+        nums = {r.olm: r.number for r in book.records}
+    check("fiber number of an OLM with a 64F splitter", nums.get("NMK-R02") == 69, str(nums))
+    check("fiber number of an OLM with a 32F splitter", nums.get("NMK-R03") == 37, str(nums))
+    est = [i for i in issues.items if i.severity == "WARNING" and "ESTIMATED" in i.message]
+    check("OLM without a splitter size is estimated and warned", nums.get("NMK-R04") == 13 and len(est) == 1, str(nums))
 
 
 def test_report_parsers() -> None:
@@ -316,7 +363,7 @@ def test_output_folder_error() -> None:
 
 def main() -> int:
     for fn in (test_numbering_helpers, test_callout_text_rules, test_address_rules, test_header_mapping,
-               test_splitter_detection, test_report_parsers, test_decorated_segment_ends, test_junction_rule, test_drawing_cable_labels, test_name_mismatch_and_differences, test_text_tables, test_units, test_input_signature, test_output_folder_error):
+               test_splitter_detection, test_olm_splitters, test_per_olm_numbering, test_report_parsers, test_decorated_segment_ends, test_junction_rule, test_drawing_cable_labels, test_name_mismatch_and_differences, test_text_tables, test_units, test_input_signature, test_output_folder_error):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001
