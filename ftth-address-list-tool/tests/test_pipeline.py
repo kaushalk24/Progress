@@ -397,3 +397,21 @@ def build_any(folder):
     reps, issues = load_reports(find_report_files(folder), cfg)
     net = Network(reps, cfg)
     return Builder(net, cfg).build(OLM), issues + net.issues
+
+
+def test_output_into_the_report_folder_itself(net_dir):
+    first = run(net_dir, net_dir, log=lambda *_: None)[0]
+    second = run(net_dir, net_dir, log=lambda *_: None)[0]     # earlier outputs there are not read as reports
+    assert first.workbook and second.workbook and second.errors == 0 and second.workbook != first.workbook
+
+
+def test_workbook_write_failure_is_reported_not_fatal(net_dir, tmp_path, monkeypatch):
+    import ftth_addrlist.pipeline as pl
+
+    def locked(*_a, **_k):
+        raise PermissionError("file is open in Excel")
+    monkeypatch.setattr(pl, "write_workbook", locked)
+    msgs = []
+    oc = run(net_dir, tmp_path / "out", log=msgs.append)[0]
+    assert oc.workbook is None and any("could not be written" in m for m in msgs)
+    assert oc.exceptions_csv.exists()

@@ -257,6 +257,20 @@ class App(tk.Tk):
         p = filedialog.askdirectory(initialdir=self._value(key) or None)
         if p:
             self.vars[key].set(p)
+            if key == "reports":
+                self._suggest_drawing(Path(p))
+
+    def _suggest_drawing(self, folder: Path):
+        """The region's DWG is often delivered with the reports: use it when it is the only one."""
+        if self._value("drawing"):
+            return
+        try:
+            dwgs = [f for f in folder.rglob("*") if f.suffix.lower() == ".dwg" and f.is_file()]
+        except OSError:
+            return
+        if len(dwgs) == 1:
+            self.vars["drawing"].set(str(dwgs[0]))
+            self.say(f"Design drawing found in the report folder: {dwgs[0].name}")
 
     def _ui_file(self, key, types):
         cur = self._value(key)

@@ -56,6 +56,8 @@ def find_report_files(folder: Path, exclude: Path | None = None) -> list[Path]:
     if folder.is_file():
         return [folder]
     skip = exclude.resolve() if exclude is not None else None
+    if skip is not None and skip == folder.resolve():
+        skip = None      # output written into the report folder itself: earlier outputs are skipped by content
     files = sorted(p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in (".xlsx", ".csv") and
                    not p.name.startswith("~$") and not (skip is not None and skip in p.resolve().parents))
     if not files:
@@ -192,8 +194,13 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
             oc.messages.append("No rows generated - see exceptions")
             log(f"{olm}: FAILED - no rows generated ({'; '.join(i.message for i in res.errors[:3])})")
         else:
-            write_workbook(res, cfg, out, info, cross)
-            oc.workbook = out
+            try:
+                write_workbook(res, cfg, out, info, cross)
+                oc.workbook = out
+            except OSError as exc:   # locked by Excel / OneDrive, no permission, disk full: report, go on
+                oc.messages.append(f"Workbook could not be written: {exc}")
+                log(f"{olm}: FAILED - the workbook could not be written to {out} ({exc}). Close it in Excel or "
+                    f"choose another output folder.")
         stem = (out.stem if res.rows else f"{olm}_FAILED")
         wl = review_worklist(res)
         oc.worklist = unique_path(out_dir / f"{stem}_review_worklist.csv")
@@ -230,7 +237,7 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
         with open(unique_path(out_dir / f"{stem}_run_manifest.json"), "w", encoding="utf-8") as fh:
             json.dump(manifest, fh, indent=2, default=str)
         c = res.counts
-        if res.rows:
+        if res.rows and oc.workbook is not None:
             log(f"{olm}: {'FINAL' if res.is_final else 'DRAFT (review required)'} - {len(res.rows)} rows: "
                 f"{c['CONFIRMED']} confirmed, {c['APPROVED']} approved, {c['PROVISIONAL']} provisional, "
                 f"{c['UNRESOLVED']} unresolved; {oc.errors} error(s). -> {oc.workbook.name}")
