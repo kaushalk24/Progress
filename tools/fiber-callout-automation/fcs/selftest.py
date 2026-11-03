@@ -34,7 +34,7 @@ def _c(n: int) -> str:
 class Region:
     """Synthetic network and its expected callouts."""
 
-    def __init__(self) -> None:
+    def __init__(self, all_reports: bool = False) -> None:
         x0, y0 = 2450000.0, 650000.0
         self.hub = _c(7001) + "G"
         self.pos: Dict[str, Tuple[float, float]] = {self.hub: (x0, y0)}
@@ -119,6 +119,8 @@ class Region:
         self.tap_cable_closure = _c(7013)      # terminal fed by a 24F cable (a 3rd cable segment -> junction)
         self.report_closures = [self.hub, _c(7002), _c(7003), _c(7005), _c(7006), _c(7011), _c(7013), _c(7014),
                                 _c(7021), _c(7023)]
+        if all_reports:          # a splice report for every splice of the OLM
+            self.report_closures = list(self.pos)
 
     def tail(self, s: str, t: Dict[str, Any]) -> Tuple[str, int]:
         """Cable from closure s to terminal t: a 4F pigtail, or a 24F cable at the tap-cable closure."""
@@ -403,8 +405,8 @@ def _write_guide_report(reg: Region, s: str, path: Path) -> None:
     wb.save(path)
 
 
-def build_region(root: Path) -> Tuple[Region, Dict[str, Any], Path, Path, Path]:
-    reg = Region()
+def build_region(root: Path, all_reports: bool = False) -> Tuple[Region, Dict[str, Any], Path, Path, Path]:
+    reg = Region(all_reports)
     root.mkdir(parents=True, exist_ok=True)
     dxf = root / f"{OLM}_design.dxf"
     geom = _write_drawing(reg, dxf)
@@ -436,7 +438,7 @@ def _dist_to_polyline(p: Vec2, pts: List[Vec2]) -> float:
 
 
 def run_selftest(verbose: bool = True, workdir: Optional[str] = None,
-                 log: Optional[Any] = None) -> Tuple[bool, str]:
+                 log: Optional[Any] = None, all_reports: bool = False) -> Tuple[bool, str]:
     from .engine import CalloutEngine, Reporter, RunConfig
     lines: List[str] = []
 
@@ -449,7 +451,7 @@ def run_selftest(verbose: bool = True, workdir: Optional[str] = None,
     tmp = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="fcs_selftest_"))
     checks: List[Tuple[str, bool, str]] = []
     try:
-        reg, geom, dxf, addr, zpath = build_region(tmp / "input")
+        reg, geom, dxf, addr, zpath = build_region(tmp / "input", all_reports)
         exp = reg.expected()
         out(f"Synthetic region {OLM}: {len(reg.pos)} closures, {len(reg.terminals)} terminals, {reg.total} fibers, "
             f"{len(reg.report_closures)} splice reports, 1x{PORTS} splitters; {len(exp)} expected callouts")
@@ -513,6 +515,12 @@ def run_selftest(verbose: bool = True, workdir: Optional[str] = None,
         layer = doc.layers.get("DES_FIBER_SPL")
         checks.append(("layer DES_FIBER_SPL = ACI 6 / Continuous", layer.dxf.color == 6 and layer.dxf.linetype.upper() == "CONTINUOUS", ""))
         checks.append(("output DXF passes audit", len(doc.audit().errors) == 0, ""))
+        if all_reports:
+            noise = [(i.category, i.obj, i.message[:90]) for i in res.issues.items if i.severity == "WARNING"
+                     and not (i.category == "Drop Closure" and "WKB-07022" in i.message)]
+            typo_seen = any(i.category == "Drop Closure" and "WKB-07022" in i.message for i in res.issues.items)
+            checks.append(("every splice reported: no false warnings, address-list typo caught by the pigtail check",
+                           not noise and typo_seen, str(noise)))
         roles = {r["Closure"]: r["Role"] for r in res.closures}
         want = {reg.hub: "Splitter hub", _c(7002): "Same cable continues", _c(7003): "Junction",
                 _c(7005): "Cable change", _c(7006): "Junction", _c(7011): "Same cable continues",

@@ -370,6 +370,8 @@ def main() -> int:
             RESULTS.append((fn.__name__, False, f"{exc}\n{traceback.format_exc()}"))
     ok_st, text = run_selftest(verbose=False)
     RESULTS.append(("synthetic region end-to-end self-test", ok_st, text if not ok_st else ""))
+    ok_all, text = run_selftest(verbose=False, all_reports=True)
+    RESULTS.append(("synthetic region with a splice report at every splice", ok_all, text if not ok_all else ""))
     failed = [r for r in RESULTS if not r[1]]
     for name, ok, detail in RESULTS:
         print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f"  -> {detail}" if not ok and detail else ""))

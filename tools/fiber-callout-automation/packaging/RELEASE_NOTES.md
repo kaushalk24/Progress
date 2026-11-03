@@ -1,4 +1,4 @@
-## FiberCallout Studio 2.6.0 (Windows x64)
+## FiberCallout Studio 2.7.0 (Windows x64)
 
 Single-file desktop app that generates the magenta **DES_FIBER_SPL** fiber-number and BFO callouts of an FTTx design
 from its splice reports and address lists.
@@ -7,6 +7,18 @@ from its splice reports and address lists.
 else. The exe isn't code-signed, so if Windows SmartScreen appears, click *More info -> Run anyway*.
 
 **Check the installation:** *Help -> Run self-test* (or `FiberCalloutStudio.exe --selftest`).
+
+What's new in 2.7 (regions with a splice report for every splice)
+- **Drop-closure check.** When the address list puts a terminal at a different splice case than the one whose
+  report holds the terminal's pigtail, a Drop Closure warning names both splice cases.
+- **Report coverage check.** One warning lists the splice cases that the network passes through but that have no
+  splice report. A missing report means a junction or cable change there gets no BFO.
+- **Pigtails are found in any direction.** A pigtail drawn backwards, or written as a 4F segment of another kind, is
+  now recognised. It is used to fill in or check the terminal's drop closure.
+- Closures tab: cable ends (nothing leaves) are shown as **Cable end** instead of "Same cable continues".
+- The self-test now also runs with a splice report for every splice. With every splice reported it requires zero
+  false warnings and checks that the address-list typo is caught by the pigtail check.
+- Credit River unchanged: 707 fiber-number and 482 BFO callouts; 706/708 and 467/476 texts identical to the reference.
 
 What's new in 2.6
 - **Splitter size per OLM.** Each OLM's splitter size is read from the 0001G splice case next to it (the splice case

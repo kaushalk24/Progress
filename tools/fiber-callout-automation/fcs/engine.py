@@ -1323,8 +1323,14 @@ def pigtail_splices(reports: List[SpliceReport], tap_names: Optional[Set[str]] =
     out: Dict[str, str] = {}
     for r in reports:
         for s in r.segments:
-            if s.direction == "out" and (s.kind.lower() == "pigtail") and " TO " in s.cable:
-                dest = re.sub(r"\s+FC\s*\d+\s*$", "", s.cable.split(" TO ", 1)[1]).strip()
+            ends = cable_ends(s.cable)
+            if not ends or r.name not in ends:
+                continue
+            small = s.count is not None and s.count <= DROP_MAX_FIBERS
+            if not (TAIL_KIND_RE.search(s.kind or "") or small):
+                continue
+            dest = ends[1] if ends[0] == r.name else ends[0]       # drawn either way
+            if tap_names is None or dest in tap_names:
                 out.setdefault(dest, r.name)
     return out
 
@@ -2785,6 +2791,8 @@ class CalloutPlanner:
                 role = "Junction"
             elif changes_here:
                 role = "Cable change"
+            elif not outgoing:
+                role = "Cable end"
             else:
                 role = "Same cable continues"
             if junction:
@@ -3320,6 +3328,25 @@ class CalloutEngine:
         return src, book, reports, model, planner, spec, scale
 
     def _cross_validate(self, book: AddressBook, reports: List[SpliceReport], model: DrawingModel, issues: IssueLog) -> None:
+        # the splice report holding a terminal's pigtail must be the address list's drop closure
+        pig = pigtail_splices(reports, book.tap_names)
+        seen: Set[Tuple[str, str]] = set()
+        for rec in book.records:
+            where = pig.get(rec.tap)
+            if where and rec.splice and where != rec.splice and (rec.tap, rec.splice) not in seen:
+                seen.add((rec.tap, rec.splice))
+                issues.add("WARNING", "Drop Closure", rec.tap,
+                           f"The address list puts terminal {rec.tap} at {rec.splice}, but its pigtail is in the splice "
+                           f"report of {where} - the fiber-number callout follows the address list")
+        # splice cases the network passes through (segment ends in the reports) that have no report themselves
+        have = {r.name for r in reports}
+        touched = {strip_kind(n) for r in reports for sg in r.segments for n in (sg.start or "", sg.end or "")}
+        lacking = sorted(n for n in touched if n in model.closures and n not in have)
+        if lacking:
+            issues.add("WARNING", "Missing Splice Report", f"{len(lacking)} splice case(s)",
+                       f"No splice report for {len(lacking)} splice case(s) on the network, e.g. "
+                       f"{', '.join(lacking[:12])}{' ...' if len(lacking) > 12 else ''}. A junction or cable change "
+                       f"there gets no BFO callout. If every splice of the OLM should have a report, add these.")
         for c in sorted({r.splice for r in book.records if r.splice}):
             if c not in model.closures:
                 recs = [r for r in book.records if r.splice == c]
