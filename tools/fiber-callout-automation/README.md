@@ -78,9 +78,15 @@ options:
 ## Verified
 
 * **Credit River (4 OLMs, 867 closures, 884 fibers)**, read directly from the original DWG:
-  * 707 fiber-number and 479 BFO callouts generated (reference 708 and 476).
-  * 705/708 fiber-number and 460/476 BFO texts are identical to the hand-drafted reference. Fiber-flow tracing
-    puts the BFOs of two backwards-digitized cable chains on the right side of each closure (previously 450).
+  * 707 fiber-number and 482 BFO callouts generated (reference 708 and 476).
+  * 706/708 fiber-number and 467/476 BFO texts are identical to the hand-drafted reference. Fiber-flow tracing
+    puts the BFOs of two backwards-digitized cable chains on the right side of each closure. 24F cables to MDU
+    terminals get their BFO, and the terminal's fiber number sits at the cable's end. Terminal names whose street
+    suffix differs between splice report and address list are matched.
+  * Every remaining difference is listed by splice case, with its cause, in
+    [docs/PHASE1_REVERSE_ENGINEERING.md §2.4](docs/PHASE1_REVERSE_ENGINEERING.md). The QA workbook's
+    *Existing vs Computed* sheet does the same for any region: splice case, cable segment and the fibers that
+    differ.
   * The 2 cable-change closures (NMK-05021: 144F ends, a new 144F starts; NMK-05138: 96F ends, 72F starts) get a
     BFO on the new cable. The reference has none there.
   * 698/706 arrows are on the same handhole and 448/452 on the same cable.

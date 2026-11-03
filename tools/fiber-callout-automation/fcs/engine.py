@@ -744,6 +744,18 @@ def derive_olm(sheet: str, filename: str) -> str:
     return toks[-1] if toks else stem
 
 
+STREET_SUFFIXES = {"AVE", "AV", "AVENUE", "WAY", "WY", "ST", "STR", "STREET", "RD", "ROAD", "LN", "LANE", "CT", "CRT",
+                   "COURT", "DR", "DRIVE", "BLVD", "BOULEVARD", "CIR", "CIRCLE", "TRL", "TRAIL", "PL", "PLACE", "PKWY",
+                   "PARKWAY", "TER", "TERRACE", "PATH", "PASS", "RUN", "LOOP", "XING", "CV", "COVE", "PT", "SQ"}
+
+
+def loose_street(name: str) -> str:
+    """'NMK-R-23636 LOGAN AVE' and 'NMK-R-23636 LOGAN WAY' -> 'NMK-R-23636 LOGAN' (street suffix ignored)."""
+    toks = norm_text(name).split(" ")
+    keep = [t for i, t in enumerate(toks) if i == 0 or t not in STREET_SUFFIXES]
+    return " ".join(keep)
+
+
 class AddressBook:
     def __init__(self) -> None:
         self.records: List[AddressRecord] = []
@@ -753,6 +765,9 @@ class AddressBook:
         self.by_tap: Dict[str, List[AddressRecord]] = defaultdict(list)
         self.by_number: Dict[Tuple[str, int], AddressRecord] = {}
         self.tap_names: Set[str] = set()
+        self.loose_taps: Dict[str, Set[str]] = defaultdict(set)
+        # (name in the splice report, name in the address list) -> fibers matched that way
+        self.loose_matches: Dict[Tuple[str, str], Set[int]] = defaultdict(set)
         self.ports_per_pon = 64
         self.ports_source = "default"
         self.olms: List[str] = []
@@ -891,6 +906,7 @@ class AddressBook:
             self.by_addr[rec.address].append(rec)
             self.by_tap[rec.tap].append(rec)
             self.tap_names.add(rec.tap)
+            self.loose_taps[loose_street(rec.tap)].add(rec.tap)
         for src, n in repeated.items():
             issues.add("INFO", "Address List", src, f"{n} row(s) repeat rows already read from another list - ignored")
         for src, n in no_splice.items():
@@ -946,6 +962,16 @@ class AddressBook:
             c = scope(self.by_addr.get(variant, []))
             if c:
                 return c
+        # last resort: the terminal name differs only in the street suffix ('LOGAN AVE' vs 'LOGAN WAY'). Accepted
+        # only when it points to exactly one terminal and its k-th fiber's address agrees the same way.
+        if tap_n and port_idx:
+            taps = self.loose_taps.get(loose_street(tap_n), set())
+            if len(taps) == 1:
+                real = next(iter(taps))
+                recs = scope(self.by_tap.get(real, []))
+                if 1 <= port_idx <= len(recs) and loose_street(recs[port_idx - 1].address) == loose_street(addr_n):
+                    self.loose_matches[(tap_n, real)].add(recs[port_idx - 1].number)
+                    return [recs[port_idx - 1]]
         return []
 
     def resolve(self, tap: str, address: str, olm_hint: Optional[str], port_idx: Optional[int] = None) -> Optional[AddressRecord]:
@@ -1936,6 +1962,29 @@ class DrawingModel:
                         stack.append(m)
         return None
 
+    def locate(self, p: Vec2) -> Tuple[str, str]:
+        """(nearest splice case, a description in words) of a point, e.g. an existing callout's arrow."""
+        best: Optional[Tuple[float, int]] = None
+        for pi, pc in enumerate(self.pieces):
+            if not (pc.a or pc.b) or len(pc.pts) < 2:
+                continue
+            d = min(seg_distance(p, a, b)[0] for a, b in zip(pc.pts, pc.pts[1:]))
+            if best is None or d < best[0]:
+                best = (d, pi)
+        near_name, near_d = "", float("inf")
+        for name, c in self.closures.items():
+            d = (c.pos - p).magnitude
+            if d < near_d:
+                near_name, near_d = name, d
+        if best is not None and best[0] <= 60.0 * self.scale:
+            pc = self.pieces[best[1]]
+            ends = [e for e in (pc.a, pc.b) if e]
+            if len(ends) == 2:
+                a, b = sorted(ends, key=lambda e: (self.closures[e].pos - p).magnitude)
+                return a, f"on the cable between {a} and {b}, near {a}"
+            return ends[0], f"on the cable from {ends[0]} that ends at no splice case (e.g. to a terminal)"
+        return near_name, f"{near_d:.0f} ft from splice case {near_name}" if near_name else ""
+
     def handhole_for(self, closure: Closure) -> Optional[Handhole]:
         h, _d = self.hh_index.nearest(closure.pos, self.spec.handhole_search_radius, lambda x: x.pos)
         return h
@@ -2005,6 +2054,7 @@ class CalloutPlan:
     handle: str = ""
     existing_match: str = ""
     existing_text: str = ""
+    where: str = ""                 # splice case / cable segment / terminal, in words (for finding it in CAD)
 
 
 @dataclass
@@ -2343,8 +2393,66 @@ class CalloutPlanner:
         self.plans.append(plan)
 
     # ------------------------------------------------------------ terminals
+    # ------------------------------------------------------------ cables that end at a terminal
+    def terminal_cables(self) -> Dict[str, Tuple[str, ReportSegment]]:
+        """terminal -> (closure, segment) for REAL cables (more than 12F, e.g. a 24F to an MDU terminal) that run
+        from a closure to a terminal. Such a terminal sits at the far end of the cable, not in the closure's
+        handhole, and the cable itself gets a BFO callout like any other cable."""
+        names = set(self.m.closures) | {r.name for r in self.reports}
+        out: Dict[str, Tuple[str, ReportSegment]] = {}
+        for r in self.reports:
+            for sg in r.segments:
+                far = self._far_ends(r.name, sg) & self.book.tap_names
+                if far and not self.is_tail(r.name, sg, names):
+                    out[sorted(far)[0]] = (r.name, sg)
+        return out
+
+    def _house_points(self, tap: str) -> List[Vec2]:
+        """Address points in the drawing (block attribute / text = house number) of a terminal's addresses."""
+        if not hasattr(self, "_house_idx"):
+            idx: Dict[str, List[Vec2]] = defaultdict(list)
+            for ins in self.m.src.inserts:
+                for v in ins.attribs.values():
+                    m = re.fullmatch(r"(?:[A-Z]{1,2}-)?(\d{2,6})", norm_text(v))
+                    if m:
+                        idx[m.group(1)].append(ins.pos)
+            for t in self.m.src.texts:
+                m = re.fullmatch(r"(?:[A-Z]{1,2}-)?(\d{2,6})", norm_text(t.text))
+                if m and t.dxftype in ("TEXT", "MTEXT"):
+                    idx[m.group(1)].append(t.pos)
+            self._house_idx = idx
+        nums = set(re.findall(r"(?:^|[\s-])(\d{2,6})(?=\s)", norm_text(tap) + " "))
+        for rec in self.book.by_tap.get(tap, []):
+            m = re.match(r"^(?:[A-Z]{1,2}-)?(\d+)", rec.address)
+            if m:
+                nums.add(m.group(1))
+        return [p for n in nums for p in self._house_idx.get(n, [])]
+
+    def terminal_end(self, closure: str, tap: str, cable: str) -> Optional[Tuple[int, Vec2]]:
+        """(piece, end point) of the drawn cable from `closure` to the terminal `tap`."""
+        cands: List[Tuple[int, Vec2]] = []
+        for pi, pc in enumerate(self.m.pieces):
+            if (pc.a == closure) == (pc.b == closure) or (pc.a and pc.b):
+                continue                                        # one end at this closure, the other at no closure
+            far = pc.pts[-1] if pc.a == closure else pc.pts[0]
+            if self.m.nearest_closure(far, 25.0 * self.m.scale):
+                continue                                        # a network cable whose end missed its closure
+            cands.append((pi, far))
+        if len(cands) <= 1:
+            return cands[0] if cands else None
+        pts = self._house_points(tap)
+        if pts:
+            d, best = min((min(abs(c[1] - p) for p in pts), c) for c in cands)
+            if d < 250.0 * self.m.scale:
+                return best
+        labels = self.labels.get(cable_id(cable), [])
+        if labels:
+            return min(cands, key=lambda c: min(abs(p - labels[0].pos) for p in self.m.pieces[c[0]].pts))
+        return None
+
     def plan_terminals(self) -> None:
         spec = self.spec
+        self._tcables = self.terminal_cables()
         by_closure: Dict[str, List[Terminal]] = defaultdict(list)
         for _k, t in sorted(self.book.terminals.items(), key=lambda kv: (kv[0][0], min(kv[1].numbers))):
             by_closure[t.splice].append(t)
@@ -2372,7 +2480,17 @@ class CalloutPlanner:
                                                       notes="Drop closure not found in drawing" if t.splice else
                                                       "Drop splice closure unknown"))
                         continue
-                    plan = self._place_terminal(f"T{uid:05d}", t, txt, closure, hh, nums, calc, srcs)
+                    at = None
+                    tc = self._tcables.get(t.tap)
+                    if tc and tc[0] == closure_name:
+                        te = self.terminal_end(closure_name, t.tap, tc[1].cable)
+                        if te is not None:
+                            at = (te[1], f"terminal end of {tc[1].cable}")
+                        else:
+                            self.issues.add("WARNING", "Placement", t.tap,
+                                            f"Terminal is fed by cable {tc[1].cable} but that cable's end was not found "
+                                            f"in the drawing; callout placed at closure {closure_name}")
+                    plan = self._place_terminal(f"T{uid:05d}", t, txt, closure, hh, nums, calc, srcs, at)
                     self._register(plan)
                 if closure is None and not t.splice:
                     self.issues.add("ERROR", "Missing Data", t.tap,
@@ -2380,14 +2498,22 @@ class CalloutPlanner:
                     row["Status"] = "NOT PLACED - drop closure unknown"
                 elif closure is None:           # reported once per closure by the cross-validation
                     row["Status"] = "NOT PLACED - closure missing"
+                elif t.tap in self._tcables and self._tcables[t.tap][0] == closure_name:
+                    row["Status"] = f"PLACED at the terminal end of {self._tcables[t.tap][1].cable}"
                 else:
                     row["Status"] = "PLACED" if hh else "PLACED on closure symbol (no handhole found)"
                 self.terminal_rows.append(row)
 
     def _place_terminal(self, uid: str, t: Terminal, text: str, closure: Closure, hh: Optional[Handhole],
-                        nums: List[int], calc: str, srcs: str) -> CalloutPlan:
+                        nums: List[int], calc: str, srcs: str,
+                        at: Optional[Tuple[Vec2, str]] = None) -> CalloutPlan:
         spec = self.spec
-        if hh is not None:
+        if at is not None:                                      # terminal at the end of its own cable
+            r = 1.5 * self.m.scale
+            p0 = at[0]
+            corners = [p0 + Vec2(-r, -r), p0 + Vec2(r, -r), p0 + Vec2(r, r), p0 + Vec2(-r, r)]
+            anchor, note = at[1], ""
+        elif hh is not None:
             corners = hh.corners
             anchor = f"{hh.block} {hh.handle}"
             note = ""
@@ -2417,8 +2543,10 @@ class CalloutPlanner:
                     if best is None or sc < best[0]:
                         best = (sc, tip, last, dog)
         _, tip, last, dog = best  # type: ignore[misc]
+        where = (f"terminal {t.tap}, at the end of its cable from splice case {closure.name}" if at is not None
+                 else f"splice case {closure.name} - terminal {t.tap}")
         return CalloutPlan(uid, "TERMINAL", t.olm, text, spec.terminal_layer, tip, last, dog, anchor, closure.name,
-                           nums, f"Terminal {t.tap}: " + calc, srcs, notes=note)
+                           nums, f"Terminal {t.tap}: " + calc, srcs, notes=note, where=where)
 
     # ------------------------------------------------------------ cables (BFO)
     def _report_olm(self, r: SpliceReport) -> str:
@@ -2505,12 +2633,18 @@ class CalloutPlanner:
                     if (name, sg.cable, sg.seg) in done:
                         continue
                     done.add((name, sg.cable, sg.seg))
-                    if self.is_tail(name, sg, closure_names) or self._far_ends(name, sg) & self.book.tap_names:
+                    if self.is_tail(name, sg, closure_names):
                         continue
                     st, en = ends.get(key, (None, None))
                     end = self.far_node(name, sg.start or st, sg.end or en)
                     dest = re.sub(r"\s+FC\s*\d+\s*$", "", sg.cable.split(" TO ", 1)[1]).strip() if " TO " in sg.cable else ""
-                    piece = self._segment_piece(name, end, dest)
+                    to_tap = sorted(self._far_ends(name, sg) & self.book.tap_names)
+                    if to_tap:                                  # a real cable (e.g. 24F) to an MDU terminal
+                        te = self.terminal_end(name, to_tap[0], sg.cable)
+                        piece = te[0] if te else None
+                        end = to_tap[0]
+                    else:
+                        piece = self._segment_piece(name, end, dest)
                     new_cable = self.is_new_cable(sg, in_segs, in_ids)
                     outgoing.append(f"{sg.cable} seg {sg.seg}")
                     live: List[int] = []
@@ -2613,14 +2747,16 @@ class CalloutPlanner:
                 f"{fmt_numbers(info.live, 'exact', 0)}; fiber count {info.count}; text = '{spec.cable_prefix} <count>' + "
                 f"{'min-max' if spec.cable_range_mode == 'span' else 'runs'}")
         base = dict(uid=uid, kind="CABLE", olm=info.olm, text=text, layer=spec.cable_layer, closure=info.closure,
-                    numbers=info.live, calculation=calc, sources=info.report_file)
+                    numbers=info.live, calculation=calc, sources=info.report_file,
+                    where=f"splice case {info.closure} - on {info.cable} (segment {info.seg}) toward "
+                          f"{info.end or 'the next closure'}")
         if closure is None:
             return CalloutPlan(tip=Vec2(), last=Vec2(), dog=1, anchor="-", status="FAILED",
                                notes="Closure not in drawing", **base)
         note = ""
         if pi is not None:
             pts = self.m.piece_from(pi, info.closure)
-            desc = f"cable {self.m.pieces[pi].handle} toward {self.m.other_end(pi, info.closure)}"
+            desc = f"cable {self.m.pieces[pi].handle} toward {self.m.other_end(pi, info.closure) or info.end}"
         elif info.end and info.end in self.m.closures:
             pts = [closure.pos, self.m.closures[info.end].pos]
             desc = f"straight line toward {info.end}"
@@ -2683,12 +2819,44 @@ class CalloutPlanner:
         return dict(counts)
 
 
-def compare_existing(plans: List[CalloutPlan], existing: List[GeoText], radius: float) -> List[Dict[str, Any]]:
+def callout_numbers(text: str) -> Tuple[Optional[int], Set[int]]:
+    """(BFO fiber count or None, fiber numbers) of a callout text: 'BFO 24\\P131-133' -> (24, {131, 132, 133})."""
+    t = text.replace("\n", "\\P")
+    count = None
+    m = re.match(r"\s*[A-Z]+\s*(\d+)\s*\\P", t)
+    if m:
+        count, t = int(m.group(1)), t[m.end():]
+    nums: Set[int] = set()
+    for a, b in re.findall(r"(\d+)(?:\s*-\s*(\d+))?", t):
+        lo, hi = int(a), int(b or a)
+        if hi - lo < 2000:
+            nums.update(range(lo, hi + 1))
+    return count, nums
+
+
+def describe_difference(computed: str, existing: str) -> str:
+    """'only in the drawing: 131' / 'computed only: 39' / 'fiber count: drawing 24, computed 48'."""
+    c_cnt, c_nums = callout_numbers(computed)
+    e_cnt, e_nums = callout_numbers(existing)
+    parts = []
+    if c_cnt != e_cnt and c_cnt is not None and e_cnt is not None:
+        parts.append(f"fiber count: drawing {e_cnt}, computed {c_cnt}")
+    if e_nums - c_nums:
+        parts.append("only in the drawing: " + fmt_numbers(sorted(e_nums - c_nums), "exact", 0))
+    if c_nums - e_nums:
+        parts.append("computed only: " + fmt_numbers(sorted(c_nums - e_nums), "exact", 0))
+    return "; ".join(parts)
+
+
+def compare_existing(plans: List[CalloutPlan], existing: List[GeoText], radius: float,
+                     locate: Optional[Callable[[Vec2], Tuple[str, str]]] = None) -> List[Dict[str, Any]]:
+    """Computed callouts vs the fiber callouts already in the drawing, with splice case names (not coordinates)."""
     idx = GridIndex(100.0)
     for i, ex in enumerate(existing):
         idx.insert((ex.tip.x, ex.tip.y, ex.tip.x, ex.tip.y), i)
     used: Set[int] = set()
     rows: List[Dict[str, Any]] = []
+    pending: List[Tuple[CalloutPlan, List[Tuple[float, int]]]] = []
     for p in plans:
         if p.status == "FAILED":
             continue
@@ -2706,21 +2874,39 @@ def compare_existing(plans: List[CalloutPlan], existing: List[GeoText], radius: 
             strict = existing[i].text.replace("\n", "\\P") == p.text
             p.existing_match = "MATCH" if strict else "MATCH (formatting differs)"
             p.existing_text = existing[i].text
-            rows.append(dict(Callout=p.uid, Kind=p.kind, Computed=p.text.replace("\\P", " / "),
-                             Existing=existing[i].text.replace("\\P", " / ").replace("\n", " / "),
-                             ExistingHandle=existing[i].handle, Distance=round(d, 2), Result=p.existing_match))
+            rows.append({"Splice case": p.closure, "Where": p.where, "Kind": p.kind,
+                         "Computed": p.text.replace("\\P", " / "),
+                         "Existing": existing[i].text.replace("\\P", " / ").replace("\n", " / "),
+                         "Result": p.existing_match, "Difference": "", "Distance": round(d, 2),
+                         "Callout": p.uid, "ExistingHandle": existing[i].handle})
         else:
-            p.existing_match = "NEW"
-            near = sorted(cands)[:1]
-            rows.append(dict(Callout=p.uid, Kind=p.kind, Computed=p.text.replace("\\P", " / "),
-                             Existing=existing[near[0][1]].text.replace("\\P", " / ").replace("\n", " / ") if near else "",
-                             ExistingHandle=existing[near[0][1]].handle if near else "",
-                             Distance=round(near[0][0], 2) if near else None,
-                             Result="TEXT DIFFERS / NOT FOUND" if near else "NOT IN DRAWING"))
+            pending.append((p, cands))
+    # unmatched computed callouts: pair with the nearest unused existing callout of the same kind to show the change
+    for p, cands in pending:
+        same_kind = [(d, i) for d, i in sorted(cands) if i not in used
+                     and existing[i].text.upper().startswith("BFO") == (p.kind == "CABLE")]
+        p.existing_match = "NEW"
+        if same_kind:
+            d, i = same_kind[0]
+            used.add(i)
+            ex_txt = existing[i].text
+            rows.append({"Splice case": p.closure, "Where": p.where, "Kind": p.kind,
+                         "Computed": p.text.replace("\\P", " / "),
+                         "Existing": ex_txt.replace("\\P", " / ").replace("\n", " / "), "Result": "TEXT DIFFERS",
+                         "Difference": describe_difference(p.text, ex_txt), "Distance": round(d, 2),
+                         "Callout": p.uid, "ExistingHandle": existing[i].handle})
+        else:
+            rows.append({"Splice case": p.closure, "Where": p.where, "Kind": p.kind,
+                         "Computed": p.text.replace("\\P", " / "), "Existing": "", "Result": "NOT IN DRAWING",
+                         "Difference": "", "Distance": None, "Callout": p.uid, "ExistingHandle": ""})
     for i, ex in enumerate(existing):
         if i not in used:
-            rows.append(dict(Callout="", Kind="", Computed="", Existing=ex.text.replace("\\P", " / ").replace("\n", " / "),
-                             ExistingHandle=ex.handle, Distance=None, Result="EXISTING ONLY (no computed counterpart)"))
+            case, where = locate(ex.tip) if locate else ("", "")
+            rows.append({"Splice case": case, "Where": where,
+                         "Kind": "CABLE" if ex.text.upper().startswith("BFO") else "TERMINAL", "Computed": "",
+                         "Existing": ex.text.replace("\\P", " / ").replace("\n", " / "),
+                         "Result": "EXISTING ONLY (no computed counterpart)", "Difference": "", "Distance": None,
+                         "Callout": "", "ExistingHandle": ex.handle})
     return rows
 
 
@@ -3056,6 +3242,18 @@ class CalloutEngine:
         self.rep.progress(52, "Planning fiber-number callouts")
         planner.plan_terminals()
         planner.plan_cables()
+        for (said, real), nums in sorted(book.loose_matches.items()):
+            issues.add("WARNING", "Name Mismatch", said,
+                       f"The splice reports write terminal '{said}', the address list '{real}' (street suffix differs) - "
+                       f"fiber(s) {fmt_numbers(sorted(nums), 'exact', 0)} matched by house number and street name; "
+                       f"please correct the data")
+        report_names = {r.name for r in reports}
+        for name in sorted(model.closures):
+            links = len(model.adj.get(name, []))
+            if links >= 3 and name not in report_names:
+                issues.add("WARNING", "Missing Splice Report", name,
+                           f"{links} cables meet at this splice case in the drawing but no splice report was provided - "
+                           f"its BFO callouts cannot be computed (add the splice report of {name})")
         return src, book, reports, model, planner, spec, scale
 
     def _cross_validate(self, book: AddressBook, reports: List[SpliceReport], model: DrawingModel, issues: IssueLog) -> None:
@@ -3123,7 +3321,7 @@ class CalloutEngine:
                            "in the callouts DXF to the design's value first.")
             placement = planner.placement_qa()
             self.rep.progress(82, "Comparing with existing callouts")
-            existing_rows = compare_existing(planner.plans, model.existing, 40.0 * spec.text_height) if model.existing else []
+            existing_rows = compare_existing(planner.plans, model.existing, 40.0 * spec.text_height, model.locate) if model.existing else []
             if model.existing:
                 ok = sum(1 for p in planner.plans if p.existing_match.startswith("MATCH"))
                 self.rep.log(f"Existing fiber callouts in the drawing: {len(model.existing)}; "

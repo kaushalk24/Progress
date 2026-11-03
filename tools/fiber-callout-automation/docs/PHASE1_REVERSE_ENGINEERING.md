@@ -81,6 +81,9 @@ For every splice report (closure S) and every cable segment LEAVING S by fiber f
   from its splitter port at the hub (or back from its drop), cable by cable. Along one cable the upstream side is
   the segment nearer to where the fiber entered it, which also works across closures that have no splice report.
   The segment a closure's fibers arrive on is its feed. This lifts the BFO match from 450 to 460 of 476.
+* **Cables to MDU terminals.** A real cable (more than 12F, e.g. a 24F) from a closure to a terminal is labelled like
+  any cable, e.g. `BFO 24 / 91-94` at NMK-03132. The terminal sits at the far end of that cable (330 ft away at
+  NMK-03132), and its fiber-number callout is drawn there. 4F pigtails stay unlabelled.
 
 * **Junctions and cable changes.** A BFO label is drafted where the cable branches (e.g. 72F in, 24F + 48F out; or
   a 144F passing through with a 24F branch). Per the design standard, it is also drafted where a different cable
@@ -112,13 +115,56 @@ For every splice report (closure S) and every cable segment LEAVING S by fiber f
 * Labelled vs. unlabelled segments in the DWG: 451 of 467 segments leaving a closure **with** a splice report carry
   a BFO label; 121 of 129 segments leaving closures **without** a report carry none → the drafter generated BFO labels
   from the splice reports.
-* Verification: **460 / 476** BFO callouts are reproduced character-for-character at the same cable segment.
+* Verification: **467 / 476** BFO callouts are reproduced character-for-character at the same cable segment.
   The 5-segment FC096 chain that earlier looked "shifted by one segment" was drawn backwards. Fiber-flow tracing
-  now reproduces it. The 16 others are reference-vs-report discrepancies:
-  * range ends that differ by one or a few fibers, where the DWG pre-dates the current reports
-  * `BFO 24` in the reference where the report says FC048
-  * single-fiber branches the reference doesn't label
-  All are listed in the QA workbook (`Existing vs Computed`).
+  now reproduces it. 24F cables to MDU terminals are labelled like any cable: NMK-03132, NMK-04003 and NMK-05162.
+  The 9 others are listed in §2.4.
+
+### 2.4 Remaining differences in Credit River, by splice case
+
+The reference has 9 BFO and 2 fiber-number callouts the tool doesn't reproduce exactly. The tool has 10 BFOs the
+reference lacks. Each was checked against the splice reports, the address lists and the DWG cable labels.
+
+**Reference drawing out of date or drafted wrong** (the splice reports and address list support the tool):
+
+| Splice case | Reference | Tool | Cause |
+|---|---|---|---|
+| NMK-02072 | `BFO 24 / 131-133` | `BFO 24 / 132-133` | Fiber 131 (9096 230TH ST E) drops at NMK-02072 itself, so it can't be on the cable leaving NMK-02072. |
+| NMK-02134 | `BFO 96 / 3-38` | `BFO 96 / 3-39` | Fiber 39 (9240 245TH ST E) drops at NMK-02135, the next splice case on this 96F. |
+| NMK-04075 | `BFO 48 / 161-166` | `BFO 48 / 161-167` | Fiber 167 (24599 HARVEST MEADOWS CT) drops at NMK-04076, the next splice case on this 48F. |
+| NMK-03024 | `BFO 24 / 109` | `BFO 24 / 109-110` | Terminal NMK-R-22521 IRONWOOD RD at NMK-03026G holds fibers 109 and 110 (22529 and 22521 IRONWOOD RD). |
+| NMK-03026G (fiber number) | `109` | `109-110` | Same terminal; the reference misses fiber 110. |
+| NMK-03153 | `BFO 24 / 21-22` | `BFO 48 / 21-22` | Cable NMK-03153 TO NMK-05031 is 48F in the splice report and in the DWG cable label (TTL 48). |
+| NMK-03135 (drawn past NMK-03213) | `BFO 24 / 75-79` | `BFO 24 / 75-80` | The 24F NMK-03135 TO NMK-03218G starts at junction NMK-03135 carrying 75-80; fiber 80 drops at NMK-03213. The reference labels the segment after NMK-03213 instead of the branch's first segment. |
+
+**Reference has a BFO, but there is no splice report for that splice case**. The tool warns about these as Missing
+Splice Report: 3 cables meet in the drawing:
+
+| Splice case | Reference | Why the tool can't compute it |
+|---|---|---|
+| NMK-03163 | `BFO 24 / 13` and `BFO 24 / 5-12` | A new 24F NMK-03163 TO NMK-03169G starts here; NMK-03163 has no splice report in the inputs. |
+| NMK-05047 (label near NMK-05048G) | `BFO 24 / 3` | A new 24F NMK-05047 TO NMK-05048G starts here; NMK-05047 has no splice report in the inputs. |
+
+**Input data errors:**
+
+| Splice case | What | Effect |
+|---|---|---|
+| NMK-02133 | The address list writes the drop closure of NMK-R-9205 245TH ST E (fiber 52) as `NKM-02133`. | Fiber-number `52` can't be placed; reported as an error with "did you mean NMK-02133". |
+| NMK-04217, NMK-04099, NMK-04100, NMK-04104 | The splice reports write terminals NMK-R-23636 / 23644 / 23650 **LOGAN AVE**, the address list **LOGAN WAY** (fibers 200-203). | The tool now matches them and warns (Name Mismatch). The BFOs read 200-215 / 200-213 / 200-211 / 200-206 as in the reference. |
+| NMK-05003 vs NMK-05002 | The address list puts 9405 267TH ST W (fiber 109) at NMK-05003. The reference draws `109` at NMK-05002, which is nearer the house (224 vs 359 ft). Neither splice case has a splice report. | The tool follows the address list. Check the address list's drop splice for 9405 267TH ST W. |
+
+**BFOs the reference omits.** The reference itself labels the continuing cable at 200 of 211 junctions and
+single-fiber branches at 121 of 125, so these are drafting omissions:
+
+| Splice case | Tool callout(s) | Reference |
+|---|---|---|
+| NMK-02125 | `BFO 144 / 3-80` (continuing 144F) | only the branch `BFO 24 / 81` |
+| NMK-02202 | `BFO 24 / 83-84` (continuing 24F) | only the branch `BFO 24 / 85` |
+| NMK-03104 | `BFO 48 / 206-214` (continuing 48F) | only the branch `BFO 24 / 215-219` |
+| NMK-03075 | `BFO 24 / 178` and `BFO 24 / 179` (one fiber each way) | none |
+| NMK-05195 | `BFO 24 / 168` and `BFO 24 / 169` (one fiber each way) | none |
+| NMK-05021 | `BFO 144 / 3-74` (a 144F ends, a different 144F starts) | none: cable-change rule |
+| NMK-05138 | `BFO 72 / 110-160` (96F ends, a 72F starts) | none: cable-change rule |
 
 ---
 
@@ -198,10 +244,10 @@ the same figures are obtained from a DXF rebuild of the network:
 
 | Check | Result |
 |---|---|
-| Callouts generated | 707 terminal + 479 BFO = 1,186 (reference 708 + 476 = 1,184; per-callout differences in §2.2 / §2.3 and the QA workbook) |
-| Terminal callout text identical to reference | 705 / 708 (2 drafting errors in the reference + 1 address-list closure typo `NKM-02133`) |
+| Callouts generated | 707 terminal + 482 BFO = 1,189 (reference 708 + 476 = 1,184; every difference in §2.4) |
+| Terminal callout text identical to reference | 706 / 708 (1 drafting error `109` + 1 address-list closure typo `NKM-02133`) |
 | Terminal callouts on the same handhole as reference | 698 / 706 |
-| BFO text identical to reference | 460 / 476 (reference-vs-report discrepancies, see §2.3) |
+| BFO text identical to reference | 467 / 476 (see §2.4) |
 | BFO callouts on the same cable polyline | 448 / 452 |
 | Entity / style / layer properties | 100 % per §4; text-location rule 0 violations |
 | Placement QA (tool vs. reference, same metric) | 1,184 clean vs. 1,184 clean (0 text/text, 0 text/symbol overlaps, 0 leader crossings) |

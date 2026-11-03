@@ -154,8 +154,13 @@ class Region:
                     runs[-1].append(n)
                 else:
                     runs.append([n])
+            fed = self.tail(t["closure"], t)[1] > 4                # terminal at the end of its own 24F cable
             for r in runs:
-                exp.append(dict(kind="TERMINAL", text=str(r[0]) if len(r) == 1 else f"{r[0]}-{r[-1]}", closure=t["closure"]))
+                exp.append(dict(kind="TERMINAL", text=str(r[0]) if len(r) == 1 else f"{r[0]}-{r[-1]}",
+                                closure=t["closure"], at_end=t["tap"] if fed else None))
+            if fed and t["closure"] in self.report_closures:          # the 24F cable itself gets a BFO
+                rng = str(min(nums)) if len(nums) == 1 else f"{min(nums)}-{max(nums)}"
+                exp.append(dict(kind="CABLE", text=f"BFO 24\\P{rng}", closure=t["closure"], next=t["tap"]))
         for s in self.report_closures:
             for ch, cab, _k in self.children[s]:
                 if not self.bfo_on(s, cab):
@@ -207,12 +212,22 @@ def _write_drawing(reg: Region, path: Path) -> Dict[str, Any]:
                       for px, py in ((-5, -7), (5, -7), (5, 7), (-5, 7))]
         # noise: a far-away structure of the same block that must not be chosen
         msp.add_blockref("HH_2436", (x + 160.0, y - 120.0), dxfattribs={"layer": "UG_STRUCTURES"})
+    tcable: Dict[Tuple[str, str], List[Vec2]] = {}
+    tend: Dict[str, List[Vec2]] = {}
     for t in reg.terminals:
         x, y = reg.pos[t["closure"]]
         k = sum(1 for u in reg.terminals if u["closure"] == t["closure"] and reg.terminals.index(u) < reg.terminals.index(t))
-        tx, ty = x - 4.0 + 9.0 * k, y + 10.0
-        msp.add_blockref("TERM_MST", (tx, ty), dxfattribs={"layer": "FO_TERMINAL"})
-        msp.add_lwpolyline([(x, y), (tx, ty)], dxfattribs={"layer": "FO_PIGTAIL"})
+        if reg.tail(t["closure"], t)[1] > 4:          # MDU terminal 160 ft away at the end of a 24F cable
+            tx, ty = x + 70.0 + 9.0 * k, y + 145.0
+            route = [(x, y), (x + 35.0, y + 80.0), (tx, ty)]
+            msp.add_lwpolyline(route, dxfattribs={"layer": "FO_CABLE_UG"})
+            tcable[(t["closure"], t["tap"])] = [Vec2(p) for p in route]
+            tend[t["tap"]] = [Vec2(tx - 1.5, ty - 1.5), Vec2(tx + 1.5, ty - 1.5), Vec2(tx + 1.5, ty + 1.5), Vec2(tx - 1.5, ty + 1.5)]
+            msp.add_blockref("TERM_MST", (tx, ty), dxfattribs={"layer": "FO_TERMINAL"})
+        else:
+            tx, ty = x - 4.0 + 9.0 * k, y + 10.0
+            msp.add_blockref("TERM_MST", (tx, ty), dxfattribs={"layer": "FO_TERMINAL"})
+            msp.add_lwpolyline([(x, y), (tx, ty)], dxfattribs={"layer": "FO_PIGTAIL"})
         for j, (_n, address) in enumerate(t["fibers"]):
             ap = msp.add_blockref("ADDR_PT", (tx + 40 + 15 * j, ty + 60), dxfattribs={"layer": "ADDRESS_PTS"})
             ap.add_attrib("HOUSE_NO", address.split(" ")[0], insert=(tx + 42 + 15 * j, ty + 60), dxfattribs={"height": 2.0})
@@ -244,7 +259,8 @@ def _write_drawing(reg: Region, path: Path) -> Dict[str, Any]:
         msp.add_lwpolyline([(a[0], a[1] - 40), (b[0], b[1] - 40)], dxfattribs={"layer": "ROADS"})
         msp.add_text(street, height=8.0, dxfattribs={"layer": "ROADS", "insert": ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 - 55)})
     doc.saveas(path)
-    return dict(hh=hh_geom, seg=seg_geom)
+    seg_geom.update(tcable)
+    return dict(hh=hh_geom, seg=seg_geom, tend=tend)
 
 
 def _write_address_list(reg: Region, path: Path) -> None:
@@ -455,7 +471,7 @@ def run_selftest(verbose: bool = True, workdir: Optional[str] = None,
             for i in cands:
                 tip = gen[i]["tip"]
                 if e["kind"] == "TERMINAL":
-                    corners = geom["hh"][e["closure"]]
+                    corners = geom["tend"][e["at_end"]] if e.get("at_end") else geom["hh"][e["closure"]]
                     on = _dist_to_polyline(tip, corners + [corners[0]]) < 1e-6
                 else:
                     on = _dist_to_polyline(tip, geom["seg"][(e["closure"], e["next"])]) < 1e-6

@@ -1,4 +1,4 @@
-## FiberCallout Studio 2.4.0 (Windows x64)
+## FiberCallout Studio 2.5.0 (Windows x64)
 
 Single-file desktop app that generates the magenta **DES_FIBER_SPL** fiber-number and BFO callouts of an FTTx design
 from its splice reports and address lists.
@@ -7,6 +7,23 @@ from its splice reports and address lists.
 else. The exe isn't code-signed, so if Windows SmartScreen appears, click *More info -> Run anyway*.
 
 **Check the installation:** *Help -> Run self-test* (or `FiberCalloutStudio.exe --selftest`).
+
+What's new in 2.5
+- **Cables to MDU terminals.** A real cable (more than 12F, e.g. a 24F) from a splice case to a terminal now gets
+  its BFO callout. The terminal's fiber-number callout is drawn at the end of that cable, where the terminal is,
+  instead of at the splice case. On Credit River this reproduces `BFO 24 / 91-94` (NMK-03132),
+  `BFO 24 / 195-198` (NMK-04003), `BFO 24 / 124-127` (NMK-05162) and the `91-94` fiber number 330 ft away at
+  terminal NMK-R-C-11120.
+- **Street-suffix mismatches are matched.** When the splice reports and the address list name a terminal with a
+  different street suffix (NMK-R-23636 LOGAN AVE vs LOGAN WAY), the fiber is matched by house number and street
+  name, and a Name Mismatch warning names both spellings. Before this fix, fibers 200-203 were missing from four
+  BFO ranges.
+- **Missing splice reports are named.** A splice case where 3 or more cables meet in the drawing but that has no
+  splice report gets a warning.
+- **Existing vs Computed** (QA sheet and Results tab) now says where each difference is: splice case, cable and
+  segment in words, plus which fibers differ, or that the fiber count differs. No coordinates are needed.
+- Credit River: 467 of 476 BFO and 706 of 708 fiber-number texts identical to the reference. Every remaining
+  difference is explained by splice case in docs/PHASE1_REVERSE_ENGINEERING.md §2.4.
 
 What's new in 2.4
 - **Cable changes of the same size.** When two different cables of the same size meet at a closure (96F in, another

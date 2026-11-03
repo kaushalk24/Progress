@@ -203,6 +203,26 @@ def test_drawing_cable_labels() -> None:
     check("cable name ends", E.cable_ends("DMI-15001G TO DMI-15050 FC096") == ("DMI-15001G", "DMI-15050"))
 
 
+def test_name_mismatch_and_differences() -> None:
+    book = E.AddressBook()
+    for n, addr in ((200, "23636 LOGAN WAY"), (201, "23600 LOGAN WAY")):
+        rec = E.AddressRecord(olm="R04", pon=4, port=n - 192, number=n, address=addr, tap="NMK-R-23636 LOGAN WAY",
+                              splice="NMK-04109G", fiber=None, cable="", source="x", row=n)
+        book.records.append(rec)
+        book.by_tap[rec.tap].append(rec)
+        book.by_tap_addr[(rec.tap, rec.address)].append(rec)
+        book.by_addr[rec.address].append(rec)
+        book.tap_names.add(rec.tap)
+        book.loose_taps[E.loose_street(rec.tap)].add(rec.tap)
+    got = book.resolve_candidates("NMK-R-23636 LOGAN AVE", "23636 LOGAN AVE", None, 1)
+    check("terminal name with another street suffix (AVE vs WAY)", [r.number for r in got] == [200], str(got))
+    check("suffix match needs the same house + street", not book.resolve_candidates("NMK-R-23636 OAK AVE", "23636 OAK AVE", None, 1))
+    check("callout difference: range", E.describe_difference("BFO 24\\P132-133", "BFO 24\\P131-133") == "only in the drawing: 131")
+    check("callout difference: fiber count", E.describe_difference("BFO 48\\P21-22", "BFO 24\\P21-22")
+          == "fiber count: drawing 24, computed 48")
+    check("callout difference: fiber number", E.describe_difference("109-110", "109") == "computed only: 110")
+
+
 def test_text_tables() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         def write(name: str, data: bytes) -> Path:
@@ -296,7 +316,7 @@ def test_output_folder_error() -> None:
 
 def main() -> int:
     for fn in (test_numbering_helpers, test_callout_text_rules, test_address_rules, test_header_mapping,
-               test_splitter_detection, test_report_parsers, test_decorated_segment_ends, test_junction_rule, test_drawing_cable_labels, test_text_tables, test_units, test_input_signature, test_output_folder_error):
+               test_splitter_detection, test_report_parsers, test_decorated_segment_ends, test_junction_rule, test_drawing_cable_labels, test_name_mismatch_and_differences, test_text_tables, test_units, test_input_signature, test_output_folder_error):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001
