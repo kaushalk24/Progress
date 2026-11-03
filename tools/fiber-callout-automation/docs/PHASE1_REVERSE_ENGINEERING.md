@@ -67,18 +67,30 @@ N = (PON NAME − 1) × 64 + PON PORT            (numbered independently per OLM
 ### 2.3 Cable ("BFO") callouts — Splice Report driven
 
 ```
-For every splice report (closure S) that is a cable JUNCTION (3 or more cable segments meet at S;
-pigtails / terminal tails do not count) and every cable segment whose Start Splice = S
-(non-pigtail, not a cable ending at a terminal) and that carries ≥ 1 live fiber:
+For every splice report (closure S) and every cable segment LEAVING S by fiber flow
+(non-pigtail, not a cable ending at a terminal) that carries ≥ 1 live fiber, when
+  S is a JUNCTION (3 or more cable segments meet at S; pigtails / terminal tails do not count), or
+  the segment is a DIFFERENT CABLE from the one arriving at S (cable change, e.g. 96F in, 72F out):
     text = "BFO " + <segment fiber count> + "\P" + <min N> + "-" + <max N>
 ```
 
-* **Junctions only.** A BFO label is drafted where the cable branches (e.g. 72F in, 24F + 48F out; or a 144F passing
-  through with a 24F branch). A pass-through closure (one cable in, one out, plus pigtails to terminals) gets no BFO
-  label, even when the cable tapers (NMK-05138: 96F in, 72F out). In Credit River, 234 of the 236 closures with a
-  splice report are junctions. The 2 pass-through closures (NMK-05021, NMK-05138) are the only ones whose out
-  segments carry no BFO label in the reference. A real 24F cable to a terminal (NMK-03132, NMK-04003) counts as a
-  third segment, and those closures are labelled.
+* **Fiber flow, not digitizing direction.** `Start Splice` / `End Splice` follow the direction a cable was drawn.
+  Two chains in Credit River are drawn backwards: the 96F NMK-02132 → NMK-02140 and the 48F NMK-04136 →
+  NMK-03153. The reference labels them by fiber flow (for example at NMK-02140: `BFO 72 / 31` and `BFO 48 / 3-30` on
+  the cables the fibers leave on, nothing on the 96F feed). The tool traces every live fiber through the reports,
+  from its splitter port at the hub (or back from its drop), cable by cable. Along one cable the upstream side is
+  the segment nearer to where the fiber entered it, which also works across closures that have no splice report.
+  The segment a closure's fibers arrive on is its feed. This lifts the BFO match from 450 to 460 of 476.
+
+* **Junctions and cable changes.** A BFO label is drafted where the cable branches (e.g. 72F in, 24F + 48F out; or
+  a 144F passing through with a 24F branch). Per the design standard, it is also drafted where a different cable
+  starts, even with only 2 cable segments. NMK-05021 (a 144F ends, a new 144F starts) and NMK-05138 (96F ends, 72F
+  starts) get a BFO on the new cable, which the Credit River reference doesn't have. A pass-through closure where
+  the same cable continues (segment k in, segment k+1 out, plus pigtails to terminals) gets none. A real 24F cable
+  to a terminal (NMK-03132, NMK-04003) counts as a third segment.
+* **Terminal labels in the reports can be stale.** `NMK-R-23210 LOGAN WAY:1 23220 LOGAN WAY` names terminal 23210
+  but serves 23220, which the address list puts on fiber 208. When `<terminal>:<k>` points to a fiber with a
+  different address and the written address matches exactly one row, the address wins.
 
 * *Live* = connection rows on that segment whose `State` is not Broken / Spare (dark), resolved to an address-list
   row through the `Usage` column (`<terminal>:<k> <address>`). `<terminal>:<k>` is the k-th fiber of the terminal,
@@ -88,10 +100,13 @@ pigtails / terminal tails do not count) and every cable segment whose Start Spli
 * Labelled vs. unlabelled segments in the DWG: 451 of 467 segments leaving a closure **with** a splice report carry
   a BFO label; 121 of 129 segments leaving closures **without** a report carry none → the drafter generated BFO labels
   from the splice reports.
-* Verification: **450 / 476** BFO callouts are reproduced character-for-character at the same cable segment.
-  The 26 others are reference-vs-report discrepancies (off-by-one range ends where the DWG pre-dates the current
-  reports, a 5-segment FC096 chain whose labels are shifted by one segment, and segments carrying fibers for two
-  addresses that are missing from the address lists). All are listed in the QA workbook (`Existing vs Computed`).
+* Verification: **460 / 476** BFO callouts are reproduced character-for-character at the same cable segment.
+  The 5-segment FC096 chain that earlier looked "shifted by one segment" was drawn backwards. Fiber-flow tracing
+  now reproduces it. The 16 others are reference-vs-report discrepancies:
+  * range ends that differ by one or a few fibers, where the DWG pre-dates the current reports
+  * `BFO 24` in the reference where the report says FC048
+  * single-fiber branches the reference doesn't label
+  All are listed in the QA workbook (`Existing vs Computed`).
 
 ---
 
@@ -171,10 +186,10 @@ the same figures are obtained from a DXF rebuild of the network:
 
 | Check | Result |
 |---|---|
-| Callouts generated | 707 terminal + 475 BFO = 1,182 (reference 708 + 476 = 1,184; per-callout differences in §2.2 / §2.3 and the QA workbook) |
+| Callouts generated | 707 terminal + 479 BFO = 1,186 (reference 708 + 476 = 1,184; per-callout differences in §2.2 / §2.3 and the QA workbook) |
 | Terminal callout text identical to reference | 705 / 708 (2 drafting errors in the reference + 1 address-list closure typo `NKM-02133`) |
 | Terminal callouts on the same handhole as reference | 698 / 706 |
-| BFO text identical to reference | 450 / 476 (reference-vs-report discrepancies, see §2.3) |
+| BFO text identical to reference | 460 / 476 (reference-vs-report discrepancies, see §2.3) |
 | BFO callouts on the same cable polyline | 448 / 452 |
 | Entity / style / layer properties | 100 % per §4; text-location rule 0 violations |
 | Placement QA (tool vs. reference, same metric) | 1,184 clean vs. 1,184 clean (0 text/text, 0 text/symbol overlaps, 0 leader crossings) |

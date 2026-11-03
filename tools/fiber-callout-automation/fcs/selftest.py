@@ -56,8 +56,13 @@ class Region:
             (f"{self.hub} TO {F1[-1]} FC144", 144, F1, "MAPLE AVE"),
             (f"{B1[0]} TO {B1[-1]} FC048", 48, B1, "OAK ST"),
             (f"{B2[0]} TO {B2[-1]} FC024", 24, B2, "PINE RD"),
-            (f"{self.hub} TO {F2[-1]} FC096", 96, F2, "CEDAR LN"),
+            # cable change at WBK-07023: the 96F ends there and a new 72F cable starts (2 cable segments only)
+            (f"{self.hub} TO {F2[3]} FC096", 96, F2[:4], "CEDAR LN"),
+            (f"{F2[3]} TO {F2[-1]} FC072", 72, F2[3:], "CEDAR LN"),
         ]
+        self.cable_change_closure = F2[3]
+        # the 48F branch leaving junction WBK-07003 is digitized backwards (Start/End Splice swapped)
+        self.reversed_segments = {(f"{B1[0]} TO {B1[-1]} FC048", 1)}
         # tree: child closure -> (parent, cable, seg)
         self.parent: Dict[str, Tuple[str, str, int]] = {}
         self.children: Dict[str, List[Tuple[str, str, int]]] = {n: [] for n in self.pos}
@@ -118,9 +123,14 @@ class Region:
         return f"{s} TO {t['tap']} FC{cnt:03d}", cnt
 
     def is_junction(self, s: str) -> bool:
-        """BFO callouts are drafted only where 3+ cable segments meet (pigtails do not count)."""
+        """BFO callouts are drafted where 3+ cable segments meet (pigtails do not count)."""
         n_tail_cables = sum(1 for t in self.terminals if t["closure"] == s and self.tail(s, t)[1] > 4)
         return 1 + len(self.children[s]) + n_tail_cables >= 3
+
+    def bfo_on(self, s: str, cab: str) -> bool:
+        """BFO on an outgoing cable: at a junction, or where a different cable than the incoming one starts."""
+        incoming = self.parent[s][1] if s in self.parent else f"{OLM} TO {s} FC024"
+        return self.is_junction(s) or cab != incoming
 
     def downstream(self, n: str) -> List[int]:
         out = [num for num, c in self.number_closure.items() if c == n]
@@ -144,9 +154,9 @@ class Region:
             for r in runs:
                 exp.append(dict(kind="TERMINAL", text=str(r[0]) if len(r) == 1 else f"{r[0]}-{r[-1]}", closure=t["closure"]))
         for s in self.report_closures:
-            if not self.is_junction(s):
-                continue
             for ch, cab, _k in self.children[s]:
+                if not self.bfo_on(s, cab):
+                    continue
                 d = self.downstream(ch)
                 if d:
                     rng = str(d[0]) if d[0] == d[-1] else f"{d[0]}-{d[-1]}"
@@ -268,9 +278,11 @@ def _write_connections_report(reg: Region, s: str, path: Path) -> None:
         segs.append((f"{OLM} TO {reg.hub} FC024", 1, 24, f"OLM Housing: {OLM}", f"Splice Case: {reg.hub}"))
     else:
         par, cab, k = reg.parent[s]
-        segs.append((cab, k, reg.fc[cab], f"Splice Case: {par}", f"Splice Case: {s}"))
+        ends = (f"Splice Case: {par}", f"Splice Case: {s}")
+        segs.append((cab, k, reg.fc[cab]) + (ends[::-1] if (cab, k) in reg.reversed_segments else ends))
     for ch, cab, k in reg.children[s]:
-        segs.append((cab, k, reg.fc[cab], f"Splice Case: {s}", f"Splice Case: {ch}"))
+        ends = (f"Splice Case: {s}", f"Splice Case: {ch}")
+        segs.append((cab, k, reg.fc[cab]) + (ends[::-1] if (cab, k) in reg.reversed_segments else ends))
     terms = [t for t in reg.terminals if t["closure"] == s]
     for t in terms:
         tail, cnt = reg.tail(s, t)

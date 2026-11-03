@@ -131,10 +131,11 @@ coordinates) and the QA/QC workbook <tt>*_FIBER_CALLOUTS_QA_*.xlsx</tt>.</li>
 <li>Fiber number <b>N = (PON - 1) x splitter size + PON PORT</b>, per OLM.</li>
 <li><b>Fiber-number callout</b>: one per terminal + drop closure (per contiguous run), e.g. <tt>69</tt> or
 <tt>218-219</tt>; arrow on the handhole hosting the drop closure.</li>
-<li><b>BFO callout</b>: only at cable <b>junctions</b> - closures with a splice report where 3 or more cable
-segments meet (pigtails and terminal tails do not count). One per live cable segment leaving the junction, e.g.
-<tt>BFO 72 / 70-115</tt> = cable fiber count / lowest-highest fiber number carried; arrow on the cable. Pass-through
-closures (one cable in, one out) get none.</li>
+<li><b>BFO callout</b>: <tt>BFO 72 / 70-115</tt> = cable fiber count / lowest-highest fiber number carried by a
+cable leaving a closure that has a splice report; arrow on the cable. Drafted at <b>junctions</b> (3 or more cable
+segments meet; pigtails and terminal tails do not count) on every outgoing cable with live fibers, and at a
+<b>cable change</b> (e.g. 96F in, a different 72F cable out) on the new cable. A pass-through closure where the same
+cable continues gets none. In / out follow the fiber flow traced through the splice reports.</li>
 </ul>
 """
 

@@ -32,7 +32,7 @@ drawing units from the files on every run, so there is nothing to configure.
 | Callout | Rule (reverse-engineered, see [docs/PHASE1_REVERSE_ENGINEERING.md](docs/PHASE1_REVERSE_ENGINEERING.md)) | Example |
 |---|---|---|
 | Fiber number | `N = (PON - 1) x splitter size + PON PORT` per OLM. One callout per terminal + drop closure (per contiguous run), with the arrow on the handhole that hosts the drop closure. | `69`, `218-219` |
-| BFO (cable) | Only at cable **junctions**: closures with a splice report where 3 or more cable segments meet (pigtails and terminal tails don't count). One callout for every cable segment leaving the junction that carries live fibers: `BFO <segment fiber count>` / `<lowest>-<highest> N` of the live (not broken or spare) fibers on that segment. The arrow sits on the cable near the closure. Pass-through closures (one cable in, one out) get no BFO callout. | `BFO 72` / `70-115` |
+| BFO (cable) | `BFO <segment fiber count>` / `<lowest>-<highest> N` of the live (not broken or spare) fibers on a cable segment leaving a closure that has a splice report. It's drafted in two cases: at a **junction** (3 or more cable segments meet; pigtails and terminal tails don't count), on every outgoing cable with live fibers; and at a **cable change** (for example 96F in, a different 48F or 72F cable out), on the new cable, even with only 2 cable segments. A pass-through closure where the same cable continues gets none. In and out follow the **fiber flow**, traced through the splice reports from the splitter port to the drop, so cables digitized backwards are labelled on the right side. The arrow sits on the cable near the closure. | `BFO 72` / `70-115` |
 
 Entity properties match the reference:
 
@@ -78,9 +78,11 @@ options:
 ## Verified
 
 * **Credit River (4 OLMs, 867 closures, 884 fibers)**, read directly from the original DWG:
-  * 707 fiber-number and 475 BFO callouts generated (reference 708 and 476). The junction rule leaves out exactly the
-    2 pass-through closures that have no BFO in the reference.
-  * 705/708 fiber-number and 450/476 BFO texts are identical to the hand-drafted reference.
+  * 707 fiber-number and 479 BFO callouts generated (reference 708 and 476).
+  * 705/708 fiber-number and 460/476 BFO texts are identical to the hand-drafted reference. Fiber-flow tracing
+    puts the BFOs of two backwards-digitized cable chains on the right side of each closure (previously 450).
+  * The 2 cable-change closures (NMK-05021: 144F ends, a new 144F starts; NMK-05138: 96F ends, 72F starts) get a
+    BFO on the new cable. The reference has none there.
   * 698/706 arrows are on the same handhole and 448/452 on the same cable.
   * Every difference traces to a defect in the reference drawing or the input data, and the QA workbook lists each
     one.
@@ -91,7 +93,8 @@ options:
   * both splice-report layouts
   * a closure named only by a text label, and one located only from splice-report coordinates
   * commercial `C-` usages, a non-contiguous terminal and a closure typo
-  * pass-through closures (no BFO) and a junction formed by a 24F cable to a terminal (BFO)
+  * pass-through closures (no BFO), a junction formed by a 24F cable to a terminal (BFO), a cable change (96F in,
+    72F out: BFO on the 72F) and a backwards-digitized branch (BFO on the right side)
   * a CSV address list next to the workbook version
 * **Input formats**: the Credit River splice reports and address lists converted to `.csv`, `.xls`, semicolon /
   Windows-1252 CSV with comma decimals, UTF-16 tab-delimited `.txt` and Excel's `sep=` CSV all give callouts and

@@ -932,7 +932,14 @@ class AddressBook:
                 return c
             recs = scope(self.by_tap.get(tap_n, []))
             if recs and port_idx and 1 <= port_idx <= len(recs) and len({r.olm for r in recs}) == 1:
-                return [recs[port_idx - 1]]
+                k = recs[port_idx - 1]
+                exact = scope(self.by_addr.get(addr_n, []))
+                # 'TAP:k' names the k-th fiber of the terminal; it covers spelling differences of the address
+                # (C- prefix, unit numbers). When that fiber serves another address and the written address is
+                # an exact, unique match elsewhere, the report's terminal label is stale: trust the address.
+                if k.address != addr_n and len(exact) == 1 and addr_n not in {r.address for r in recs}:
+                    return exact
+                return [k]
             if len(c) > 1:
                 return c
         for variant in self.address_variants(addr_n):
@@ -1968,6 +1975,7 @@ class SegmentPlanInfo:
     olm: str
     text: str = ""
     geometry: str = ""
+    reason: str = ""
 
 
 class CalloutPlanner:
@@ -2002,19 +2010,197 @@ class CalloutPlanner:
             return False
         return bool(far) and sg.count is not None and sg.count <= TAIL_MAX_FIBERS
 
-    def junction_info(self, closure: str, reps: List[SpliceReport], closure_names: Set[str]) -> Tuple[bool, int, str]:
-        """(is a junction, cable segments, description). BFO callouts are drafted only where the cable branches:
-        three or more cable segments meet at the closure (pigtails and terminal tails do not count)."""
+    @staticmethod
+    def cable_id(cable: str) -> str:
+        """Identity of a cable for comparing segments ('A TO B FC096' and 'A TO B FC96' are the same cable)."""
+        return re.sub(r"\bFC\s*0*(\d+)\b", r"FC\1", re.sub(r"\s+", " ", cable)).strip()
+
+    @staticmethod
+    def far_node(closure: str, start: Optional[str], end: Optional[str]) -> Optional[str]:
+        """The other end of a segment that touches this closure (segments may be digitized either way)."""
+        a, b = strip_kind(start or ""), strip_kind(end or "")
+        if a == closure:
+            return b or None
+        if b == closure:
+            return a or None
+        return b or a or None
+
+    def trace_fibers(self, merged: Dict[str, List[SpliceReport]]) -> Dict[str, Dict[Tuple[str, int], Tuple[str, int]]]:
+        """Trace every live address fiber through the splice reports and record, per closure, the segment on
+        which the fiber ARRIVES. Returns {closure: {(olm, fiber number): upstream segment}}.
+
+        A fiber runs through a sequence of cables: it enters the first one at the splitter port of the hub and moves
+        to the next cable at a splice (a row joining two different cables). Closures without a splice report
+        simply pass it along the same cable, so along one cable the upstream side is the segment closer to where
+        the fiber entered it. When the hub report is missing the fiber is traced backwards from its drop."""
+        Key = Tuple[str, int]
+        Row = Tuple[str, Optional[Key], Optional[Key]]
+        all_names = set(merged) | set(self.m.closures)
+        seg_keys = {name: {(sg.cable, sg.seg) for r in reps for sg in r.segments} for name, reps in merged.items()}
+        tails = {name: {(sg.cable, sg.seg) for r in reps for sg in r.segments if self.is_tail(name, sg, all_names)}
+                 for name, reps in merged.items()}
+        rows_by_fiber: Dict[Tuple[str, int], Set[Row]] = defaultdict(set)
+        for name, reps in merged.items():
+            keys = seg_keys[name]
+            for r in reps:
+                for c in r.conns:
+                    if any(s_ in norm_text(c.state) for s_ in DEAD_STATES):
+                        continue
+                    if not c.address or NON_ADDRESS_RE.search(c.usage or c.address):
+                        continue
+                    cands = self.book.resolve_candidates(c.tap, c.address, None, c.port_idx)
+                    if len(cands) != 1:
+                        continue
+                    a = c.a_seg if c.a_seg in keys else None
+                    b = c.b_seg if c.b_seg in keys else None
+                    if a or b:
+                        rows_by_fiber[(cands[0].olm, cands[0].number)].add((name, a, b))
+
+        def cab(k: Key) -> str:
+            return self.cable_id(k[0])
+        upstream: Dict[str, Dict[Tuple[str, int], Key]] = defaultdict(dict)
+        for fib, rows in rows_by_fiber.items():
+            trans = [rw for rw in rows if rw[1] and rw[2] and cab(rw[1]) != cab(rw[2])
+                     and rw[1] not in tails[rw[0]] and rw[2] not in tails[rw[0]]]
+            hub = {rw[1] or rw[2] for rw in rows if (rw[1] is None) != (rw[2] is None)}
+            drops = {(rw[0], rw[2] if rw[1] in tails[rw[0]] else rw[1]) for rw in rows if rw[1] and rw[2]
+                     and (rw[1] in tails[rw[0]]) != (rw[2] in tails[rw[0]])}
+            order: Dict[str, int] = {}        # position of each cable along the fiber (0 = first from the hub)
+            entry: Dict[str, int] = {}        # segment where the fiber enters the cable
+            exit_: Dict[str, int] = {}        # segment where the fiber leaves it (toward the drop)
+            if len(hub) == 1:
+                k0 = next(iter(hub))
+                cur, step = cab(k0), 1
+                entry[cur] = k0[1]
+            elif len(drops) == 1:
+                _drop_closure, k0 = next(iter(drops))
+                cur, step = cab(k0), -1
+                exit_[cur] = k0[1]
+            else:
+                continue
+            order[cur] = 0
+            used: Set[Row] = set()
+            while True:
+                nxt = [t for t in trans if t not in used and cur in (cab(t[1]), cab(t[2]))]  # type: ignore[arg-type]
+                if len(nxt) != 1:
+                    break
+                t = nxt[0]
+                used.add(t)
+                mine, other = (t[1], t[2]) if cab(t[1]) == cur else (t[2], t[1])  # type: ignore[arg-type]
+                if cab(other) in order:                                            # type: ignore[arg-type]
+                    break
+                nxt_cab = cab(other)                                               # type: ignore[arg-type]
+                if step > 0:
+                    exit_[cur], entry[nxt_cab] = mine[1], other[1]                 # type: ignore[index]
+                else:
+                    entry[cur], exit_[nxt_cab] = mine[1], other[1]                 # type: ignore[index]
+                order[nxt_cab] = order[cur] + step
+                cur = nxt_cab
+            for name, a, b in rows:
+                if not (a and b):
+                    continue
+                if (a in tails[name]) != (b in tails[name]):
+                    up = b if a in tails[name] else a                              # the drop is downstream
+                elif cab(a) != cab(b):
+                    if cab(a) not in order or cab(b) not in order:
+                        continue
+                    up = a if order[cab(a)] < order[cab(b)] else b
+                elif cab(a) in entry:
+                    da, db = abs(a[1] - entry[cab(a)]), abs(b[1] - entry[cab(a)])
+                    if da == db:
+                        continue
+                    up = a if da < db else b
+                elif cab(a) in exit_:
+                    da, db = abs(a[1] - exit_[cab(a)]), abs(b[1] - exit_[cab(a)])
+                    if da == db:
+                        continue
+                    up = a if da > db else b
+                else:
+                    continue
+                upstream[name][fib] = up
+        return upstream
+
+    def flow_directions(self, closure: str, reps: List[SpliceReport]) -> Tuple[Dict[Tuple[str, int], str], bool]:
+        """In / out of every segment at the closure by FIBER FLOW.
+
+        A segment's Start / End Splice follows the direction the cable was digitized, which is not always the
+        direction the fibers travel (Credit River has whole chains drawn backwards). The segments on which the
+        traced fibers arrive are the feeds, all others carry fibers away. Without traced fibers the feed is the
+        segment that takes part in every live through-splice (address fibers, grouped by OLM). If that is
+        ambiguous (ties, groups that disagree, splitter hubs) the report's own direction is kept.
+        Returns (direction per segment, True when fiber flow decided)."""
+        segs: Dict[Tuple[str, int], ReportSegment] = {}
+        for r in reps:
+            for sg in r.segments:
+                segs.setdefault((sg.cable, sg.seg), sg)
+        dirs = {k: sg.direction for k, sg in segs.items()}
+        if any(r.splitters for r in reps):
+            # splitter hub: a segment fed straight from a splitter port carries fibers away from the hub
+            fed = {c.a_seg if c.a_seg in segs else c.b_seg for r in reps for c in r.conns
+                   if (c.a_seg in segs) != (c.b_seg in segs) and c.address
+                   and not NON_ADDRESS_RE.search(c.usage or c.address)
+                   and not any(s_ in norm_text(c.state) for s_ in DEAD_STATES)}
+            changed = {k for k in fed if dirs.get(k) != "out"}
+            for k in changed:
+                dirs[k] = "out"
+            return dirs, bool(changed)
+        traced = {k: v for k, v in getattr(self, "_upstream", {}).get(closure, {}).items() if v in segs}
+        if traced:
+            feeds_by_olm: Dict[str, Set[Tuple[str, int]]] = defaultdict(set)
+            for (olm, _num), seg in traced.items():
+                feeds_by_olm[olm].add(seg)
+            feeds = {f for v in feeds_by_olm.values() for f in v}
+            # usually one feed; at a merge point fibers of different OLMs can arrive on different cables
+            return {k: ("in" if k in feeds else "out") for k in segs}, True
+        part: Dict[str, Counter] = defaultdict(Counter)
+        rows: Counter = Counter()
+        for r in reps:
+            for c in r.conns:
+                if c.a_seg not in segs or c.b_seg not in segs or c.a_seg == c.b_seg:
+                    continue
+                if any(s_ in norm_text(c.state) for s_ in DEAD_STATES):
+                    continue
+                if not c.address or NON_ADDRESS_RE.search(c.usage or c.address):
+                    continue
+                olms = {x.olm for x in self.book.resolve_candidates(c.tap, c.address, None, c.port_idx)}
+                g = next(iter(olms)) if len(olms) == 1 else "?"
+                part[g][c.a_seg] += 1
+                part[g][c.b_seg] += 1
+                rows[g] += 1
+        if not rows:
+            return dirs, False
+        feeds = set()
+        for g, cnt in part.items():
+            ranked = cnt.most_common(2)
+            top, n = ranked[0]
+            if n != rows[g] or (len(ranked) > 1 and ranked[1][1] == n):
+                return dirs, False                      # this group's feed is ambiguous
+            feeds.add(top)
+        if len(feeds) != 1:
+            return dirs, False                          # fibers of different OLMs arrive on different cables
+        feed = feeds.pop()
+        return {k: ("in" if k == feed else "out") for k in segs}, True
+
+    def closure_role(self, closure: str, reps: List[SpliceReport], closure_names: Set[str],
+                     dirs: Dict[Tuple[str, int], str]) -> Tuple[bool, Set[str], str]:
+        """(junction, identities of the incoming cables, description).
+
+        A junction is where the network branches: 3 or more cable segments meet (pigtails and terminal tails do
+        not count), or 2+ cables leave a closure whose feed is not listed. At any other closure a BFO callout is
+        drafted only on an outgoing cable that is a different cable from the incoming one (a new cable starts
+        here, e.g. 96F in, 72F out); the same cable simply continuing gets none."""
         segs: Dict[Tuple[str, int], ReportSegment] = {}
         for r in reps:
             for sg in r.segments:
                 if not self.is_tail(closure, sg, closure_names):
                     segs.setdefault((sg.cable, sg.seg), sg)
-        n_in = sum(1 for x in segs.values() if x.direction == "in")
-        n_out = sum(1 for x in segs.values() if x.direction == "out")
-        n = len(segs)
-        junction = n >= 3 or (n_in == 0 and n_out >= 2)
-        return junction, n, f"{n} cable segment(s) ({n_in} in, {n_out} out)"
+        ins = [sg for k, sg in segs.items() if dirs.get(k) == "in"]
+        outs = [sg for k, sg in segs.items() if dirs.get(k) == "out"]
+        in_ids = {self.cable_id(sg.cable) for sg in ins}
+        if not in_ids:                                  # feed missing from this report: ask the neighbours
+            in_ids = {self.cable_id(c) for c, _seg in self._touching.get(closure, set()) - set(segs)}
+        junction = len(segs) >= 3 or (not ins and len(outs) >= 2)
+        return junction, in_ids, f"{len(segs)} cable segment(s): {len(ins)} in, {len(outs)} out"
 
     # ------------------------------------------------------------ geometry of a callout
     def text_location(self, last: Vec2, dog: int) -> Vec2:
@@ -2187,8 +2373,17 @@ class CalloutPlanner:
         done: Set[Tuple[str, str, int]] = set()
         uid = 0
         closure_names = set(self.m.closures) | set(merged)
+        self._upstream = self.trace_fibers(merged)
+        self._touching: Dict[str, Set[Tuple[str, int]]] = defaultdict(set)
+        for r in self.reports:
+            for s in r.segments:
+                for node in (strip_kind(s.start or ""), strip_kind(s.end or "")):
+                    if node:
+                        self._touching[node].add((s.cable, s.seg))
         self.junctions = 0
+        self.cable_changes = 0
         self.pass_through = 0
+        self.flow_corrected = 0
         for n_rep, (name, reps) in enumerate(sorted(merged.items())):
             self.rep.check_cancel()
             if n_rep % 25 == 0:
@@ -2196,30 +2391,40 @@ class CalloutPlanner:
             closure = self.m.closures.get(name)
             if closure is None:
                 self.issues.add("ERROR", "Missing Closure", name, "Splice report closure not found in drawing")
-            junction, _n_cables, jdesc = self.junction_info(name, reps, closure_names)
-            if junction:
-                self.junctions += 1
-            else:
-                self.pass_through += 1
+            dirs, by_flow = self.flow_directions(name, reps)
+            if by_flow:
+                flipped = sorted({f"{sg.cable}:Seg{sg.seg}" for r in reps for sg in r.segments
+                                  if dirs.get((sg.cable, sg.seg)) != sg.direction
+                                  and not self.is_tail(name, sg, closure_names)})
+                if flipped:
+                    self.flow_corrected += len(flipped)
+                    self.issues.add("INFO", "Fiber Flow", name,
+                                    f"Start/End Splice of {', '.join(flipped)} is the reverse of the fiber flow (cable "
+                                    f"digitized backwards) - direction taken from the splices")
+            junction, in_ids, jdesc = self.closure_role(name, reps, closure_names, dirs)
+            all_conns = [c for r in reps for c in r.conns]
+            changes_here = 0
             for r in reps:
                 olm = self._report_olm(r)
                 r.olm = olm
                 for sg in r.segments:
-                    if sg.direction != "out":
-                        continue
                     key = (sg.cable, sg.seg)
+                    if dirs.get(key) != "out":
+                        continue
                     if (name, sg.cable, sg.seg) in done:
                         continue
                     done.add((name, sg.cable, sg.seg))
                     if self.is_tail(name, sg, closure_names) or self._far_ends(name, sg) & self.book.tap_names:
                         continue
-                    end = sg.end or ends.get(key, (None, None))[1]
+                    st, en = ends.get(key, (None, None))
+                    end = self.far_node(name, sg.start or st, sg.end or en)
                     dest = re.sub(r"\s+FC\s*\d+\s*$", "", sg.cable.split(" TO ", 1)[1]).strip() if " TO " in sg.cable else ""
                     piece = self._segment_piece(name, end, dest)
+                    new_cable = bool(in_ids) and self.cable_id(sg.cable) not in in_ids
                     live: List[int] = []
                     unresolved: List[str] = []
                     ambiguous: Dict[Tuple[int, ...], List[str]] = defaultdict(list)
-                    for c in r.conns:
+                    for c in all_conns:
                         if key not in (c.a_seg, c.b_seg):
                             continue
                         if any(s_ in norm_text(c.state) for s_ in DEAD_STATES):
@@ -2250,9 +2455,13 @@ class CalloutPlanner:
                     if not info.live:
                         info.geometry = "no callout - no live fibers"
                         continue
-                    if not junction:
-                        info.geometry = f"no callout - pass-through closure, not a junction: {jdesc}"
+                    if not junction and not new_cable:
+                        info.geometry = (f"no callout - the same cable continues through a pass-through closure "
+                                         f"({jdesc})")
                         continue
+                    info.reason = "junction" if junction else "new cable starts here (cable change)"
+                    if not junction:
+                        changes_here += 1
                     if sg.count is None:
                         self.issues.add("WARNING", "Splice Report", f"{name} {sg.cable}",
                                         "Segment fiber count unknown (no Count column and no FCnnn suffix)")
@@ -2266,11 +2475,17 @@ class CalloutPlanner:
                         self.plans.append(plan)
                     else:
                         self._register(plan)
+            if junction:
+                self.junctions += 1
+            elif changes_here:
+                self.cable_changes += 1
+            else:
+                self.pass_through += 1
 
     def _place_cable(self, uid: str, info: SegmentPlanInfo, closure: Optional[Closure], pi: Optional[int],
                      text: str) -> CalloutPlan:
         spec = self.spec
-        calc = (f"Segment {info.seg} of {info.cable} leaving {info.closure}: {len(info.live)} live fiber(s) "
+        calc = (f"Segment {info.seg} of {info.cable} leaving {info.closure} ({info.reason}): {len(info.live)} live fiber(s) "
                 f"{fmt_numbers(info.live, 'exact', 0)}; fiber count {info.count}; text = '{spec.cable_prefix} <count>' + "
                 f"{'min-max' if spec.cable_range_mode == 'span' else 'runs'}")
         base = dict(uid=uid, kind="CABLE", olm=info.olm, text=text, layer=spec.cable_layer, closure=info.closure,
@@ -2555,7 +2770,7 @@ def write_qa_workbook(path: Path, cfg: RunConfig, result: "RunResult") -> None:
                      ExistingText=(p.existing_text or "").replace("\n", " / "), Notes=p.notes) for p in result.plans]
     segs = [dict(Closure=s.closure, Cable=s.cable, Segment=s.seg, FiberCount=s.count, EndClosure=s.end, OLM=s.olm,
                  LiveFibers=len(s.live), Numbers=fmt_numbers(s.live, "exact", 0), CalloutText=s.text.replace("\\P", " / "),
-                 Geometry=s.geometry, Unresolved=len(s.unresolved),
+                 Rule=s.reason, Geometry=s.geometry, Unresolved=len(s.unresolved),
                  UnresolvedExample=s.unresolved[0] if s.unresolved else "", Report=s.report_file) for s in result.segments]
     issues = [dict(Severity=i.severity, Category=i.category, Object=i.obj, Message=i.message) for i in result.issues.items]
     settings = []
@@ -2804,7 +3019,9 @@ class CalloutEngine:
                 "Handholes in drawing": len(model.handholes),
                 "Cable segments evaluated": len(planner.segments),
                 "Junction closures (BFO drafted)": planner.junctions,
-                "Pass-through closures (no BFO)": planner.pass_through,
+                "Cable-change closures (BFO on the new cable)": planner.cable_changes,
+                "Pass-through closures, same cable continues (no BFO)": planner.pass_through,
+                "Segments digitized against the fiber flow": planner.flow_corrected,
                 "Fiber-number callouts": n_t,
                 "BFO callouts": n_c,
                 "Callouts failed": sum(1 for p in plans if p.status == "FAILED"),
@@ -2815,8 +3032,12 @@ class CalloutEngine:
                 "Errors": issues.count("ERROR"),
                 "Warnings": issues.count("WARNING"),
             }
-            self.rep.log(f"Cable junctions: {planner.junctions} closure(s) where 3+ cable segments meet get BFO callouts; "
-                         f"{planner.pass_through} pass-through closure(s) get none")
+            self.rep.log(f"BFO rule: {planner.junctions} junction closure(s) (3+ cable segments), {planner.cable_changes} "
+                         f"cable-change closure(s) (a different cable leaves); {planner.pass_through} pass-through "
+                         f"closure(s) where the same cable continues get none")
+            if planner.flow_corrected:
+                self.rep.log(f"Fiber flow: {planner.flow_corrected} segment(s) are digitized against the fiber flow - "
+                             f"direction taken from the splices")
             self.rep.log(f"Analysis: {n_t} fiber-number + {n_c} BFO callouts; {placement.get('clean', 0)} with clean placement")
             self._log_issues(issues)
             self.rep.progress(100, "Analysis complete")

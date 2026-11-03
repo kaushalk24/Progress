@@ -1,4 +1,4 @@
-## FiberCallout Studio 2.2.0 (Windows x64)
+## FiberCallout Studio 2.3.0 (Windows x64)
 
 Single-file desktop app that generates the magenta **DES_FIBER_SPL** fiber-number and BFO callouts of an FTTx design
 from its splice reports and address lists.
@@ -7,6 +7,23 @@ from its splice reports and address lists.
 else. The exe isn't code-signed, so if Windows SmartScreen appears, click *More info -> Run anyway*.
 
 **Check the installation:** *Help -> Run self-test* (or `FiberCalloutStudio.exe --selftest`).
+
+What's new in 2.3
+- **BFO at cable changes.** When a different cable starts at a closure, for example 96F in and a new 48F or 72F cable
+  out, the new cable gets a BFO callout even if only 2 cable segments meet there. Pigtails don't count. Junctions (3
+  or more cable segments) work as before. A pass-through closure where the same cable continues still gets none.
+- **Fiber flow decides in and out.** A splice report's Start / End Splice follows the direction the cable was drawn,
+  which isn't always the direction the fibers travel. The tool now traces every live fiber through the splice
+  reports, from its splitter port to its drop, cable by cable, including across closures without a report. Cables
+  drawn backwards are now labelled on the right side of each closure. On Credit River this moves 10 BFO callouts
+  onto the cable the reference has them on (460 of 476 identical, up from 450). It also fixes a BFO that failed
+  outright: the 72F at NMK-02140, whose segment was drawn toward the closure. At splitter hubs, a cable fed from a
+  splitter port is always outgoing.
+- **Stale terminal names in splice reports.** A usage such as `NMK-R-23210 LOGAN WAY:1 23220 LOGAN WAY` names one
+  terminal but serves an address the address list puts on another fiber. When the terminal's k-th fiber has a
+  different address and the written address matches exactly one row, the address now decides the fiber number.
+- The QA workbook's Cable Segments sheet has a **Rule** column (junction / cable change). The Summary counts junction,
+  cable-change and pass-through closures and the segments drawn against the fiber flow.
 
 What's new in 2.2
 - **BFO callouts only at cable junctions.** A closure gets BFO callouts only where 3 or more cable segments meet

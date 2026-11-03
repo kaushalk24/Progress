@@ -102,11 +102,15 @@ def test_decorated_segment_ends() -> None:
 
 
 def test_junction_rule() -> None:
+    from collections import defaultdict
+    from types import SimpleNamespace as NS
     pl = E.CalloutPlanner.__new__(E.CalloutPlanner)
+    pl._touching = defaultdict(set)
     S = E.ReportSegment
 
-    def rep(name, segs):
-        return [E.SpliceReport(name=name, file="x", fmt="t", segments=segs)]
+    def rep(name, segs, conns=(), splitters=()):
+        return [E.SpliceReport(name=name, file="x", fmt="t", segments=list(segs), conns=list(conns),
+                               splitters=list(splitters))]
     closures = {"A-1", "A-2", "A-3", "A-4", "A-9"}
     trunk_in = S("A-1 TO A-9 FC144", 4, 144, "Underground", "A-1", "A-2", "in")
     trunk_out = S("A-1 TO A-9 FC144", 5, 144, "Underground", "A-2", "A-3", "out")
@@ -114,15 +118,56 @@ def test_junction_rule() -> None:
     tap24 = S("A-2 TO T-10 MAIN ST FC024", 1, 24, "Underground", "A-2", "T-10 MAIN ST", "out")
     tail12 = S("A-2 TO MST 7 FC012", 1, 12, "Underground", "A-2", "MST 7", "out")
     branch = S("A-2 TO A-4 FC024", 1, 24, "Underground", "A-2", "A-4", "out")
-    taper = S("A-2 TO A-3 FC072", 1, 72, "Underground", "A-2", "A-3", "out")
-    j = lambda segs: pl.junction_info("A-2", rep("A-2", segs), closures)[0]  # noqa: E731
-    check("junction: cable branches (3 segments)", j([trunk_in, trunk_out, branch, pig]))
-    check("junction: 24F cable to a terminal counts", j([trunk_in, trunk_out, tap24]))
-    check("pass-through: pigtail does not count", not j([trunk_in, trunk_out, pig]))
-    check("pass-through: 12F terminal tail does not count", not j([trunk_in, trunk_out, tail12]))
-    check("pass-through: taper 144->72 is not a junction", not j([trunk_in, taper, pig]))
-    check("junction: feed not listed, 2 cables out", j([trunk_out, branch]))
-    check("pass-through: duplicate rows counted once", not j([trunk_in, trunk_out, trunk_out, pig]))
+    end96 = S("A-1 TO A-2 FC096", 22, 96, "Underground", "A-1", "A-2", "in")       # 96F cable ends here
+    new72 = S("A-2 TO A-3 FC072", 1, 72, "Underground", "A-2", "A-3", "out")       # a new 72F cable starts here
+    new96 = S("A-2 TO A-3 FC096", 1, 96, "Underground", "A-2", "A-3", "out")       # new cable, same fiber count
+
+    def role(segs):
+        reps = rep("A-2", segs)
+        dirs = {(x.cable, x.seg): x.direction for x in segs}
+        junction, in_ids, _d = pl.closure_role("A-2", reps, closures, dirs)
+        outs = [x for x in segs if x.direction == "out" and not pl.is_tail("A-2", x, closures)]
+        return junction, [pl.cable_id(x.cable) not in in_ids for x in outs] if in_ids else []
+    check("junction: cable branches (3 segments)", role([trunk_in, trunk_out, branch, pig])[0])
+    check("junction: 24F cable to a terminal counts", role([trunk_in, trunk_out, tap24])[0])
+    check("pass-through: pigtail does not count", role([trunk_in, trunk_out, pig]) == (False, [False]))
+    check("pass-through: 12F terminal tail does not count", role([trunk_in, trunk_out, tail12]) == (False, [False]))
+    check("cable change: 96F ends, 72F starts -> BFO on the 72F", role([end96, new72, pig]) == (False, [True]))
+    check("cable change: different cable, same fiber count", role([end96, new96, pig]) == (False, [True]))
+    check("same cable, FC0144 vs FC144 spelling", pl.cable_id("A TO B FC0144") == pl.cable_id("A TO B FC144"))
+    check("junction: feed not listed, 2 cables out", role([trunk_out, branch])[0])
+    dup = role([trunk_in, trunk_out, trunk_out, pig])
+    check("pass-through: duplicate rows counted once", dup[0] is False and not any(dup[1]), str(dup))
+    pl._touching["A-2"] = {("A-1 TO A-2 FC096", 22)}
+    check("cable change: feed taken from the neighbour's report", role([new72, pig]) == (False, [True]))
+    pl._touching.clear()
+    check("far end of a backwards-digitized segment", E.CalloutPlanner.far_node("A-2", "A-3", "A-2") == "A-3"
+          and E.CalloutPlanner.far_node("A-2", "A-2", "A-3") == "A-3")
+
+    # fiber flow: the report lists the 72F as 'in' (digitized backwards); the fibers arrive on the 96F
+    rec = {"T1": NS(olm="R1", number=1), "T2": NS(olm="R1", number=2), "T3": NS(olm="R1", number=3)}
+    pl.book = NS(resolve_candidates=lambda tap, addr, olm, idx: [rec[tap]] if tap in rec else [])
+    f72 = S("A-9 TO A-2 FC072", 11, 72, "Underground", "A-9", "A-2", "in")
+    f96 = S("A-1 TO A-2 FC096", 1, 96, "Underground", "A-2", "A-1", "out")
+    f48 = S("A-2 TO A-4 FC048", 1, 48, "Underground", "A-2", "A-4", "out")
+    k72, k96, k48 = (f72.cable, 11), (f96.cable, 1), (f48.cable, 1)
+
+    def conn(a, b, tap):
+        return E.ReportConn(a_seg=a, b_seg=b, usage=f"{tap}:1 X", state="Return", tap=tap, address="X", port_idx=1)
+    rows = [conn(k96, k48, "T1"), conn(k96, k48, "T2"), conn(k72, k96, "T3")]
+    dirs, by_flow = pl.flow_directions("A-2", rep("A-2", [f72, f96, f48], rows))
+    check("fiber flow corrects backwards segments", by_flow and dirs == {k72: "out", k96: "in", k48: "out"}, str(dirs))
+    dirs, by_flow = pl.flow_directions("A-2", rep("A-2", [f72, f96], [conn(k72, k96, "T1")]))
+    check("fiber flow: 2-segment tie keeps the report", not by_flow and dirs[k72] == "in", str(dirs))
+    dirs, by_flow = pl.flow_directions("A-2", rep("A-2", [f72, f96, f48], rows, splitters=[32]))
+    check("fiber flow: splitter hub keeps the report", not by_flow)
+    hub_rows = [E.ReportConn(a_seg=None, b_seg=k72, usage="T1:1 X", state="Return", tap="T1", address="X", port_idx=1)]
+    dirs, by_flow = pl.flow_directions("A-2", rep("A-2", [f72, f96], hub_rows, splitters=[32]))
+    check("fiber flow: hub cable fed by a splitter port is outgoing", by_flow and dirs[k72] == "out", str(dirs))
+    pl._upstream = {"A-2": {("R1", 1): k96, ("R2", 5): k72}}
+    dirs, by_flow = pl.flow_directions("A-2", rep("A-2", [f72, f96, f48], rows))
+    check("fiber flow: merge closure with two feeds", by_flow and dirs == {k72: "in", k96: "in", k48: "out"}, str(dirs))
+    pl._upstream = {}
 
 
 def test_text_tables() -> None:
