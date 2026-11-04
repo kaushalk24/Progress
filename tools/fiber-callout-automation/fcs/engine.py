@@ -1034,6 +1034,29 @@ class SpliceReport:
     conns: List[ReportConn] = field(default_factory=list)
     olm: Optional[str] = None
     splitters: List[int] = field(default_factory=list)
+    enclosure: str = ""             # 'Enclosure Type' of the report: SPLICE CASE, FOSC 450D, Storage Loop, MAX10 ...
+
+
+# A storage loop (slack coil) is reported like a splice case but nothing is spliced there: the cable only passes.
+STORAGE_LOOP_RE = re.compile(r"STORAGE\s*LOOP|\bSLACK\b|\bCOIL\b|SNOW\s*SHOE|\bLOOP\b", re.I)
+# Enclosures that END the network (terminals, OLM) rather than splice cables together.
+ENDPOINT_ENCLOSURE_RE = re.compile(r"\bOLM\b|TERMINAL|\bMST\b|\bNAP\b|\bMAX\s*\d+|\bHOUSING\b|\bONT\b|\bTAP\b", re.I)
+
+
+PLACEHOLDER_NAME_RE = re.compile(r"NONAME|NAME|UNNAMED|NONE|NA|TBD|UNKNOWN|NEW|SPLICE|SPLICECASE|CLOSURE|X+|0*")
+
+
+def alnum_key(value: Any) -> str:
+    """'DMI-R-115 RUTLEDGE ST' and 'DMIR115RUTLEDGEST' -> 'DMIR115RUTLEDGEST'."""
+    return re.sub(r"[^A-Z0-9]", "", norm_text(value))
+
+
+def is_storage_loop(r: "SpliceReport") -> bool:
+    if r.enclosure and STORAGE_LOOP_RE.search(r.enclosure):
+        return True
+    # no enclosure type given: loop segments, and no segment starting or ending here
+    return bool(r.segments) and any(STORAGE_LOOP_RE.search(sg.kind or "") for sg in r.segments) \
+        and all(sg.direction == "thru" for sg in r.segments)
 
 
 SEG_ROW_RE = re.compile(r"^\s*Segment\s+(\d+)\s+of\s+(.+?)\s+-\s+([A-Za-z][\w /]*)\s*$", re.I)
@@ -1091,6 +1114,7 @@ def _name_from_file(fname: str) -> Optional[str]:
 def parse_connections_report(rows: List[List[Any]], fname: str) -> Optional[SpliceReport]:
     name = None
     xy = None
+    enclosure = ""
     seg_hdr = conn_hdr = None
     splitters: List[int] = []
     for i, r in enumerate(rows):
@@ -1100,6 +1124,8 @@ def parse_connections_report(rows: List[List[Any]], fname: str) -> Optional[Spli
             continue
         if low[0].startswith("splice name") or low[0].startswith("closure name") or low[0].startswith("enclosure name"):
             name = strip_kind(_label_value(r, 0))
+        elif low[0].startswith("enclosure type"):
+            enclosure = norm_text(_label_value(r, 0))
         elif low[0].startswith("coordinates"):
             nums = [c for c in r[1:] if isinstance(c, (int, float))]
             if len(nums) < 2:
@@ -1119,9 +1145,12 @@ def parse_connections_report(rows: List[List[Any]], fname: str) -> Optional[Spli
                                 state=low.index("state") if "state" in low else None))
     if not name and (seg_hdr or conn_hdr):
         name = _name_from_file(fname)
+    if not name and seg_hdr and STORAGE_LOOP_RE.search(enclosure):
+        name = "STORAGE LOOP"            # unnamed storage loops are recognised (and skipped), not 'unrecognised'
     if not name:
         return None
-    rep = SpliceReport(name=name, file=fname, fmt="Splice Connections Report", xy=xy, splitters=splitters)
+    rep = SpliceReport(name=name, file=fname, fmt="Splice Connections Report", xy=xy, splitters=splitters,
+                       enclosure=enclosure)
     if seg_hdr:
         i0, c = seg_hdr
         for r in rows[i0 + 1:]:
@@ -1264,6 +1293,19 @@ def load_splice_reports(files: List[Path], issues: IssueLog, rep: Reporter, quie
                 issues.add("WARNING", "Input", f.name, "Not recognised as a splice report or an address list - ignored")
             else:
                 issues.add("ERROR", "Splice Report", f.name, "Unrecognised splice report layout")
+    loops = [r for r in reports if is_storage_loop(r)]
+    if loops:
+        reports = [r for r in reports if not is_storage_loop(r)]
+        issues.add("INFO", "Splice Report", f"{len(loops)} storage loop(s)",
+                   f"Storage-loop reports skipped: a storage loop is cable slack, not a splice point, so it gets no "
+                   f"callout and does not split the cable ({', '.join(sorted({r.file for r in loops})[:6])}"
+                   f"{' ...' if len(loops) > 6 else ''})")
+    unnamed = [r for r in reports if PLACEHOLDER_NAME_RE.fullmatch(alnum_key(r.name))]
+    for r in unnamed:
+        issues.add("WARNING", "Splice Report", r.file,
+                   f"The report has no closure name ('{r.name}') - it cannot be matched to a splice case and is not "
+                   f"used. Name the splice case in the design and export its report again.")
+    reports = [r for r in reports if not PLACEHOLDER_NAME_RE.fullmatch(alnum_key(r.name))]
     names = Counter(r.name for r in reports)
     for nm, c in names.items():
         if c > 1:
@@ -1322,6 +1364,27 @@ def olm_splitters(reports: List[SpliceReport], olm_names: Set[str]) -> Dict[str,
                 if node == r.name and olm in olm_names:
                     out.setdefault(olm, size)
     return out
+
+
+def drop_endpoint_reports(reports: List[SpliceReport], book: "AddressBook", issues: IssueLog,
+                          rep: Reporter) -> List[SpliceReport]:
+    """Reports of terminals (MAX10, MST ...) and of the OLM describe where the network ENDS, not a splice case:
+    they get no BFO callout and are not closures of the drawing. Recognised by their enclosure type, or by a name
+    that is a terminal or OLM of the address list ('DMIR115RUTLEDGEST' = terminal 'DMI-R-115 RUTLEDGE ST')."""
+    ends = {alnum_key(r.tap) for r in book.records if r.tap} | {alnum_key(o) for o in book.olms}
+    splices = {alnum_key(r.splice) for r in book.records if r.splice}
+    keep, dropped = [], []
+    for r in reports:
+        key = alnum_key(r.name)
+        endpoint = (bool(r.enclosure) and ENDPOINT_ENCLOSURE_RE.search(r.enclosure) is not None
+                    and not re.search(r"SPLICE|FOSC|CLOSURE", r.enclosure)) or (key in ends and key not in splices)
+        (dropped if endpoint else keep).append(r)
+    if dropped:
+        rep.log(f"{len(dropped)} terminal / OLM report(s) recognised - they end the network and get no BFO callout")
+        issues.add("INFO", "Splice Report", f"{len(dropped)} terminal / OLM report(s)",
+                   "Reports of terminals or the OLM (not splice cases) - not used as closures, e.g. "
+                   + ", ".join(sorted(r.name for r in dropped)[:6]))
+    return keep
 
 
 def pigtail_splices(reports: List[SpliceReport], tap_names: Optional[Set[str]] = None) -> Dict[str, str]:
@@ -2014,12 +2077,69 @@ class DrawingModel:
                 self.pieces.append(piece)
             if idx[-1] != len(plist) - 1:
                 self.pieces.append(CablePiece(ln.handle, ln.layer, plist[idx[-1]:], enriched[idx[-1]][1], None))
+        joined = self._join_free_ends(tol)
         for i, pc in enumerate(self.pieces):
             if pc.a and pc.b:
                 self.adj[pc.a].append(i)
                 self.adj[pc.b].append(i)
+        if joined:
+            self.rep.log(f"Cable topology: {joined} cable break(s) without a splice case joined (storage loops, "
+                         f"cables drawn in several pieces)")
         self.rep.log(f"Cable topology: {len(lines)} cable entities -> {sum(1 for p in self.pieces if p.a and p.b)} "
                      f"closure-to-closure links (snap tolerance {tol:g})")
+
+    def _join_free_ends(self, tol: float) -> int:
+        """A cable drawn as several lines - broken at a storage loop, a riser or just drawn in pieces - is one
+        cable. Where exactly two cable ends meet at a point that is not a splice case, the two pieces are joined,
+        so the cable links the closures at its real ends. Pigtails and drops are never joined (a terminal tail must
+        stay a dangling end), and three or more ends meeting at a point are left alone."""
+        joined = 0
+        tail_layer = re.compile(r"PIG\s*TAIL|\bDROP\b|\bTAIL\b", re.I)
+        cell = max(tol, 1e-6) * 2.0
+        while True:
+            ends: List[Tuple[int, int, Vec2]] = []
+            for i, pc in enumerate(self.pieces):
+                if pc is None or tail_layer.search(pc.layer or "") or len(pc.pts) < 2:
+                    continue
+                if pc.a is None:
+                    ends.append((i, 0, pc.pts[0]))
+                if pc.b is None:
+                    ends.append((i, 1, pc.pts[-1]))
+            grid: Dict[Tuple[int, int], List[int]] = defaultdict(list)
+            for k, (_i, _w, p) in enumerate(ends):
+                grid[(int(p.x // cell), int(p.y // cell))].append(k)
+
+            def near(k: int) -> List[int]:
+                p = ends[k][2]
+                cx, cy = int(p.x // cell), int(p.y // cell)
+                return [j for dx in (-1, 0, 1) for dy in (-1, 0, 1) for j in grid.get((cx + dx, cy + dy), [])
+                        if j != k and (ends[j][2] - p).magnitude <= tol]
+            merged_any = False
+            used: Set[int] = set()
+            for k in range(len(ends)):
+                if ends[k][0] in used:
+                    continue
+                nb = near(k)
+                if len(nb) != 1 or ends[nb[0]][0] in used or ends[nb[0]][0] == ends[k][0] or near(nb[0]) != [k]:
+                    continue
+                if self.nearest_closure(ends[k][2], tol):
+                    continue
+                (i, wi, _p), (j, wj, _q) = ends[k], ends[nb[0]]
+                p1, p2 = self.pieces[i], self.pieces[j]
+                pts1 = list(p1.pts) if wi == 1 else list(reversed(p1.pts))     # free end last
+                a1 = p1.a if wi == 1 else p1.b
+                pts2 = list(p2.pts) if wj == 0 else list(reversed(p2.pts))     # free end first
+                b2 = p2.b if wj == 0 else p2.a
+                if a1 is not None and a1 == b2:
+                    continue                                                    # a loop back to the same closure
+                self.pieces[i] = CablePiece(p1.handle, p1.layer, pts1 + pts2[1:], a1, b2)
+                self.pieces[j] = None  # type: ignore[call-overload]
+                used.update((i, j))
+                joined += 1
+                merged_any = True
+            self.pieces = [pc for pc in self.pieces if pc is not None]
+            if not merged_any:
+                return joined
 
     def other_end(self, pi: int, node: str) -> str:
         pc = self.pieces[pi]
@@ -2029,25 +2149,45 @@ class DrawingModel:
         pc = self.pieces[pi]
         return list(pc.pts) if pc.a == node else list(reversed(pc.pts))
 
-    def find_piece_toward(self, start: str, target: str, max_nodes: int = 20000) -> Optional[int]:
+    def piece_length(self, pi: int) -> float:
+        pts = self.pieces[pi].pts
+        return sum((b - a).magnitude for a, b in zip(pts, pts[1:]))
+
+    def find_piece_toward(self, start: str, target: str, max_detour: Optional[float] = None) -> Optional[int]:
+        """First cable piece, from closure `start`, of the SHORTEST drawn route to closure `target`.
+        With `max_detour`, a route longer than max_detour x the straight distance (+ 300 ft) is refused: when the
+        direct cable is missing from the drawing, a long way round through the network is not that cable."""
         for pi in self.adj.get(start, []):
             if self.other_end(pi, start) == target:
                 return pi
-        for pi in self.adj.get(start, []):
-            seen = {start}
-            stack = [self.other_end(pi, start)]
-            while stack and len(seen) < max_nodes:
-                n = stack.pop()
-                if n == target:
-                    return pi
-                if n in seen:
+        if start not in self.closures or target not in self.closures:
+            return None
+        import heapq
+        dist: Dict[str, float] = {start: 0.0}
+        first: Dict[str, int] = {}
+        heap: List[Tuple[float, str]] = [(0.0, start)]
+        while heap:
+            d, n = heapq.heappop(heap)
+            if n == target:
+                break
+            if d > dist.get(n, float("inf")):
+                continue
+            for pj in self.adj.get(n, []):
+                m = self.other_end(pj, n)
+                if not m:
                     continue
-                seen.add(n)
-                for pj in self.adj.get(n, []):
-                    m = self.other_end(pj, n)
-                    if m not in seen:
-                        stack.append(m)
-        return None
+                nd = d + self.piece_length(pj)
+                if nd < dist.get(m, float("inf")):
+                    dist[m] = nd
+                    first[m] = pj if n == start else first[n]
+                    heapq.heappush(heap, (nd, m))
+        if target not in first:
+            return None
+        if max_detour is not None:
+            straight = (self.closures[target].pos - self.closures[start].pos).magnitude
+            if dist[target] > max_detour * straight + 300.0 * self.scale:
+                return None
+        return first[target]
 
     def locate(self, p: Vec2) -> Tuple[str, str]:
         """(nearest splice case, a description in words) of a point, e.g. an existing callout's arrow."""
@@ -2659,11 +2799,16 @@ class CalloutPlanner:
             return None
         pi = None
         if end and end in self.m.closures:
-            pi = self.m.find_piece_toward(start, end)
+            pi = self.m.find_piece_toward(start, end, max_detour=2.0)
         if pi is None and dest and dest in self.m.closures and dest != start:
-            pi = self.m.find_piece_toward(start, dest)
+            pi = self.m.find_piece_toward(start, dest, max_detour=2.0)
         if pi is None and len(self.m.adj.get(start, [])) == 1:
-            pi = self.m.adj[start][0]
+            only = self.m.adj[start][0]
+            far = self.m.other_end(only, start)
+            # the only drawn cable is used when it leads where this segment goes; a cable to another splice
+            # case (typically the incoming one) is a different cable, and the arrow goes on the straight line
+            if not far or far in (end, dest):
+                pi = only
         return pi
 
     def plan_cables(self) -> None:
@@ -3309,6 +3454,7 @@ class CalloutEngine:
             self._log_issues(issues)
             raise RuntimeError("No usable address-list rows were found. Check that the address lists contain PON, "
                                "PORT, address, terminal and splice columns (details in the log).")
+        reports = drop_endpoint_reports(reports, book, issues, self.rep)
         self.rep.progress(22, "Reading drawing")
         src = open_source(cfg, self.rep)
         scale = units_factor(src, cfg.units, self.rep)

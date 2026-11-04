@@ -241,7 +241,11 @@ def _write_drawing(reg: Region, path: Path) -> Dict[str, Any]:
             mid = ((a[0] + b[0]) / 2 + (6 if k % 2 else -6), (a[1] + b[1]) / 2 + (5 if k % 2 else -4))
             piece = [a, mid, b]
             seg_geom[(route[k], route[k + 1])] = [Vec2(p) for p in piece]
-            if ci == 1:                    # branch cable drawn as one polyline per segment
+            if ci == 1 and k == 1:         # broken at a storage loop: two lines meeting at the loop
+                msp.add_lwpolyline(piece[:2], dxfattribs={"layer": "FO_CABLE_UG"})
+                msp.add_lwpolyline(piece[1:], dxfattribs={"layer": "FO_CABLE_UG"})
+                msp.add_circle(mid, 6.0, dxfattribs={"layer": "FO_CABLE_UG"})
+            elif ci == 1:                  # branch cable drawn as one polyline per segment
                 msp.add_lwpolyline(piece, dxfattribs={"layer": "FO_CABLE_UG"})
             else:
                 pts += piece if not pts else piece[1:]
@@ -405,6 +409,46 @@ def _write_guide_report(reg: Region, s: str, path: Path) -> None:
     wb.save(path)
 
 
+def _write_extra_reports(reg: Region, rep_dir: Path) -> None:
+    """Reports that are NOT splice cases and must not produce callouts or warnings: storage loops (one unnamed,
+    two named 'NoName' - merged by name they would look like a junction) and the report of a terminal."""
+    loops = []
+    for name, _fc, path, _st in reg.cables[:3]:
+        a, b = reg.pos[path[1]], reg.pos[path[2]]
+        loops.append((name, 2, path[1], path[2], ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)))
+    for i, (cab, k, s, e, (x, y)) in enumerate(loops):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        nm = "" if i == 0 else "NoName"
+        for row in (["Splice Connections Report"], ["Splice name:", nm], ["Coordinates:", x, y],
+                    ["Enclosure Type:", "Storage Loop"],
+                    ["Segment", "Count", "Start Splice", "End Splice", "Owner", "Cable Design Length", "Cable Asbuilt Length"],
+                    [f"Segment {k} of {cab} - Underground", reg.fc[cab], f"Splice Case: {s}", f"Splice Case: {e}", "Owner", 100, 0],
+                    [f"Segment {k} of {cab} - Storage Loop", reg.fc[cab], f"Splice Case: {s}", f"Splice Case: {e}", "Owner", 100, 0],
+                    [], ["A Cable", None, None, None, None, None, "B Cable", None, None, None, None, "Usage"],
+                    ["Segment", "Group 3", "Group 2", "Fiber", "#", "Dir", "#", "Fiber", "Group 2", "Group 3", "Segment",
+                     "Usage", "State", "Owner", "Carrier type", "Start", "End", "Master Circuit", "Circuit ID"],
+                    ):
+            ws.append(row)
+        for j, num in enumerate(reg.downstream(e), start=1):     # the live fibers passing the loop
+            ws.append([f"{cab}: Seg{k}", None, "blue", "blue", f"01.{j:02d}({j})", "->", f"01.{j:02d}({j})", "blue",
+                       "blue", None, f"{cab}: Seg{k}", _usage(reg, num), "Return", "Owner"])
+        wb.save(rep_dir / f"Splice_{nm or 'V'}{i}_loop.xlsx")
+    t = next(t for t in reg.terminals if reg.tail(t["closure"], t)[1] == 4)
+    tail, cnt = reg.tail(t["closure"], t)
+    key = "".join(ch for ch in t["tap"] if ch.isalnum())
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    x, y = reg.pos[t["closure"]]
+    for row in (["Splice Connections Report"], ["Splice name:", key], ["Coordinates:", x + 30, y + 30],
+                ["Enclosure Type:", "MAX10 Enclosure(M Bulk)"],
+                ["Segment", "Count", "Start Splice", "End Splice", "Owner", "Cable Design Length", "Cable Asbuilt Length"],
+                [f"Segment 1 of {tail} - Pigtail", cnt, f"Splice Case: {t['closure']}",
+                 f"MAX10 Enclosure(M Bulk): {t['tap']}", "Owner", 0, 0]):
+        ws.append(row)
+    wb.save(rep_dir / f"Splice_{key}.xlsx")
+
+
 def build_region(root: Path, all_reports: bool = False) -> Tuple[Region, Dict[str, Any], Path, Path, Path]:
     reg = Region(all_reports)
     root.mkdir(parents=True, exist_ok=True)
@@ -419,6 +463,7 @@ def build_region(root: Path, all_reports: bool = False) -> Tuple[Region, Dict[st
             _write_guide_report(reg, s, rep_dir / f"{s}.xlsx")
         else:
             _write_connections_report(reg, s, rep_dir / f"{s}.xlsx")
+    _write_extra_reports(reg, rep_dir)
     zpath = root / "SpliceReports.zip"
     with zipfile.ZipFile(zpath, "w") as zf:
         for f in sorted(rep_dir.iterdir()):
@@ -457,7 +502,8 @@ def run_selftest(verbose: bool = True, workdir: Optional[str] = None,
             f"{len(reg.report_closures)} splice reports, 1x{PORTS} splitters; {len(exp)} expected callouts")
         cfg = RunConfig(drawing_path=str(dxf), splice_paths=[str(zpath)], address_paths=[str(addr)],
                         output_dir=str(tmp / "output"))
-        res = CalloutEngine(cfg, Reporter(lambda m, l: None)).generate()
+        run_log: List[str] = []
+        res = CalloutEngine(cfg, Reporter(lambda m, l: run_log.append(m))).generate()
         doc = ezdxf.readfile(res.outputs["Callouts DXF"])
         gen = []
         for ml in doc.modelspace().query("MULTILEADER"):
@@ -538,6 +584,12 @@ def run_selftest(verbose: bool = True, workdir: Optional[str] = None,
         errs = [i for i in res.issues.items if i.severity == "ERROR"]
         typo_flagged = any("WKB-07022" in i.obj and "did you mean" in i.message for i in errs)
         checks.append(("closure typo detected with suggestion", typo_flagged, str([i.message for i in errs])))
+        skipped = {i.obj for i in res.issues.items if i.category == "Splice Report" and i.severity == "INFO"}
+        checks.append(("storage loops (unnamed, 'NoName') and a terminal report: skipped, no callout, no warning",
+                       "3 storage loop(s)" in skipped and "1 terminal / OLM report(s)" in skipped
+                       and not any("NONAME" in p.closure or "STORAGE" in p.closure for p in res.plans), str(skipped)))
+        checks.append(("cable drawn in two pieces at a storage loop joined into one link",
+                       any("1 cable break(s)" in m for m in run_log), ""))
         checks.append(("no other errors", all("WKB-07022" in i.obj for i in errs), str([(i.obj, i.message) for i in errs])))
         checks.append(("splitter size 1x32 detected from splice reports", "32 (splitter size" in res.summary["Splitter size per OLM"],
                        res.summary["Splitter size per OLM"]))

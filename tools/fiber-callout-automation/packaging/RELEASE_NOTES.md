@@ -1,4 +1,4 @@
-## FiberCallout Studio 2.7.2 (Windows x64)
+## FiberCallout Studio 2.8.0 (Windows x64)
 
 Single-file desktop app that generates the magenta **DES_FIBER_SPL** fiber-number and BFO callouts of an FTTx design
 from its splice reports and address lists.
@@ -7,6 +7,19 @@ from its splice reports and address lists.
 else. The exe isn't code-signed, so if Windows SmartScreen appears, click *More info -> Run anyway*.
 
 **Check the installation:** *Help -> Run self-test* (or `FiberCalloutStudio.exe --selftest`).
+
+What's new in 2.8.0 (storage loops, terminal reports, cable routing)
+- **Storage loops get no callouts.** A storage-loop report (Enclosure Type 'Storage Loop', with or without a name)
+  is cable slack, not a splice point. Before, unnamed loops were 'unrecognised', and loops named 'NoName' were
+  merged into one fake splice case that looked like a junction: BFO callouts appeared next to storage loops and in
+  empty space (DMI-R13: 8 stray callouts). Reports with a placeholder name are never merged.
+- **Terminal and OLM reports are recognised** (e.g. MAX10 enclosures, 'DMIR115RUTLEDGEST'): they end the network,
+  are not splice cases and no longer raise 'closure symbol not found' warnings (DMI-R13: 184 false warnings).
+- **Cables drawn in pieces are joined.** Where a cable is broken in the drawing at a point with no splice case
+  (a storage loop, a riser, a cable drawn in several lines), the pieces are joined into one cable.
+- **BFO on the right cable.** When the cable toward the next closure is missing from the drawing, the arrow no
+  longer goes on another cable found by a long way round (DMI-13186 and Credit River NMK-04119 were on the
+  incoming cable); the shortest drawn route is used, and a route with a large detour is refused.
 
 What's new in 2.7.2 (release fixes)
 - An empty drawing (0 bytes, or no blocks and no linework) is refused with a clear message, instead of a long list of

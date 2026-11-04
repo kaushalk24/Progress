@@ -363,6 +363,27 @@ def test_output_folder_error() -> None:
             check("unwritable output folder reported", "Cannot write to the output folder" in str(exc), str(exc))
 
 
+def test_cable_route() -> None:
+    """A BFO goes on the cable toward its own next closure - never on a long way round through the network."""
+    from collections import defaultdict
+    from ezdxf.math import Vec2
+    m = E.DrawingModel.__new__(E.DrawingModel)
+    m.scale = 1.0
+    pos = {"A": (0, 0), "B": (1000, 0), "C": (-1000, 0), "D": (-1000, 3000), "E": (1000, 3000)}
+    m.closures = {k: type("C", (), {"pos": Vec2(v)})() for k, v in pos.items()}
+    m.pieces, m.adj = [], defaultdict(list)
+    for a, b in (("A", "C"), ("C", "D"), ("D", "E"), ("E", "B")):     # A-B direct cable is missing
+        m.pieces.append(E.CablePiece("h", "UG", [Vec2(pos[a]), Vec2(pos[b])], a, b))
+        m.adj[a].append(len(m.pieces) - 1)
+        m.adj[b].append(len(m.pieces) - 1)
+    check("route: roundabout path through the network refused", m.find_piece_toward("A", "B", max_detour=2.0) is None)
+    check("route: without a limit, the shortest route's first cable", m.find_piece_toward("A", "B") == 0)
+    m.pieces.append(E.CablePiece("h", "UG", [Vec2(0, 0), Vec2(500, 40), Vec2(1000, 0)], "A", "B"))
+    m.adj["A"].append(4)
+    m.adj["B"].append(4)
+    check("route: direct cable found", m.find_piece_toward("A", "B", max_detour=2.0) == 4)
+
+
 def test_bad_inputs() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         log = E.IssueLog()
@@ -389,7 +410,7 @@ def test_bad_inputs() -> None:
 def main() -> int:
     for fn in (test_numbering_helpers, test_callout_text_rules, test_address_rules, test_header_mapping,
                test_splitter_detection, test_olm_splitters, test_per_olm_numbering, test_report_parsers, test_decorated_segment_ends, test_junction_rule, test_drawing_cable_labels, test_name_mismatch_and_differences, test_text_tables, test_units, test_input_signature, test_output_folder_error,
-               test_bad_inputs):
+               test_bad_inputs, test_cable_route):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001
