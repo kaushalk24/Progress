@@ -170,7 +170,14 @@ class Worker(QObject):
             self.failed.emit(self.task, "Cancelled by user")
         except Exception as exc:  # noqa: BLE001 - every failure is reported in the GUI
             self.log.emit(traceback.format_exc(), "DEBUG")
-            self.failed.emit(self.task, f"{type(exc).__name__}: {exc}")
+            if isinstance(exc, PermissionError):
+                msg = (f"{exc}\n\nThe file or folder is read-only or open in another program (Excel, AutoCAD). "
+                       "Close it or choose another output folder, then try again.")
+            elif isinstance(exc, (RuntimeError, FileNotFoundError)):
+                msg = str(exc)   # the engine's own messages are written for the designer
+            else:
+                msg = f"{type(exc).__name__}: {exc}"
+            self.failed.emit(self.task, msg)
 
 
 # =============================================================================
@@ -1222,7 +1229,8 @@ class MainWindow(QMainWindow):
         self.tbl_issues.fill(issues, lambda r: {"ERROR": "#FDECEA", "WARNING": "#FFF6E0"}.get(r["Severity"]))
         self.tbl_issues.set_filter("Errors and warnings" if n_e + n_w else "All, including info")
         self.tabs.setTabText(0, f"Issues ({n_e + n_w})" if n_e + n_w else "Issues")
-        self.tabs.setTabText(1, f"Callouts ({len(rows)})")
+        failed = sum(1 for r in rows if r["Status"] == "FAILED")
+        self.tabs.setTabText(1, f"Callouts ({len(rows) - failed}" + (f", {failed} not placed)" if failed else ")"))
         self.tbl_network.fill(res.network)
         self.tbl_closures.fill(res.closures, lambda r: {"Cable change": "#E8F3F5", "Junction": None}.get(r.get("Role")))
         self.tbl_existing.fill(res.existing_rows, lambda r: "#E8F5E9" if str(r.get("Result", "")).startswith("MATCH")

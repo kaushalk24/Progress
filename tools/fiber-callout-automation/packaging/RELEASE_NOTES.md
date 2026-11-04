@@ -1,4 +1,4 @@
-## FiberCallout Studio 2.7.1 (Windows x64)
+## FiberCallout Studio 2.7.2 (Windows x64)
 
 Single-file desktop app that generates the magenta **DES_FIBER_SPL** fiber-number and BFO callouts of an FTTx design
 from its splice reports and address lists.
@@ -7,6 +7,13 @@ from its splice reports and address lists.
 else. The exe isn't code-signed, so if Windows SmartScreen appears, click *More info -> Run anyway*.
 
 **Check the installation:** *Help -> Run self-test* (or `FiberCalloutStudio.exe --selftest`).
+
+What's new in 2.7.2 (release fixes)
+- An empty drawing (0 bytes, or no blocks and no linework) is refused with a clear message, instead of a long list of
+  missing closures.
+- A damaged or Excel-locked spreadsheet is reported once, with a hint, instead of once per loader.
+- Error dialogs show the plain message (no Python error names); a read-only or locked output tells you what to do.
+- The Callouts tab shows the placed callouts and, separately, how many could not be placed.
 
 What's new in 2.7.1
 - MDU cables: a cable larger than 12F (e.g. a 24F to an MDU) is always treated as a cable, even when the splice

@@ -211,6 +211,12 @@ class IssueLog:
     def add(self, severity: str, category: str, obj: Any, message: str) -> None:
         self.items.append(Issue(severity, category, str(obj), message))
 
+    def unreadable(self, path: Path, exc: Exception) -> None:
+        """One error per unreadable file, although both the splice-report and the address-list loaders try it."""
+        if any(i.severity == "ERROR" and i.obj == path.name and i.message.startswith("Unreadable") for i in self.items):
+            return
+        self.add("ERROR", "Input", path.name, f"Unreadable: {exc} - is the file damaged, or open and locked in Excel?")
+
     def count(self, severity: str) -> int:
         return sum(1 for i in self.items if i.severity == severity)
 
@@ -786,7 +792,7 @@ class AddressBook:
                         if x and x not in headers:
                             headers.append(x)
             except Exception as exc:  # noqa: BLE001 - every unreadable file is reported
-                issues.add("ERROR", "Address List", f.name, f"Unreadable: {exc}")
+                issues.unreadable(f, exc)
         return headers
 
     def load(self, files: List[Path], cmap: ColumnMap, ports_per_pon: int, reports: List[SpliceReport],
@@ -797,7 +803,7 @@ class AddressBook:
             try:
                 tables = read_tables(f)
             except Exception as exc:  # noqa: BLE001
-                issues.add("ERROR", "Address List", f.name, f"Unreadable: {exc}")
+                issues.unreadable(f, exc)
                 continue
             n_before = len(raw)
             sheet_problems: List[Tuple[str, str]] = []
@@ -1233,7 +1239,7 @@ def load_splice_reports(files: List[Path], issues: IssueLog, rep: Reporter, quie
         try:
             tables = read_tables(f)
         except Exception as exc:  # noqa: BLE001
-            issues.add("ERROR", "Splice Report", f.name, f"Unreadable: {exc}")
+            issues.unreadable(f, exc)
             continue
         parsed = False
         for sheet, rows in tables:
@@ -1611,6 +1617,15 @@ def open_source(cfg: RunConfig, rep: Reporter) -> NetworkSource:
     p = Path(cfg.drawing_path)
     if not p.exists():
         raise FileNotFoundError(f"Drawing not found: {cfg.drawing_path}")
+    src = _open_source(p, rep)
+    if not src.inserts and not src.lines:
+        raise RuntimeError(f"The drawing {p.name} is empty (no blocks or linework). Select the region's design drawing.")
+    return src
+
+
+def _open_source(p: Path, rep: Reporter) -> NetworkSource:
+    if p.stat().st_size == 0:
+        raise RuntimeError(f"The drawing {p.name} is an empty file (0 bytes). Select the region's design drawing.")
     if p.suffix.lower() == ".dwg":
         try:
             return source_from_native(str(p), rep)

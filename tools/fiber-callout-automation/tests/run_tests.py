@@ -363,9 +363,33 @@ def test_output_folder_error() -> None:
             check("unwritable output folder reported", "Cannot write to the output folder" in str(exc), str(exc))
 
 
+def test_bad_inputs() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        log = E.IssueLog()
+        bad = Path(tmp) / "broken.xlsx"
+        bad.write_bytes(b"PK\x03\x04garbage")
+        E.load_splice_reports([bad], log, E.Reporter(lambda m, l: None))
+        E.AddressBook.scan_headers([bad], log)
+        n = sum(1 for i in log.items if i.severity == "ERROR" and i.obj == "broken.xlsx")
+        check("unreadable file reported once, not per loader", n == 1, str(log.items))
+        for name, data in (("empty.dxf", b""), ("blank.dxf", None)):
+            d = Path(tmp) / name
+            if data is None:
+                import ezdxf
+                ezdxf.new().saveas(d)
+            else:
+                d.write_bytes(data)
+            try:
+                E.open_source(E.RunConfig(drawing_path=str(d)), E.Reporter(lambda m, l: None))
+                check(f"{name}: empty drawing refused", False, "no error raised")
+            except RuntimeError as exc:
+                check(f"{name}: empty drawing refused", "empty" in str(exc), str(exc))
+
+
 def main() -> int:
     for fn in (test_numbering_helpers, test_callout_text_rules, test_address_rules, test_header_mapping,
-               test_splitter_detection, test_olm_splitters, test_per_olm_numbering, test_report_parsers, test_decorated_segment_ends, test_junction_rule, test_drawing_cable_labels, test_name_mismatch_and_differences, test_text_tables, test_units, test_input_signature, test_output_folder_error):
+               test_splitter_detection, test_olm_splitters, test_per_olm_numbering, test_report_parsers, test_decorated_segment_ends, test_junction_rule, test_drawing_cable_labels, test_name_mismatch_and_differences, test_text_tables, test_units, test_input_signature, test_output_folder_error,
+               test_bad_inputs):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001
