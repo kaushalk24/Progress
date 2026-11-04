@@ -30,6 +30,7 @@ import math
 import re
 from dataclasses import dataclass, field
 
+from .design import unit_of
 from .model import APPROVED, PROVISIONAL, FieldValue, Issue, OutputRow
 
 REPORT_DERIVED = ("FS-CABLE-END", "FS-BREAK-POINT", "FS-TAP-CABLE")
@@ -93,10 +94,14 @@ def hungarian(cost: list[list[float]]) -> list[int]:
     return out
 
 
-def assign(demands: list, closures: list, cost: dict, unassigned: float, penalty, weight: float) -> dict:
+def assign(demands: list, closures: list, cost: dict, unassigned: float, pair, weight: float, combine,
+           peers=None) -> dict:
     """Assign each demand one closure (or none), each closure to at most one demand, minimising
-    sum(cost) + weight * penalty(assignment). Exact for the cost part (Hungarian method), then
-    pairwise swaps / moves while they lower the total."""
+    sum(cost) + weight * combine(fwd, back), where fwd/back are summed over demand pairs
+    (pair(k1, c1, k2, c2) -> (fwd, back), k1 before k2 in `demands`). Exact for the cost part
+    (Hungarian method), then pairwise swaps / moves while they lower the total. Only the pairs that
+    involve a changed demand are recounted per trial, so large components stay fast. `peers` (optional):
+    demand -> the demands it can form a non-zero pair with (default: all)."""
     big = 1e9
     cols = list(closures) + [None] * len(demands)
     matrix = [[(cost.get((d, c), big) if c is not None else (unassigned if k == len(closures) + i else big))
@@ -108,29 +113,69 @@ def assign(demands: list, closures: list, cost: dict, unassigned: float, penalty
             asg[d] = None
     if not weight:
         return asg
+    index = {d: i for i, d in enumerate(demands)}
+    if peers is None:
+        peers = {d: demands for d in demands}
+    else:
+        peers = {d: [o for o in demands if o in peers.get(d, ())] for d in demands}
 
-    def total(a):
-        return sum(cost[(d, c)] if c is not None else unassigned for d, c in a.items()) + weight * penalty(a)
-    best, improved = total(asg), True
+    def cval(d, c):
+        return cost[(d, c)] if c is not None else unassigned
+
+    def pv(k1, c1, k2, c2):
+        if index[k1] > index[k2]:
+            k1, c1, k2, c2 = k2, c2, k1, c1
+        return pair(k1, c1, k2, c2)
+
+    fwd = back = 0
+    for k1 in demands:
+        for k2 in peers[k1]:
+            if index[k2] > index[k1]:
+                f, b = pv(k1, asg[k1], k2, asg[k2])
+                fwd += f
+                back += b
+
+    def delta(a, changes):
+        """(cost delta, fwd delta, back delta) of applying changes {demand: new closure} to a."""
+        dc = sum(cval(k, c) - cval(k, a[k]) for k, c in changes.items())
+        df = db = 0
+        ks = list(changes)
+        for k in ks:
+            for o in peers[k]:
+                if o in changes or o == k:
+                    continue
+                f1, b1 = pv(k, changes[k], o, a[o])
+                f0, b0 = pv(k, a[k], o, a[o])
+                df += f1 - f0
+                db += b1 - b0
+        if len(ks) == 2:
+            k1, k2 = ks
+            f1, b1 = pv(k1, changes[k1], k2, changes[k2])
+            f0, b0 = pv(k1, a[k1], k2, a[k2])
+            df += f1 - f0
+            db += b1 - b0
+        return dc, df, db
+
+    improved = True
     while improved:
         improved = False
         for i, d1 in enumerate(demands):
             for d2 in demands[i + 1:]:
                 c1, c2 = asg[d1], asg[d2]
                 if (c2 is None or (d1, c2) in cost) and (c1 is None or (d2, c1) in cost):
-                    trial = dict(asg)
-                    trial[d1], trial[d2] = c2, c1
-                    val = total(trial)
-                    if val < best - 1e-9:
-                        asg, best, improved = trial, val, True
+                    dc, df, db = delta(asg, {d1: c2, d2: c1})
+                    if dc + weight * (combine(fwd + df, back + db) - combine(fwd, back)) < -1e-9:
+                        asg = dict(asg)
+                        asg[d1], asg[d2] = c2, c1
+                        fwd, back, improved = fwd + df, back + db, True
             used = set(asg.values())
             for c in closures:
                 if c not in used and (d1, c) in cost:
-                    trial = dict(asg)
-                    trial[d1] = c
-                    val = total(trial)
-                    if val < best - 1e-9:
-                        asg, best, improved = trial, val, True
+                    dc, df, db = delta(asg, {d1: c})
+                    if dc + weight * (combine(fwd + df, back + db) - combine(fwd, back)) < -1e-9:
+                        asg = dict(asg)
+                        asg[d1] = c
+                        fwd, back, improved = fwd + df, back + db, True
                         used = set(asg.values())
     return asg
 
@@ -236,8 +281,14 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
             pts += design.address_points(m.group("address"))
         return list({id(p): p for p in pts}.values())
 
+    def is_mdu(rows) -> bool:
+        """An MDU tap feeds several units of one building ('... UNIT A', '... UNIT B')."""
+        units = {unit_of(str(r.value("address") or "")) for r in rows}
+        return len({u for u in units if u and not u.startswith("BLDG")}) >= 2
+
     # candidates and their fit
     for dm in demands.values():
+        mdu = is_mdu(dm.rows)
         dm.points = premise_points(dm.rows, dm.tap)
         dm.drawn = design.drawn_drop_closures(dm.points)
         premises = [p["xy"] for p in dm.points]
@@ -249,6 +300,15 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
                 continue
             if c in have and c != dm.prior:
                 continue   # the fibre left this closure on a cable (its report shows it); not the tap splice
+            if enc["link"] == "mdu_cable":
+                # an MDU enclosure (fed by a cable from the closure, no pigtail) serves MDU taps only;
+                # the MDU's units have no address point of their own, so the feed itself is the evidence
+                if mdu:
+                    cost = d.get("mdu_feed_cost", d["no_drop_base"])
+                    if dm.prior == c:
+                        cost -= d["report_value_bonus"]
+                    dm.candidates[c] = (cost, "mdu", None)
+                continue
             fits = [x for x in (design.drop_support(a, enc["xy"]) for a in premises) if x is not None]
             if c in dm.drawn:          # a drawn drop line from the premise to the ped of this closure
                 how_drawn, drop = dm.drawn[c]
@@ -295,28 +355,34 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
         closures = sorted({c for k in comp for c in demands[k].candidates})
         cost = {(k, c): v[0] for k in comp for c, v in demands[k].candidates.items()}
 
-        def penalty(a, comp=comp):
-            fwd = back = 0
-            for k1, k2 in itertools.combinations(comp, 2):
-                d1, d2 = demands[k1], demands[k2]
-                c1, c2 = a[k1], a[k2]
-                if not (d1.entry and d2.entry and c1 and c2) or d1.entry[0] != d2.entry[0] or \
-                        d1.entry[1] == d2.entry[1]:
-                    continue
-                p1, p2 = pos(d1, c1), pos(d1, c2)
-                if p1 is None or p2 is None or p1 == p2:
-                    continue
-                s = (d1.entry[1] - d2.entry[1]) * (p1 - p2)
-                if s > 0:
-                    back += 1        # higher fibre farther along
-                elif s < 0:
-                    fwd += 1         # lower fibre farther along
+        def pair(k1, c1, k2, c2):
+            d1, d2 = demands[k1], demands[k2]
+            if not (d1.entry and d2.entry and c1 and c2) or d1.entry[0] != d2.entry[0] or \
+                    d1.entry[1] == d2.entry[1]:
+                return 0, 0
+            p1, p2 = pos(d1, c1), pos(d1, c2)
+            if p1 is None or p2 is None or p1 == p2:
+                return 0, 0
+            s = (d1.entry[1] - d2.entry[1]) * (p1 - p2)
+            if s > 0:
+                return 0, 1          # higher fibre farther along
+            if s < 0:
+                return 1, 0          # lower fibre farther along
+            return 0, 0
+
+        def combine(fwd, back):
             if direction == "lower_farther":
                 return back
             if direction == "lower_nearer":
                 return fwd
             return min(fwd, back)
-        assigned.update(assign(comp, closures, cost, d["unassigned_cost"], penalty, d["order_weight"]))
+        by_cable = collections.defaultdict(set)
+        for k in comp:
+            if demands[k].entry:
+                by_cable[demands[k].entry[0]].add(k)
+        peers = {k: by_cable[demands[k].entry[0]] if demands[k].entry else set() for k in comp}
+        assigned.update(assign(comp, closures, cost, d["unassigned_cost"], pair, d["order_weight"], combine,
+                               peers))
 
     # apply
     n_new = n_agree = n_disagree = n_none = n_branch = n_drawn_new = n_drawn_agree = n_drawn_conflict = 0
@@ -354,8 +420,9 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
                 continue
             cst, kind, drop = dm.candidates[c]
             enc = design.enclosure_of[c]
+            joined = "MDU enclosure fed by a cable" if enc["link"] == "mdu_cable" else "tap enclosure joined by pigtail"
             evid = ev_base + [f"closure {c} at ({design.closures[c][0]:.0f}, {design.closures[c][1]:.0f}); "
-                              f"tap enclosure joined by pigtail at ({enc['xy'][0]:.0f}, {enc['xy'][1]:.0f})"]
+                              f"{joined} at ({enc['xy'][0]:.0f}, {enc['xy'][1]:.0f})"]
             if kind.startswith("drawn"):
                 evid.append(f"drawn drop line {drop['address']} -> ped at ({drop['ped'][0]:.0f}, {drop['ped'][1]:.0f}), "
                             f"{drop['length']:.0f} ft; ped {drop['ped_dist']:.0f} ft from {drop['closure']}")
@@ -371,7 +438,8 @@ def resolve_from_drawing(results, net, design, cfg) -> list[Issue]:
                        "premise": "premise found in the drawing, no drop symbol fits; nearest free enclosure in the "
                                   "reachable network",
                        "none": "premise not found in the drawing; chosen by elimination and the fibre-order "
-                               "convention"}[kind]
+                               "convention",
+                       "mdu": "MDU tap: the MDU enclosure at the building is fed by a cable from this closure"}[kind]
             code = "FS-DROP" if kind.startswith("drawn") else "FS-DRAWING"
             others = sorted((v[0], x) for x, v in dm.candidates.items() if x != c)
             if fs.code == "FS-UNKNOWN":

@@ -207,7 +207,7 @@ class Design:
                 self.peds.append((ins.x, ins.y))
         self._link_enclosures(lines)
         self.enclosure_of: dict[str, dict] = {}
-        for e in self.enclosures:
+        for e in sorted(self.enclosures, key=lambda e: e["link"] != "pigtail"):   # a pigtail tap first
             if e["closure"] is not None:
                 self.enclosure_of.setdefault(e["closure"], e)
         self._build_graph(lines)
@@ -279,11 +279,29 @@ class Design:
                             e["closure"], e["link"] = name, "pigtail"
                 if e["closure"]:
                     break
+        # An MDU enclosure sits at the building and is fed by a fibre cable straight from its closure
+        # (no pigtail): one cable end on the enclosure, the other on a closure.
+        prefix = self.cfg["cable_layer_prefix"]
+        feeds = [p for p in lines if p.layer.startswith(prefix) and p.layer != self.cfg["pigtail_layer"]
+                 and len(p.points) >= 2]
+        for e in self.enclosures:
+            if e["closure"] is not None or not cl:
+                continue
+            for p in feeds:
+                for i, j in ((0, -1), (-1, 0)):
+                    if math.dist(p.points[i], e["xy"]) <= snap:
+                        name, dist = min(((n, math.dist(p.points[j], xy)) for n, xy in cl), key=lambda t: t[1])
+                        if dist <= snap:
+                            e["closure"], e["link"] = name, "mdu_cable"
+                            break
+                if e["closure"]:
+                    break
+        for e in self.enclosures:
             if e["closure"] is None:
                 unlinked += 1
         if unlinked:
             self.issues.append(Issue("INFO", "DRAWING_ENCLOSURE_UNLINKED",
-                                     f"{unlinked} tap enclosure symbol(s) have no pigtail to a closure in "
+                                     f"{unlinked} tap enclosure symbol(s) have no pigtail or feed cable to a closure in "
                                      f"{self.source}; they are not used"))
 
     # -------------------------------------------------------------- cable graph
@@ -442,9 +460,11 @@ def load_design(path: str | Path, cfg: dict) -> tuple[Design | None, list[Issue]
     des = Design(inserts, lines, cfg, path.name, meta["method"])
     issues += des.issues
     linked = sum(1 for e in des.enclosures if e["closure"])
+    mdu = sum(1 for e in des.enclosures if e["link"] == "mdu_cable")
     issues.append(Issue("INFO", "DRAWING_MODEL",
-                        f"{path.name} ({meta['method']}): {len(des.closures)} closures, {linked} tap enclosures with "
-                        f"pigtail, {len(des.addresses)} address points, {len(des.drops)} drop symbols, "
+                        f"{path.name} ({meta['method']}): {len(des.closures)} closures, {linked - mdu} tap enclosures "
+                        f"with pigtail, {mdu} MDU enclosure(s) fed by a cable, {len(des.addresses)} address points, "
+                        f"{len(des.drops)} drop symbols, "
                         f"{len(des.drawn_drops)} drawn drop lines", source=path.name))
     if not des.closures or not linked:
         issues.append(Issue("WARNING", "DRAWING_MODEL_EMPTY",

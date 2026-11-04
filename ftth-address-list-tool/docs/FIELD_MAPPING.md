@@ -81,6 +81,11 @@ before the tap splice. All evidence is drawn objects (block names and tags in `[
    show the fibre). A closure whose report does carry the circuit, on any cable, is passed.
 2. **Candidates** – reachable closures whose tap enclosure (`CX1_MDU_ENCLOSURE`) is joined to
    them by a drawn pigtail, and which are not the confirmed splice closure of another tap.
+   **MDUs:** an MDU enclosure sits at the building and is fed by a fibre cable straight from
+   its closure (no pigtail). Such an enclosure is tied to that closure and is a candidate
+   only for MDU taps (rows of one tap with two or more units, `UNIT A`, `UNIT B`, …), where
+   the feed itself is the evidence: the MDU's units have no address point of their own and
+   FX_DROPS draws no drop to an MDU. House taps never take an MDU enclosure.
 3. **Fit** – first a **drawn drop line** (layer `RTE_SpatialNet_UGDROP`, as drawn by the
    FX_DROPS routine): premise address point → drop line → ped (`CX1-MAX5` / `CX1-MAX10` /
    `CX1-PED4`) → the closure nearest that ped (rule `FS-DROP`; when a second closure is

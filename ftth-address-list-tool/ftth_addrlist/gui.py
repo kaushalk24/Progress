@@ -254,23 +254,31 @@ class App(tk.Tk):
         return clean_path(self.vars[key].get())
 
     def _ui_dir(self, key):
-        p = filedialog.askdirectory(initialdir=self._value(key) or None)
+        old = self._value(key)
+        p = filedialog.askdirectory(initialdir=old or None)
         if p:
             self.vars[key].set(p)
-            if key == "reports":
+            if key == "reports" and clean_path(p) != old:
+                # a new region: the OLM chosen for the previous one does not apply
+                self.vars["olm"].set(ALL_OLMS)
+                self.olm_box["values"] = [ALL_OLMS]
                 self._suggest_drawing(Path(p))
 
     def _suggest_drawing(self, folder: Path):
-        """The region's DWG is often delivered with the reports: use it when it is the only one."""
-        if self._value("drawing"):
-            return
+        """The region's DWG is often delivered with the reports: use it when it is the only one. A drawing
+        left from an earlier region is replaced by it, or flagged for checking."""
         try:
             dwgs = [f for f in folder.rglob("*") if f.suffix.lower() == ".dwg" and f.is_file()]
         except OSError:
-            return
+            dwgs = []
+        cur = self._value("drawing")
         if len(dwgs) == 1:
-            self.vars["drawing"].set(str(dwgs[0]))
-            self.say(f"Design drawing found in the report folder: {dwgs[0].name}")
+            if not cur or Path(cur).resolve() != dwgs[0].resolve():
+                self.vars["drawing"].set(str(dwgs[0]))
+                self.say(f"Design drawing found in the report folder: {dwgs[0].name}" +
+                         (f" (replaces {Path(cur).name})" if cur else ""))
+        elif cur:
+            self.say(f"Design drawing kept from before: {Path(cur).name} - check it is this region's drawing.")
 
     def _ui_file(self, key, types):
         cur = self._value(key)

@@ -151,6 +151,26 @@ def test_design_model_from_dxf(tmp_path):
     assert any(i.code == "DRAWING_MODEL" for i in issues)
 
 
+
+def test_mdu_enclosure_fed_by_a_cable(tmp_path):
+    """An MDU enclosure sits at the building and is fed by a fibre cable straight from its closure
+    (no pigtail); a pigtail tap of the same closure still comes first."""
+    cfg = load_config()
+    path = write_design(tmp_path / "d.dxf", more_branches=([(900, 0), (900, -200)], [(300, 0), (300, 200)]))
+    doc = ezdxf.readfile(path)
+    msp = doc.modelspace()
+    for xy in ((900, -200), (300, 200)):
+        msp.add_blockref("CX1_MDU_ENCLOSURE", xy, dxfattribs={"layer": "Fiber Node"}).add_auto_attribs({"NAME": ""})
+    msp.add_blockref("CX1_MDU_ENCLOSURE", (2000, 2000), dxfattribs={"layer": "Fiber Node"})   # not joined
+    doc.saveas(path)
+    des, issues = load_design(path, cfg)
+    assert des.enclosure_of["TST-00004"]["link"] == "mdu_cable"
+    assert des.enclosure_of["TST-00004"]["xy"] == (900, -200)
+    assert des.enclosure_of["TST-00002"]["link"] == "pigtail"          # its own tap, not the MDU feed
+    msg = next(i.message for i in issues if i.code == "DRAWING_MODEL")
+    assert "4 tap enclosures with pigtail, 2 MDU enclosure(s) fed by a cable" in msg
+    assert any(i.code == "DRAWING_ENCLOSURE_UNLINKED" and i.message.startswith("1 ") for i in issues)
+
 # ------------------------------------------------------------------ resolver
 def test_drawing_fills_and_corroborates(tmp_path):
     cfg = load_config()
@@ -236,10 +256,67 @@ def test_hungarian_matches_brute_force():
 def test_assignment_uses_order_penalty_to_break_ties():
     cost = {(d, c): 10.0 for d in "AB" for c in "XY"}
     # penalty: lower fibre (A) must not take the nearer closure X
-    pen = lambda a: 1 if a["A"] == "X" and a["B"] == "Y" else 0
-    assert assign(["A", "B"], ["X", "Y"], cost, 200.0, pen, 80.0) == {"A": "Y", "B": "X"}
+    pair = lambda k1, c1, k2, c2: (0, 1) if (k1, c1, k2, c2) == ("A", "X", "B", "Y") else (0, 0)
+    combine = lambda fwd, back: back
+    assert assign(["A", "B"], ["X", "Y"], cost, 200.0, pair, 80.0, combine) == {"A": "Y", "B": "X"}
     cost[("A", "X")] = 0.0                           # without the convention the cheaper pairing wins
-    assert assign(["A", "B"], ["X", "Y"], cost, 200.0, pen, 0.0) == {"A": "X", "B": "Y"}
+    assert assign(["A", "B"], ["X", "Y"], cost, 200.0, pair, 0.0, combine) == {"A": "X", "B": "Y"}
+
+
+def test_incremental_assignment_matches_full_recount():
+    """The local search recounts only changed pairs; it must pick what a full recount picks."""
+    rnd = random.Random(11)
+    for _ in range(60):
+        ds = [f"D{i}" for i in range(rnd.randint(2, 7))]
+        cs = [f"C{i}" for i in range(rnd.randint(2, 8))]
+        cost = {(d, c): float(rnd.randint(0, 40)) for d in ds for c in cs if rnd.random() < 0.7}
+        rank = {c: rnd.random() for c in cs}
+
+        def pair(k1, c1, k2, c2):
+            if c1 is None or c2 is None or rank[c1] == rank[c2]:
+                return 0, 0
+            return (1, 0) if rank[c1] > rank[c2] else (0, 1)
+        for combine in (lambda f, b: b, lambda f, b: f, min):
+            a = assign(ds, cs, cost, 60.0, pair, 15.0, combine)
+            used = [c for c in a.values() if c is not None]
+            assert len(used) == len(set(used))
+            assert all(c is None or (d, c) in cost for d, c in a.items())
+
+            def total(x):
+                f = sum(pair(k1, x[k1], k2, x[k2])[0] for i, k1 in enumerate(ds) for k2 in ds[i + 1:])
+                b = sum(pair(k1, x[k1], k2, x[k2])[1] for i, k1 in enumerate(ds) for k2 in ds[i + 1:])
+                return sum(cost[(d, c)] if c else 60.0 for d, c in x.items()) + 15.0 * combine(f, b)
+            # local optimum: no single swap or move lowers the full total
+            best = total(a)
+            for i, d1 in enumerate(ds):
+                for d2 in ds[i + 1:]:
+                    t = dict(a); t[d1], t[d2] = a[d2], a[d1]
+                    if (t[d1] is None or (d1, t[d1]) in cost) and (t[d2] is None or (d2, t[d2]) in cost):
+                        assert total(t) >= best - 1e-6
+                for c in cs:
+                    if c not in a.values() and (d1, c) in cost:
+                        t = dict(a); t[d1] = c
+                        assert total(t) >= best - 1e-6
+
+
+def test_assignment_peers_give_the_same_answer():
+    """Limiting the recount to demands on the same cable (pairs across cables count 0) changes nothing."""
+    rnd = random.Random(5)
+    for _ in range(60):
+        ds = [f"D{i}" for i in range(rnd.randint(2, 9))]
+        cs = [f"C{i}" for i in range(rnd.randint(2, 10))]
+        cable = {d: rnd.choice("AB") for d in ds}
+        cost = {(d, c): float(rnd.randint(0, 40)) for d in ds for c in cs if rnd.random() < 0.7}
+        rank = {c: rnd.random() for c in cs}
+
+        def pair(k1, c1, k2, c2):
+            if cable[k1] != cable[k2] or c1 is None or c2 is None:
+                return 0, 0
+            return (1, 0) if rank[c1] > rank[c2] else (0, 1)
+        peers = {d: {o for o in ds if cable[o] == cable[d]} for d in ds}
+        for combine in (lambda f, b: b, min):
+            assert assign(ds, cs, cost, 60.0, pair, 15.0, combine, peers) == \
+                assign(ds, cs, cost, 60.0, pair, 15.0, combine)
 
 
 class _Res:
