@@ -16,7 +16,7 @@ from .model import Issue
 DEFAULTS = {
     # Block attribute tags of address points in the SpatialNet drawing export (DXF only).
     "address_tags": [["STREET_NUMBER", "STREET_NAME"], ["BUILDING_ADDRESS", "BUILDING_NAME"]],
-    "closure_regex": r"(?<![A-Z0-9-])[A-Z]{2,5}-\d{4,6}G?(?![A-Z0-9])",
+    "closure_regex": r"(?<![A-Z0-9-])[A-Z]{2,5}-[A-Z]?\d{4,6}G?(?![A-Z0-9])",
     "cable_regex": r"[A-Z]{2,5}-[A-Z0-9-]+ TO [A-Z]{2,5}-[A-Z0-9 -]+? FC\d{3}",
     "tap_regex": r"[A-Z]{2,5}-R\d*-(?:C-)?\d+ [A-Z0-9 .-]+",
 }

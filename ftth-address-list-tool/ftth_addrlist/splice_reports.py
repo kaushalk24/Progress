@@ -8,6 +8,9 @@ Two layouts are recognised:
 * "Fiber Optic Splice Guide" - a hand-made guide found in some packs. It has
   no fibre numbers on the outgoing side and no circuit data, so fibre numbers
   are derived from colours and every connection is treated as low-trust.
+* "Cable Report" - another export of the same system: one column pair (fibre, colour) per cable,
+  the circuit text, state and destination, but no segment numbers. The cable columns are mapped to
+  segments from the segment tables of the neighbouring reports (see Network).
 """
 
 from __future__ import annotations
@@ -25,6 +28,9 @@ from .model import (CableFiber, Connection, DeviceInfo, DevicePort, Issue, Locat
 
 FMT_REPORT = "connections_report"
 FMT_GUIDE = "splice_guide"
+FMT_CABLE = "cable_report"
+CABLE_HDR_RE = re.compile(r"^FIBER CABLE\s+\d+\s*\((\d+)\s*x\s*(\d+)\)\s*:\s*(.+)$", re.I)
+CABLE_FIBER_RE = re.compile(r"^(\d+)\.(\d+)$")
 
 SEG_ROW_RE = re.compile(r"^Segment\s+(\d+)\s+of\s+(.+?)\s+-\s+([\w /]+)$")
 SEG_REF_RE = re.compile(r"^(.*\S)\s*:\s*Seg\s*(\d+)$")
@@ -77,7 +83,7 @@ OUTPUT_SHEETS = {"Row Status", "Field Evidence", "Run Info", "Difference classes
 
 
 REPORT_SUFFIXES = (".xlsx", ".csv")
-REPORT_TITLES = ("Splice Connections Report", "Fiber Optic Splice Guide")
+REPORT_TITLES = ("Splice Connections Report", "Fiber Optic Splice Guide", "Cable Report")
 
 
 def _csv_rows(path: Path) -> list[list]:
@@ -134,8 +140,10 @@ def read_report(path: str | Path, cfg: dict) -> SpliceReport:
         return _read_connections_report(path, rows, cfg)
     if any(c == "Fiber Optic Splice Guide" for c in first):
         return _read_splice_guide(path, rows, cfg)
-    raise ReportError(f"{path.name}: unrecognised layout (expected 'Splice Connections Report' "
-                      f"or 'Fiber Optic Splice Guide' in row 1)")
+    if any(c == "Cable Report" for c in first):
+        return _read_cable_report(path, rows, cfg)
+    raise ReportError(f"{path.name}: unrecognised layout (expected 'Splice Connections Report', "
+                      f"'Cable Report' or 'Fiber Optic Splice Guide' in row 1)")
 
 
 # --------------------------------------------------------------------------- report
@@ -349,6 +357,76 @@ def _read_splice_guide(path: Path, rows: list[list], cfg: dict) -> SpliceReport:
     return rep
 
 
+# --------------------------------------------------------------------------- cable report
+
+def _read_cable_report(path: Path, rows: list[list], cfg: dict) -> SpliceReport:
+    """'Cable Report' export. Each row is one fibre path through the closure: the fibre position
+    (tube.fibre) under each cable it is on; two positions = a splice (or a pass-through on the same
+    cable). Segment numbers are not in this export: each connection side carries seg = -k, k being
+    the cable's column order in the report (1 = its first column); Network replaces it with the real
+    segment number from the neighbouring reports' segment tables."""
+    issues: list[Issue] = [Issue("INFO", "CABLE_REPORT_FORMAT",
+                                 "'Cable Report' layout: segment numbers taken from the neighbouring reports",
+                                 source=path.name)]
+    header: dict = {}
+    hdr_row = None
+    for i, r in enumerate(rows[:40]):
+        a = _clean(r[0]) if r else None
+        if isinstance(a, str) and a.endswith(":"):
+            vals = [v for v in r[1:] if _clean(v) is not None]
+            key = {"Prepared By:": "prepared_by", "On:": "prepared_on", "Splice Name:": "splice_name",
+                   "Splice name:": "splice_name", "Location:": "location", "Coordinates:": "coordinates",
+                   "Latitude/Longitude:": "lat_lon", "Type:": "enclosure_type"}.get(a)
+            if key:
+                header[key] = _clean(vals[0]) if vals else None
+        if a == "Circuit ID" and any(_clean(v) == "Fiber #" for v in r):
+            hdr_row = i
+    if hdr_row is None or hdr_row == 0:
+        raise ReportError(f"{path.name}: 'Cable Report' table header (Circuit ID ... Fiber #) not found")
+    closure = _clean(header.get("splice_name")) or path.stem
+    rep = SpliceReport(path, FMT_CABLE, closure, header, issues=issues)
+    hdr = [_clean(v) for v in rows[hdr_row]]
+    cab_row = [_clean(v) for v in rows[hdr_row - 1]]
+    cols = []                        # (fibre column, cable, fibres per tube, column order of that cable)
+    order: dict[str, int] = {}
+    for j, v in enumerate(cab_row):
+        m = CABLE_HDR_RE.match(v) if isinstance(v, str) else None
+        if m and j < len(hdr) and hdr[j] == "Fiber #":
+            cable = " ".join(m.group(3).split())
+            order[cable] = order.get(cable, 0) + 1
+            cols.append((j, cable, int(m.group(2)), order[cable]))
+    if not cols:
+        raise ReportError(f"{path.name}: no 'FIBER CABLE ...: <name>' columns above the table header")
+    named = {h: j for j, h in reversed(list(enumerate(hdr))) if h}
+    j_state, j_usage, j_dest = named.get("Usage"), named.get("Description (Address)"), named.get("Destination")
+
+    def cell(r, j):
+        return _clean(r[j]) if j is not None and j < len(r) else None
+
+    for i in range(hdr_row + 1, len(rows)):
+        r = rows[i]
+        if not r or all(v is None for v in r):
+            continue
+        sides = []
+        for j, cable, per_tube, k in cols:
+            pos = cell(r, j)
+            m = CABLE_FIBER_RE.match(str(pos)) if pos is not None else None
+            if not m:
+                continue
+            tube, f = int(m.group(1)), int(m.group(2))
+            color = str(cell(r, j + 1) or "")
+            tc, fc = (color.split("/", 1) + [None])[:2] if "/" in color else (None, None)
+            sides.append(Side(CableFiber(cable, -k, (tube - 1) * per_tube + f, tube, f), _lower(tc), _lower(fc)))
+        if len(sides) != 2:
+            continue                 # an unspliced fibre end (cut / dark), or a row this reader does not use
+        dest = cell(r, j_dest)
+        rep.connections.append(Connection(
+            closure=closure, a=sides[0], b=sides[1], usage=cell(r, j_usage), state=cell(r, j_state),
+            owner=None, circuit_start=None, circuit_end=Location("", dest) if dest else None,
+            direction=None, source=SourceRef(path.name, i + 1), fmt=FMT_CABLE))
+    return rep
+
+
 def load_reports(paths, cfg: dict):
     """Read many report files. Returns (reports, issues)."""
     reports: list[SpliceReport] = []
@@ -357,7 +435,14 @@ def load_reports(paths, cfg: dict):
         try:
             rep = read_report(p, cfg)
         except NotAReport as exc:   # completed lists / earlier outputs kept with the reports: ignored, not an error
-            issues.append(Issue("INFO", "NOT_A_SPLICE_REPORT", str(exc), source=Path(p).name))
+            if Path(p).name.lower().startswith("splice_") and "address" not in Path(p).name.lower():
+                # named like a closure report: its closure would be treated as having no report
+                issues.append(Issue("WARNING", "REPORT_LAYOUT_UNKNOWN",
+                                    f"{exc}. The file is named like a closure report, so that closure is "
+                                    f"treated as having no report: export it again as a Splice Connections "
+                                    f"Report.", source=Path(p).name))
+            else:
+                issues.append(Issue("INFO", "NOT_A_SPLICE_REPORT", str(exc), source=Path(p).name))
             continue
         except ReportError as exc:
             issues.append(Issue("ERROR", "REPORT_UNREADABLE", str(exc), source=Path(p).name))

@@ -480,6 +480,9 @@ class Builder:
             row.issues.append(Issue("WARNING", "USAGE_TEXT_VARIANT", f"{seg.cable} fibre {f}: hub usage "
                                     f"{row.value('address')!r} but downstream " + "; ".join(tr.usage_variants[:2]),
                                     row.olm, seg.cable, f, ev))
+        if tr.node_passes:
+            fs.note = (fs.note + "; " if fs.note else "") + "spliced onto another cable at a location without a " \
+                "report (same circuit listed downstream): " + "; ".join(tr.node_passes[:2])
         if tr.premise_variants:
             msg = ("downstream records of the same circuit (same hub origin) name another premise: " +
                    "; ".join(tr.premise_variants[:2]))

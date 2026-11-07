@@ -167,7 +167,7 @@ no_drop_base = 60.0         # premise found but no drop symbol supports the cand
 no_premise_cost = 100.0     # premise not found in the drawing
 unassigned_cost = 200.0     # leave the tap unassigned
 # Identifier patterns for the cross-check (closure ids, cable names, tap names in drawing text).
-closure_regex = '(?<![A-Z0-9-])[A-Z]{2,5}-\d{4,6}G?(?![A-Z0-9])'
+closure_regex = '(?<![A-Z0-9-])[A-Z]{2,5}-[A-Z]?\d{4,6}G?(?![A-Z0-9])'
 cable_regex = '[A-Z]{2,5}-[A-Z0-9-]+ TO [A-Z]{2,5}-[A-Z0-9 -]+? FC\d{3}'
 tap_regex = '[A-Z]{2,5}-R\d*-(?:C-)?\d+ [A-Z0-9 .-]+'
 

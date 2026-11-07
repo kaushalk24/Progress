@@ -18,6 +18,14 @@ Spatial-system *Splice Connections Report* (one workbook per closure):
 A hand-made *Fiber Optic Splice Guide* layout is also read (low trust: no outgoing fibre
 numbers, colours only, no circuit data; any value whose path uses one is PROVISIONAL).
 
+The system's *Cable Report* export is read as well: one column pair (`Fiber #` `TT.FF`, `Color`)
+per cable, the circuit text (`Description (Address)`), the state (`Usage` column) and the
+destination. It has **no segment numbers**: a cable's columns are mapped, in order, to that
+cable's segments touching the closure in the other reports' segment tables (arriving first,
+then leaving). A cable that cannot be mapped one-to-one gives `CABLE_REPORT_UNMAPPED` and its
+splices are not used. Any other file named like a closure report (`Splice_…`) that is not
+understood gives a `REPORT_LAYOUT_UNKNOWN` warning (that closure counts as having no report).
+
 ## Row set and order (rules SEC-*)
 
 1. **Hub** = the closure whose report has a segment from/to `OLM Housing: <OLM>`.
@@ -58,6 +66,7 @@ circuit start/end. Only when the circuit fields do not decide is the usage text 
 | `FS-HUB-OMITTED` | The same fibres on later distribution sections (convention of the completed lists: 60 of 60 rows in 5 lists) | blank | CONFIRMED |
 | `FS-TRACE-TERMINAL` | Trace reaches a closure whose next segment ends at the terminal enclosure (pigtail/drop) | that closure | CONFIRMED |
 | bridge | Closure(s) on the path have no report, but the next downstream report lists the **same cable and fibre number carrying the same circuit** (same hub origin, or same usage) | trace continues | (no downgrade) |
+| node bridge | The path reaches a location without a report (typically a **Node Facility** the cable passes through) where the fibre is spliced onto **another cable under another fibre number**: exactly one fibre of a segment starting/ending at that location is listed downstream with the **same live circuit** (circuit Start/End = the hub) and the same usage text | trace continues on that cable | (no downgrade; noted on the row) |
 | `FS-BREAK-POINT` | Trace stops at a closure without report; the next downstream record of the same fibre is a cut piece whose circuit Start/End names closure *Y* (between the stop and the record) – the fibre leaves the cable at *Y* | *Y* | PROVISIONAL (could be a branch splice, not the tap splice) |
 | `FS-CABLE-END` | Trace stops at the closure where the cable ends (`… TO <X> FCnnn`) and *X* has no report | *X* | PROVISIONAL |
 | `FS-TAP-CABLE` | The fibre is put, in closure *A*, on a cable named to the row's own tap (`<A> TO <tap> FCnnn`) whose far end is not recorded | *A* | PROVISIONAL |
@@ -65,7 +74,8 @@ circuit start/end. Only when the circuit fields do not decide is the usage text 
 | `FS-DRAWING` | Reports stop before the tap splice; closure located from the design drawing without a drawn drop (see below) | closure | PROVISIONAL |
 | `FS-UNKNOWN` | Fibre continues past a closure without report, nothing further identifies the splice and no drawing (or no drawing candidate) | blank | UNRESOLVED (candidates listed) |
 | `FS-GUIDE` | Path uses a hand-made splice guide | as traced | PROVISIONAL |
-| `FS-SEG-ALIAS` | Two reports number the same span differently (matched by cable + both end closures) | as traced | PROVISIONAL |
+| split span | One span between two closures is made of several segments (aerial pole-to-pole sections, riser, underground; e.g. Seg5 … Seg17 with no closure between) and each closure report lists the section touching it: both segments join the same two closures and no segment numbered between them is listed anywhere | as traced | (no downgrade) |
+| `FS-SEG-ALIAS` | Two reports number the same span differently (matched by cable + both end closures) and it is not a split span | as traced | PROVISIONAL |
 | `FS-USAGE-VARIANT` | Downstream usage text differs on the same circuit (report revisions) | as traced | PROVISIONAL |
 | `FS-CIRCUIT-CONFLICT` | Downstream record on the path carries another circuit (not from the hub) | blank | UNRESOLVED |
 | `FS-TRACE-BROKEN` | Live fibre not listed in a closure report on its path | blank | UNRESOLVED |

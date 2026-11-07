@@ -8,7 +8,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 
 from .model import (CableFiber, Connection, DevicePort, Issue, Location, SegmentInfo, SpliceReport)
-from .splice_reports import FMT_GUIDE
+from .splice_reports import FMT_CABLE, FMT_GUIDE
 
 
 @dataclass
@@ -52,6 +52,8 @@ class TraceResult:
     seg_aliases: list[str] = field(default_factory=list)
     usage_variants: list[str] = field(default_factory=list)
     premise_variants: list[str] = field(default_factory=list)   # same circuit, but a different premise named
+    node_passes: list[str] = field(default_factory=list)        # no-report locations where the fibre changed cable
+    span_sections: list[str] = field(default_factory=list)      # spans listed as different sections at each end
     path_closures: set = field(default_factory=set)
     route: list[str] = field(default_factory=list)   # closures in path order, incl. bridged ones without report
 
@@ -60,6 +62,17 @@ class TraceResult:
         if self.stop_location is not None and self.stop in ("terminal", "missing_report", "olm"):
             parts.append(str(self.stop_location))
         return " > ".join(parts)
+
+
+def _ranges_text(nums: list[int]) -> str:
+    out, i = [], 0
+    while i < len(nums):
+        j = i
+        while j + 1 < len(nums) and nums[j + 1] == nums[j] + 1:
+            j += 1
+        out.append(str(nums[i]) if i == j else f"{nums[i]}-{nums[j]}")
+        i = j + 1
+    return ", ".join(out)
 
 
 def _house_number(text: str | None) -> str | None:
@@ -101,9 +114,17 @@ class Network:
         self.olm_kinds = set(net["olm_kinds"])
         self.usage_re = re.compile(cfg["address"]["usage_regex"])
         self._by_fiber = None
+        self._seg_records = None
         chosen = self._choose_duplicates(reports)
+        later = []
         for rep in reports:
             if chosen[rep.closure] is rep:
+                if rep.fmt == FMT_CABLE:
+                    later.append(rep)       # needs the segment tables of the other reports first
+                else:
+                    self._add(rep)
+        for rep in later:
+            if self._resolve_cable_report(rep):
                 self._add(rep)
 
     # ----------------------------------------------------------------- duplicates
@@ -177,14 +198,70 @@ class Network:
             idx[c.a.endpoint.key].append(c)
             if c.b.endpoint.key != c.a.endpoint.key:
                 idx[c.b.endpoint.key].append(c)
+        listed = defaultdict(int)
+        for s in rep.segments:
+            listed[(s.cable, s.seg)] += 1
+        same_name = defaultdict(list)       # (cable, seg) listed twice in the segment table: two cables, one name
         for key, conns in idx.items():
             if key[0] == "C" and len(conns) > 1 and rep.fmt != FMT_GUIDE:
+                if listed.get((key[1], key[2]), 0) > 1:
+                    same_name[(key[1], key[2])].append(key[3])
+                    continue
                 self.issues.append(Issue(
                     "WARNING", "FIBER_LISTED_TWICE",
                     f"{key[1]} Seg{key[2]} fibre {key[3]} appears in {len(conns)} rows of {rep.path.name} "
                     f"({', '.join(str(c.source.row) for c in conns)})",
                     cable=key[1], fiber=key[3], source=rep.path.name))
+        for (cable, seg), fibers in same_name.items():
+            self.issues.append(Issue(
+                "WARNING", "CABLE_NAME_REPEATED",
+                f"{rep.path.name}: {listed[(cable, seg)]} different cables are named {cable} Seg{seg} (e.g. two "
+                f"MDU buildings without a house number), so fibres {_ranges_text(sorted(fibers))} appear more than "
+                f"once. Fiber Splice is not affected; give the cables / premises distinct names in the design.",
+                cable=cable, source=rep.path.name))
         self.conn_index[rep.closure] = idx
+
+    def _resolve_cable_report(self, rep: SpliceReport) -> bool:
+        """Give the connections of a 'Cable Report' their segment numbers: a cable's columns map, in order,
+        to its segments that touch this closure in the other reports' segment tables (segments arriving
+        here first, then those leaving). A cable that cannot be mapped one-to-one is reported and its
+        connections are left out."""
+        cols: dict[str, set] = defaultdict(set)
+        for c in rep.connections:
+            for side in (c.a, c.b):
+                cols[side.endpoint.cable].add(-side.endpoint.seg)
+        mapping: dict[tuple, int] = {}
+        bad = []
+        for cable, ks in cols.items():
+            touching = sorted(((0 if seg.end and seg.end.name == rep.closure else 1), s)
+                              for (cab, s), seg in self.segments.items()
+                              if cab == cable and rep.closure in (seg.start.name if seg.start else None,
+                                                                  seg.end.name if seg.end else None))
+            n = max(ks)
+            if len(touching) != n:
+                bad.append(f"{cable} ({n} column(s), {len(touching)} segment(s) at {rep.closure} in the other "
+                           f"reports)")
+                continue
+            for k, (_, s) in enumerate(touching, 1):
+                mapping[(cable, -k)] = s
+        kept = []
+        for c in rep.connections:
+            ka, kb = (c.a.endpoint.cable, c.a.endpoint.seg), (c.b.endpoint.cable, c.b.endpoint.seg)
+            if ka not in mapping or kb not in mapping:
+                continue
+            for side, k in ((c.a, ka), (c.b, kb)):
+                e = side.endpoint
+                side.endpoint = CableFiber(e.cable, mapping[k], e.fiber, e.tube, e.tube_fiber)
+            kept.append(c)
+        rep.connections = kept
+        if bad:
+            self.issues.append(Issue("WARNING", "CABLE_REPORT_UNMAPPED",
+                                     f"{rep.path.name} ('Cable Report' layout, no segment numbers): cable(s) not "
+                                     f"matched to their segments: {'; '.join(bad)}; those splices are not used. "
+                                     f"Export this closure as a Splice Connections Report.", source=rep.path.name))
+        if not kept:
+            return False
+        return True
 
     def _add_segment(self, s: SegmentInfo):
         k = (s.cable, s.seg)
@@ -304,6 +381,39 @@ class Network:
         return {"closure": Location("Splice Case", name), "fiber": CableFiber(fiber.cable, s2, fiber.fiber),
                 "from_seg": fiber.seg, "to_seg": s2}
 
+    def _node_bridge(self, at: Location, fiber: CableFiber, expected_usage: str | None, exclude=frozenset(),
+                     origin: str | None = None):
+        """The path reaches a location without a report (e.g. a Node Facility the cable passes through)
+        and the same-cable bridge found nothing: the fibre may have been spliced there onto ANOTHER cable,
+        under another fibre number. It is taken to continue only when exactly one fibre of a segment that
+        starts or ends at this location is listed downstream with the same live circuit (circuit start or
+        end = the origin) and the same usage text. Returns {'closure', 'fiber'} (fiber leaves `at`) or None."""
+        if not expected_usage or expected_usage == "No Desc" or not origin or not at.name:
+            return None
+        if self._seg_records is None:
+            self._seg_records = defaultdict(list)
+            for name, idx in self.conn_index.items():
+                for key, conns in idx.items():
+                    if key[0] == "C":
+                        self._seg_records[(key[1], key[2])].append((name, key, conns))
+        found = {}
+        for (cab, s), seg in self.segments.items():
+            if cab == fiber.cable or at.name not in (seg.start.name if seg.start else None,
+                                                     seg.end.name if seg.end else None):
+                continue
+            for name, key, conns in self._seg_records.get((cab, s), []):
+                if name in exclude or name == at.name:
+                    continue
+                for conn in conns:
+                    if self.circuit_relation(conn, origin) != "same" or not conn.usage or \
+                            compare_usage(conn.usage, expected_usage, self.usage_re) == "different":
+                        continue
+                    found[(cab, s, key[3])] = name
+        if len(found) != 1:
+            return None
+        (cab, s, f), name = next(iter(found.items()))
+        return {"closure": at, "fiber": CableFiber(cab, s, f), "next": name}
+
     def cable_positions(self, cable: str) -> dict[str, int]:
         """Closure -> boundary index along a cable (closure at the end of SegK -> K)."""
         pos: dict[str, int] = {}
@@ -357,6 +467,8 @@ class Network:
         self._aliases_scratch = []
         self._variants_scratch = []
         self._premise_scratch = []
+        self._node_scratch = []
+        self._sections_scratch = []
         self._path = {start_closure}
         self._route = [start_closure]
         self._origin = start_closure
@@ -364,6 +476,8 @@ class Network:
         result.seg_aliases = list(self._aliases_scratch)
         result.usage_variants = list(self._variants_scratch)
         result.premise_variants = list(self._premise_scratch)
+        result.node_passes = list(self._node_scratch)
+        result.span_sections = list(self._sections_scratch)
         result.path_closures = set(self._path)
         result.route = list(self._route)
         if result.stop == "missing_report" and result.stop_location is not None and \
@@ -381,6 +495,19 @@ class Network:
             if loc is not None and loc.name and loc.name not in out:
                 out.append(loc.name)
         return out
+
+    def _split_span(self, cable: str, s1: int, s2: int) -> bool:
+        """Segments s1 and s2 of a cable join the same two closures and no segment numbered between them is
+        listed in any report: one span split into sections without a closure between them (placement changes,
+        poles, risers). Each closure report lists the section that touches it."""
+        a, b = self.segments.get((cable, s1)), self.segments.get((cable, s2))
+        if a is None or b is None:
+            return False
+        ends = lambda x: {x.start.name if x.start else None, x.end.name if x.end else None}
+        if ends(a) != ends(b) or None in ends(a):
+            return False
+        lo, hi = sorted((s1, s2))
+        return all((cable, k) not in self.segments for k in range(lo + 1, hi))
 
     def _segment_alias(self, fiber: CableFiber, from_closure: str, at_closure: str) -> CableFiber | None:
         """Same physical span listed under a different segment number in the two closure reports
@@ -431,6 +558,16 @@ class Network:
                 step = self.arrival_step(seg, far.name)
                 bridge = self._bridge(fiber, step, expected_usage, self._path, self._origin) if step else None
                 if bridge is None:
+                    node = self._node_bridge(far, fiber, expected_usage, self._path, self._origin)
+                    if node is not None and (far.name, node["fiber"].key) not in visited:
+                        visited.add((far.name, node["fiber"].key))
+                        steps.append(TraceStep(
+                            f"[{str(far)}: no report; spliced onto {node['fiber']} - same circuit listed at "
+                            f"{node['next']}]", None, None))
+                        self._route.append(far.name)
+                        self._node_scratch.append(f"{far.name}: {fiber} -> {node['fiber']}")
+                        closure, fiber = far.name, node["fiber"]
+                        continue
                     r = TraceResult(steps, "missing_report", far, closure, fiber, uses_guide, conflicts)
                     r.step = step
                     return r
@@ -444,8 +581,14 @@ class Network:
             if not conns:
                 alias = self._segment_alias(fiber, closure, far.name)
                 if alias is not None:
-                    seg_aliases.append(f"{fiber.cable}: Seg{fiber.seg} in the {closure} report is Seg{alias.seg} "
-                                       f"in the {far.name} report (same span {closure}-{far.name})")
+                    if self._split_span(fiber.cable, fiber.seg, alias.seg):
+                        # one span made of several sections (e.g. aerial pole-to-pole, riser, underground):
+                        # each closure report lists the section touching it; nothing is out of sync
+                        self._sections_scratch.append(f"{fiber.cable}: Seg{fiber.seg}..Seg{alias.seg} "
+                                                      f"({closure}-{far.name})")
+                    else:
+                        seg_aliases.append(f"{fiber.cable}: Seg{fiber.seg} in the {closure} report is Seg{alias.seg} "
+                                           f"in the {far.name} report (same span {closure}-{far.name})")
                     fiber = alias
                     conns = self.connections_at(far.name, fiber.key)
             if not conns:
