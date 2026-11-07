@@ -36,6 +36,7 @@ class RunOutcome:
     worklist: Path | None = None
     exceptions_csv: Path | None = None
     reports_to_request: Path | None = None
+    json: Path | None = None                 # machine-readable twin of the workbook (api.olm_to_dict)
     comparison: dict | None = None
     messages: list[str] = field(default_factory=list)
 
@@ -92,21 +93,41 @@ def _write_csv(path: Path, rows: list[dict], columns: list[str]):
             w.writerow(r)
 
 
-def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None, config: str | Path | None = None,
-        overrides: str | Path | None = None, prefix: str | None = None, reference: str | Path | None = None,
-        drawing: str | Path | None = None, template: str | Path | None = None, log=print) -> list[RunOutcome]:
-    cfg = load_config(config)
-    if template:
-        cfg["template"]["path"] = str(template)
-    if prefix is not None:
-        cfg["project"]["name_prefix"] = prefix
+@dataclass
+class BuildResult:
+    """Everything a run produces before any file is written (see `build`)."""
+    cfg: dict
+    files: list[Path]
+    found: list[str]                       # OLMs present in the reports
+    targets: list[str]                     # OLMs generated
+    results: dict[str, OlmResult]          # OLM -> rows, counts, issues (overrides and cross-check applied)
+    crosschecks: dict[str, list | None]    # OLM -> drawing cross-check rows (None without a drawing)
+    inventory: dict | None                 # drawing identifier inventory (None without a drawing)
+    input_meta: list[dict]                 # every input file with its checksum
+    run_at: str
+
+
+def check_inputs(drawing=None, overrides=None, template=None, reference=None):
+    """Raise InputError for an optional input that is given but missing or of the wrong type."""
+    for label, p, kinds in (("Design drawing", drawing, (".dwg", ".dxf")), ("Overrides file", overrides, (".csv",)),
+                            ("Template workbook", template, (".xlsx",)), ("Reference", reference, None)):
+        if not p:
+            continue
+        p = Path(p)
+        if not p.exists():
+            raise InputError(f"{label} not found: {p}")
+        if kinds and (not p.is_file() or p.suffix.lower() not in kinds):
+            raise InputError(f"{label} must be a {' or '.join(kinds)} file: {p}")
+
+
+def build(reports: str | Path, olms: list[str] | None = None, cfg: dict | None = None,
+          overrides: str | Path | None = None, drawing: str | Path | None = None, log=print,
+          exclude: Path | None = None) -> BuildResult:
+    """Read the inputs and generate the address list(s) in memory; writes nothing. `run` and `api.generate`
+    both use this, so the files and the API always carry the same rows."""
+    cfg = cfg if cfg is not None else load_config()
     reports = Path(reports)
-    out_dir = Path(out_dir)
-    files = find_report_files(reports, exclude=out_dir)
-    inputs_resolved = {p.resolve() for p in files}
-    if out_dir.resolve() in {p.parent for p in inputs_resolved}:
-        log("Note: output folder is an input folder; existing files are never overwritten.")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    files = find_report_files(reports, exclude=exclude)
 
     log(f"Reading {len(files)} splice report(s) from {reports}")
     reps, load_issues = load_reports(files, cfg)
@@ -168,7 +189,7 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
         for i in ds_issues:
             log(i.message)
 
-    outcomes, results, comparisons = [], [], []
+    crosschecks = {}
     for olm in targets:
         res: OlmResult = built[olm]
         res.issues = _relevant_issues(global_issues, res) + res.issues
@@ -179,6 +200,36 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
             from .drawing import crosscheck
             cross, x_issues = crosscheck(res, inventory)
             res.issues += x_issues
+        crosschecks[olm] = cross
+    return BuildResult(cfg, files, found, targets, built, crosschecks, inventory, input_meta, run_at)
+
+
+def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None, config: str | Path | None = None,
+        overrides: str | Path | None = None, prefix: str | None = None, reference: str | Path | None = None,
+        drawing: str | Path | None = None, template: str | Path | None = None, log=print) -> list[RunOutcome]:
+    """Generate and write: per OLM the address-list workbook, its JSON twin, the review worklist, the
+    exceptions and the reports to request, plus a run manifest."""
+    cfg = load_config(config)
+    check_inputs(drawing, overrides, template, reference)
+    if template:
+        cfg["template"]["path"] = str(template)
+    if prefix is not None:
+        cfg["project"]["name_prefix"] = prefix
+    reports = Path(reports)
+    out_dir = Path(out_dir)
+    files = find_report_files(reports, exclude=out_dir)
+    inputs_resolved = {p.resolve() for p in files}
+    if out_dir.resolve() in {p.parent for p in inputs_resolved}:
+        log("Note: output folder is an input folder; existing files are never overwritten.")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    b = build(reports, olms, cfg, overrides, drawing, log, exclude=out_dir)
+    targets, inventory, input_meta, run_at = b.targets, b.inventory, b.input_meta, b.run_at
+
+    outcomes, results, comparisons = [], [], []
+    for olm in targets:
+        res: OlmResult = b.results[olm]
+        cross = b.crosschecks[olm]
         name = safe_filename(cfg["project"]["output_filename"].format(prefix=cfg["project"]["name_prefix"], olm=olm))
         out = out_dir / name
         if not res.is_final:
@@ -202,6 +253,9 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
                 log(f"{olm}: FAILED - the workbook could not be written to {out} ({exc}). Close it in Excel or "
                     f"choose another output folder.")
         stem = (out.stem if res.rows else f"{olm}_FAILED")
+        if res.rows:
+            from .api import write_json
+            oc.json = write_json(res, cfg, unique_path(out_dir / f"{stem}.json"), run_at)
         wl = review_worklist(res)
         oc.worklist = unique_path(out_dir / f"{stem}_review_worklist.csv")
         _write_csv(oc.worklist, wl, ["olm", "cable_name", "fiber_no", "field", "action", "value", "approved_by",
@@ -224,6 +278,8 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
                    ["severity", "code", "olm", "cable", "fiber", "message", "source"])
         if reference:
             ref = _find_reference(Path(reference), olm)
+            if not ref:
+                log(f"{olm}: no completed list with '{olm}' in its file name in {reference} - not compared")
             if ref:
                 cmpr = compare(res, ref, cfg)
                 comparisons.append(cmpr)
@@ -231,7 +287,8 @@ def run(reports: str | Path, out_dir: str | Path, olms: list[str] | None = None,
                 log(f"{olm}: compared with {ref.name}: {cmpr.matched}/{cmpr.ref_rows} rows matched")
         manifest = {"tool_version": __version__, "run_at": run_at, "olm": olm, "hub": res.hub,
                     "final": res.is_final, "counts": res.counts, "errors": oc.errors, "warnings": oc.warnings,
-                    "workbook": str(oc.workbook) if oc.workbook else None, "config": cfg.get("_source"),
+                    "workbook": str(oc.workbook) if oc.workbook else None,
+                    "json": str(oc.json) if oc.json else None, "config": cfg.get("_source"),
                     "accepted_rules": cfg.get("approvals", {}).get("accepted_rules", []),
                     "inputs": input_meta, "comparison": oc.comparison}
         with open(unique_path(out_dir / f"{stem}_run_manifest.json"), "w", encoding="utf-8") as fh:
@@ -268,7 +325,8 @@ def _relevant_issues(global_issues: list[Issue], res: OlmResult) -> list[Issue]:
     out = []
     for i in global_issues:
         src = (i.source or "").split(" row ")[0]
-        if not src or src in used or i.code in ("REPORT_UNREADABLE", "DUPLICATE_REPORT", "NOT_A_SPLICE_REPORT") or \
+        if not src or src in used or i.code in ("REPORT_UNREADABLE", "DUPLICATE_REPORT", "NOT_A_SPLICE_REPORT",
+                                                "REPORT_LAYOUT_UNKNOWN", "CABLE_REPORT_UNMAPPED") or \
                 i.code.startswith("DRAWING"):
             out.append(i)
     return out

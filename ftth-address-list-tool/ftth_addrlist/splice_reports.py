@@ -94,7 +94,10 @@ def _csv_rows(path: Path) -> list[list]:
         raw = path.read_bytes()
     except OSError as exc:
         raise ReportError(f"{path.name}: cannot be read ({exc})") from exc
-    for enc in ("utf-8-sig", "cp1252", "latin-1"):
+    # UTF-16 with a byte-order mark: Excel's "Unicode Text" / "CSV (UTF-16)" save options
+    encodings = ("utf-16",) if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else ("utf-8-sig", "cp1252", "latin-1")
+    text = ""
+    for enc in encodings:
         try:
             text = raw.decode(enc)
             break

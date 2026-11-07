@@ -112,8 +112,11 @@ class DwgContainer:
         self.data = self.path.read_bytes()
         self.version = self.data[:6].decode("ascii", "replace")
         if self.version not in self.SUPPORTED:
+            if not self.data.startswith(b"AC10"):
+                raise DwgError(f"{self.path.name} is not an AutoCAD DWG file (it does not start with a DWG version "
+                               f"code); check the file chosen as the design drawing")
             raise DwgError(f"DWG version {self.version} not supported by the built-in reader "
-                           f"(supported: {', '.join(self.SUPPORTED)}); export a DXF instead")
+                           f"(supported: {', '.join(self.SUPPORTED)}); save as AutoCAD 2018 DWG or export a DXF")
         h = _decrypt_header(self.data[0x80:0x80 + 0x6C])
         if not h.startswith(b"AcFssFcAJMB"):
             raise DwgError("DWG file header could not be decoded (file damaged or encrypted)")

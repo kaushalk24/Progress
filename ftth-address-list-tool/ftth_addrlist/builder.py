@@ -317,6 +317,10 @@ class Builder:
                          "cable": tr.last_fiber.cable if tr.last_fiber else None,
                          "fiber": tr.last_fiber.fiber if tr.last_fiber else None}
         trace_term = tr.stop_location if tr.stop == "terminal" else None
+        # kind of the terminal enclosure (tap / MDU), from the trace or else from the hub record's circuit ends
+        row.trace_end["terminal_kind"] = trace_term.kind if trace_term is not None else next(
+            (loc.kind for loc in (conn.circuit_end, conn.circuit_start) if loc and loc.kind in self.terminal_kinds),
+            None)
         trace_ev = [str(s.conn.source) for s in tr.steps if s.conn is not None]
 
         # --- address and tap --------------------------------------------------------------

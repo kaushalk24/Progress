@@ -178,3 +178,16 @@ def test_two_cables_with_one_name_give_one_clear_warning(tmp_path):
     codes = [i.code for i in net.issues]
     assert codes.count("CABLE_NAME_REPEATED") == 1 and "FIBER_LISTED_TWICE" not in codes
     assert "fibres 1-3" in next(i.message for i in net.issues if i.code == "CABLE_NAME_REPEATED")
+
+
+def test_utf16_csv_reads_like_utf8(tmp_path):
+    """Excel's 'Unicode Text' / UTF-16 save option (tab separated) reads the same as the UTF-8 export."""
+    _cable_report_region(tmp_path)
+    src = tmp_path / "Splice_TST-R0034_V1.csv"
+    text = src.read_text(encoding="utf-8")
+    u16 = tmp_path / "u16" / src.name
+    u16.parent.mkdir()
+    u16.write_bytes(text.encode("utf-16"))
+    a, b = read_report(src, load_config()), read_report(u16, load_config())
+    assert [(str(c.a.endpoint), str(c.b.endpoint), c.usage) for c in a.connections] == \
+        [(str(c.a.endpoint), str(c.b.endpoint), c.usage) for c in b.connections]

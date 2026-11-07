@@ -59,6 +59,7 @@ Command line (same options): `run_cli.bat run --reports "<folder>" --out "<folde
 | File | Content |
 |---|---|
 | `<prefix>_<OLM>_FTTH_Address List[_DRAFT-REVIEW-REQUIRED].xlsx` | Sheet `<OLM>`: the address list in template layout. Sheets *Row Status*, *Field Evidence* (value, status, rule code, derivation and source rows for every cell), *Exceptions* (with the action needed), *Reports to Request*, *Drawing Cross-check* (if a drawing was given), *Run Info* (verdict, counts, inputs with SHA-256). |
+| `<same name>.json` | The same address list as data, for other programs (see [docs/INTEGRATION.md](docs/INTEGRATION.md)). |
 | `…_review_worklist.csv` | Every provisional/unresolved cell, pre-filled in overrides format. Fill in `action`, `value`, `approved_by`, `approved_on`, `reason` and use it as the overrides file. |
 | `…_splice_reports_to_request.csv` | Closure reports that would confirm the provisional/unresolved rows, ranked by rows affected. |
 | `…_exceptions.csv`, `…_run_manifest.json` | Exception list; machine-readable run record (inputs, hashes, counts, config). |
@@ -98,6 +99,7 @@ code is specific to the reference region.
 * [docs/FIELD_MAPPING.md](docs/FIELD_MAPPING.md) – every output column: meaning, source, rule, joins, validation, rule codes.
 * [docs/INPUT_REQUIREMENTS.md](docs/INPUT_REQUIREMENTS.md) – input matrix, DWG/DXF workflow, **export checklist for a new region**.
 * [docs/VALIDATION.md](docs/VALIDATION.md) – method and results against the completed reference pack, known limitations.
+* [docs/INTEGRATION.md](docs/INTEGRATION.md) – using the address list from another tool: JSON file and Python API.
 
 ## Development
 

@@ -125,6 +125,9 @@ def address_coverage(results: list[OlmResult], inv: dict):
         return [], []
     served_raw = {" ".join(str(r.value("address")).split()).upper() for res in results for r in res.rows
                   if r.kind == "subscriber" and r.value("address")}
+    mdu_units = {" ".join(str(r.value("address")).split()).upper() for res in results for r in res.rows
+                 if r.kind == "subscriber" and r.value("address") and
+                 "MDU" in str((r.trace_end or {}).get("terminal_kind") or "").upper()}
     drawn_raw = inv["addresses"]
     from .design import streets_match
     served = {k: a for a in sorted(served_raw) if (k := _address_key(a))}
@@ -136,15 +139,22 @@ def address_coverage(results: list[OlmResult], inv: dict):
     hit_s, hit_d = {s for s, _ in pairs}, {d for _, d in pairs}
     rows = [{"check": "Address point not in any list", "identifier": drawn[k], "found": "drawing only"}
             for k in sorted(set(drawn) - hit_d)]
+    # an MDU building is drawn as one address point: its units have none of their own
+    missing = sorted(set(served) - hit_s)
     rows += [{"check": "Listed address without address point", "identifier": served[k], "found": "list only"}
-             for k in sorted(set(served) - hit_s)]
+             for k in missing if served[k] not in mdu_units]
+    rows += [{"check": "MDU unit (the building is drawn as one point)", "identifier": served[k],
+              "found": "not compared"} for k in missing if served[k] in mdu_units]
     rows += [{"check": "Listed address without a house number", "identifier": a, "found": "not comparable"}
              for a in sorted(x for x in served_raw if not _address_key(x))]
-    n_drawn_only, n_list_only = len(set(drawn) - hit_d), len(set(served) - hit_s)
+    n_drawn_only = len(set(drawn) - hit_d)
+    n_list_only = sum(1 for k in missing if served[k] not in mdu_units)
+    n_mdu = len(missing) - n_list_only
     issue = Issue("INFO" if not n_drawn_only else "WARNING", "DRAWING_ADDRESS_COVERAGE",
                   f"{len(hit_d)}/{len(drawn)} drawn address points are served in the generated list(s); "
                   f"{n_drawn_only} drawn but not served, {n_list_only} listed but not drawn "
-                  f"(premises outside these OLMs, or naming differences)")
+                  f"(premises outside these OLMs, or naming differences)"
+                  + (f"; {n_mdu} MDU unit(s) not compared (the building is one point)" if n_mdu else ""))
     return rows, [issue]
 
 

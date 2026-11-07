@@ -88,6 +88,9 @@ def smoke_test():
         books = list(out.glob("*.xlsx"))
         if res.returncode != 1 or not books:
             raise SystemExit(f"smoke test failed: exit {res.returncode}, workbooks {books}")
+        lists = [p for p in out.glob("*.json") if not p.name.endswith("_run_manifest.json")]
+        if len(lists) != len(books) or '"schema": "ftth-address-list"' not in lists[0].read_text(encoding="utf-8"):
+            raise SystemExit(f"smoke test failed: address-list JSON missing or wrong: {lists}")
     print("smoke test passed", flush=True)
 
 

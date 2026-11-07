@@ -376,11 +376,13 @@ class App(tk.Tk):
         self.tree.delete(*self.tree.get_children())
         self.outcomes.clear()
         self.tabs.select(1)
-        threading.Thread(target=self.work, daemon=True).start()
+        # read the inputs here, on the window's thread: Tk widgets must not be touched from the worker
+        values = {k: (self._value(k) or None) for k in FIELDS}
+        threading.Thread(target=self.work, args=(values,), daemon=True).start()
 
-    def work(self):
+    def work(self, v: dict):
+        """Background run. Only talks to the window through the queue (self.say / 'done')."""
         from .pipeline import run
-        v = {k: (self._value(k) or None) for k in FIELDS}
         olm = v["olm"] if v["olm"] and v["olm"] != ALL_OLMS else None
         try:
             outs = run(v["reports"], v["out"], [olm] if olm else None, None, None, v["prefix"], None, v["drawing"],
